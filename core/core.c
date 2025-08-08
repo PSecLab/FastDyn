@@ -494,6 +494,12 @@ uint32_t qemu_get_register(int reg)
     return return_data;
 }
 
+uint64_t core_get_pc(void) {
+	uint64_t ret_val;
+	ret_val = qemu_get_register(ARM_V7M_PC);
+	return ret_val;
+}
+
 void qemu_set_register(uint32_t value, int reg);
 void qemu_set_register(uint32_t value, int reg) {
 	if ((reg >= ARM_V7M_S0)) {
