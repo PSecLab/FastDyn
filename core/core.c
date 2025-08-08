@@ -23,7 +23,7 @@ int isdigit(int c);
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "virtual.h"
+#include "core.h"
 #include <utils.h>
 #include <device.h>
 #include <python.h>
@@ -1296,7 +1296,12 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            int argc, char **argv)
 {
 	qemu_plugin_vmstate();
-	core_parse_arguments(argc, argv);
+	if (utils_init(argc, argv) != 0) {
+			utils_die("Utils initialization failed");
+	}
+	if (core_parse_arguments(argc, argv) != 0) {
+			utils_die("Core initialization failed");
+	}
 
 	if (vm_init(argc, argv) != 0) {
 			utils_die("VM Init Failed");
@@ -1304,6 +1309,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 	if (dev_init(argc, argv) != 0) {
 			utils_die("Device Init Failed");
 	}
+
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
     return 0;

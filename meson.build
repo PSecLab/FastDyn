@@ -36,7 +36,8 @@ srcs = files(
   'device_models/dev.c',
   'python/python.c',
   'utils/utils.c',
-  'virtuals/virtuals.c'
+  'virtuals/virtuals.c',
+  'device_models/passthrough/passthrough.c'
 )
 
 # --- Project include dir
