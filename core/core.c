@@ -24,29 +24,13 @@ int isdigit(int c);
 #include <string.h>
 #include <ctype.h>
 #include "virtual.h"
-#include <hw.h>
-
-hw_t * hw;
+#include <utils.h>
+#include <device.h>
+#include <python.h>
 
 #define MAX_ENTRIES 1024
 #define MAX_LINE_LEN 128
 #define MAX_RULES 256
-
-//#define DEBUG_PRINT
-
-#ifdef DEBUG_PRINT
-  #define DEBUG_LOG(fmt, ...) printf("DEBUG: " fmt, ##__VA_ARGS__)
-#else
-  #define DEBUG_LOG(fmt, ...) // nothing
-#endif
-
-
-
-typedef unsigned long hwaddr;
-typedef struct unimp_exporter {
-    uint64_t (*read)(void *opaque, hwaddr offset, unsigned size);
-    void (*write)(void *opaque, hwaddr offset, uint64_t value, unsigned size);
-} DEV_XPORTER;
 
 typedef enum {
     VALUE_IMMEDIATE, // existing: value is immediate
@@ -1197,18 +1181,6 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
 }
 
-char * get_arg(const char * key, int argc, char **argv);
-char * get_arg(const char * key, int argc, char **argv) {
-	int len = strlen(key);
-	for (int i =0; i < argc; i ++) {
-        if (strncmp(argv[i], key, len) == 0) {
-            return (argv[i] + len + 1);
-        }
-    }
-
-	return NULL;
-}
-
 static cb_func_t lookup_callback(const char *name) {
     for (size_t i = 0; i < cb_registry_len; i++) {
         if (strcmp(cb_registry[i].name, name) == 0)
@@ -1289,107 +1261,49 @@ static void print_rules(void) {
 }
 #endif
 
-
-// #define NRF52840
-#define HW_ONLY
-
-uint64_t my_unimp_read(void *opaque, hwaddr offset, unsigned size);
-uint64_t my_unimp_read(void *opaque, hwaddr offset, unsigned size) {
-#if  defined(RA4M1)
-    DEBUG_LOG("Read at offset 0x%" PRIx64 "\n", offset);
-    //logic from Michael's halucinator implementation. (see :: PRehost/src/NGC/generic.py)
-    if (offset == 0x1e4b1) {
-        return 19;
-    } else if (offset == 0x1e03c) {
-        return 1;
+static int core_parse_arguments(int argc, char ** argv) {
+	const char *filename= utils_get_arg("detour", argc, argv);
+    if (filename) {
+            num_tuples = read_tuples_from_file(filename, address_tuples, MAX_TUPLES);
     }
-#elif defined(NRF52840)
-	if (offset == 0x104) {
-		return 1;
-	}
-#endif
-	unsigned int value_read = 0;
-	unsigned int address = offset + 0x40000000;
-	int status = 0;
 
-	DEBUG_LOG("Attempting read: offset = 0x%" PRIx64 ", address = 0x%08X, size = %u bytes\n",
-              offset, address, size);
-	
-	status = hw_read32(hw, address, &value_read);
-	if (status != 0) {
-            printf("Error in writing to hw...");
-    } else {
-			DEBUG_LOG("Read success: address = 0x%08X, value = 0x%08X\n", address, value_read);
-	}
-    return value_read;
-}
-
-void my_unimp_write(void *opaque, hwaddr offset, uint64_t value, unsigned size);
-void my_unimp_write(void *opaque, hwaddr offset, uint64_t value, unsigned size) {
-    unsigned int address = offset + 0x40000000;
-    int status = 0;
-
-    DEBUG_LOG("Attempting write: offset = 0x%" PRIx64 ", address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 "\n",
-              offset, address, size, size * 2, value);
-
-    status = hw_write32(hw, address, (uint32_t)value);  // Adjust for size if needed
-
-    if (status != 0) {
-        fprintf(stderr, "ERROR: Failed to write %u bytes to address 0x%08X (offset 0x%" PRIx64 ")\n",
-                size, address, offset);
-    } else {
-        DEBUG_LOG("Write success: address = 0x%08X, size = %u, value = 0x%0*" PRIx64 "\n",
-                  address, size, size * 2, value);
+    filename= utils_get_arg("modifier", argc, argv);
+    if (filename) {
+        load_update_entries(filename);
     }
+
+    filename = utils_get_arg("virtual", argc, argv);
+    if (filename) {
+        parse_rules_file(filename);
+    }
+
+
+    filename = utils_get_arg("logger", argc, argv);
+    if (filename) {
+    load_logger_config(filename);
+    }
+
+    filename = utils_get_arg("monitor", argc, argv);
+    if (filename) {
+        runtime = filename; // Lazy Init
+    }
+
+	return 0;
 }
-
-
-DEV_XPORTER importer = {.read = my_unimp_read,
-        .write = my_unimp_write};
-
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
 {
-    Py_Finalize();
-
 	qemu_plugin_vmstate();
+	core_parse_arguments(argc, argv);
 
-	hw = hw_connect("stlink", NULL, 0);
-
-    //TODO: Initialize lazily
-	// Register QEMU-API Module
-    PyImport_AppendInittab("qemuapi", PyInit_emb);
-
-    const char *filename= get_arg("detour", argc, argv);
-	if (filename) {
-			num_tuples = read_tuples_from_file(filename, address_tuples, MAX_TUPLES);
+	if (vm_init(argc, argv) != 0) {
+			utils_die("VM Init Failed");
 	}
-
-	filename= get_arg("modifier", argc, argv);
-	if (filename) {
-		load_update_entries(filename);
+	if (dev_init(argc, argv) != 0) {
+			utils_die("Device Init Failed");
 	}
-
-	filename = get_arg("virtual", argc, argv);
-	if (filename) {
-		parse_rules_file(filename);
-	}
-
-
-	filename = get_arg("logger", argc, argv);
-	if (filename) {
-	load_logger_config(filename);
-	}
-
-	filename = get_arg("monitor", argc, argv);
-	if (filename) {
-		runtime = filename; // Lazy Init
-	}
-
-
-	qemu_plugin_unimp_export_device((void *)&importer);
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
     return 0;

@@ -30,10 +30,23 @@ qemu_include = include_directories(
   '/data/qemu/include'
 )
 
+# --- Collect all source files
+srcs = files(
+  'core/core.c',
+  'device_models/dev.c',
+  'python/python.c',
+  'utils/utils.c',
+  'virtuals/virtuals.c'
+)
+
+# --- Project include dir
+local_include = include_directories('include')
+
+
 shared_module(
   'fastdyn',
-  'virtual.c',
-  include_directories: [qemu_include],
+  srcs,
+  include_directories: [qemu_include, local_include],
   dependencies: [glib, libpython, libhw_dep, python_dep],
   install: false
 )
