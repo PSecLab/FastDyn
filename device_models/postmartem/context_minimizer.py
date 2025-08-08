@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from datetime import datetime
+from scipy.stats import entropy as calculate_entropy
 
 from colorama import Fore, Style, init
 from cmsis_svd.parser import SVDParser
@@ -191,6 +192,44 @@ class MMIOAnalyzer:
                     found_patterns.add(pattern_tuple)
         return results
 
+        # --- NEW: Entropy Analysis Method ---
+    def analyze_entropy(self, accesses: List[MMIOAccess]) -> List[str]:
+        """Calculates Shannon entropy for each read register."""
+        print("  Analyzing entropy of read values...")
+        reads_by_register = defaultdict(list)
+        results = []
+
+        # 1. Group all read values by register
+        for acc in accesses:
+            if acc.access_type == 'read':
+                reads_by_register[(acc.peripheral, acc.register)].append(acc.value)
+
+        if not reads_by_register:
+            return ["No read operations found for this peripheral."]
+
+        # 2. Calculate entropy for each register's reads
+        for (p, r), values in sorted(reads_by_register.items()):
+            if len(values) < 2:
+                continue # Not enough data to be meaningful
+
+            value_counts = Counter(values)
+            # Use scipy's entropy function, which takes probabilities (or raw counts)
+            entropy = calculate_entropy(list(value_counts.values()), base=2)
+            
+            # 3. Classify and format the result
+            entropy_class = ""
+            if entropy < 2.0:
+                entropy_class = "LOW (suggests status/control register)"
+            elif entropy < 6.0:
+                entropy_class = "MEDIUM (suggests counter or complex status)"
+            else:
+                entropy_class = "HIGH (suggests data register)"
+            
+            results.append(f"Register {r}: {entropy_class} - Entropy = {entropy:.2f} bits")
+            
+        return results if results else ["No registers with sufficient read data for entropy analysis."]
+
+
 def discover_svd_files():
     repo_dir = "cmsis-svd-data"; repo_url = "https://github.com/cmsis-svd/cmsis-svd-data.git"
     if not os.path.isdir(repo_dir):
@@ -304,5 +343,15 @@ if __name__ == "__main__":
             for finding in state_findings:
                 f.write(f"- {finding}\n")
         print(f"  Stateful analysis saved to: {state_file_path}")
+
+        entropy_findings = analyzer.analyze_entropy(p_accesses)
+        entropy_file_path = os.path.join(peripheral_dir, "entropy.txt")
+        with open(entropy_file_path, 'w') as f:
+            f.write(f"# Entropy Analysis for {peripheral}\n")
+            f.write("# (Entropy is a measure of value randomness, in bits)\n")
+            f.write("# Low: <2 (suggests status/control), High: >6 (suggests data)\n\n")
+            for finding in entropy_findings:
+                f.write(f"- {finding}\n")
+        print(f"  Entropy analysis saved to: {entropy_file_path}")
         
     print("-" * 60); print("Analysis complete.")
