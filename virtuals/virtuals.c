@@ -21,8 +21,9 @@
 #include <device.h>
 #include <python.h>
 #include <virtuals.h>
-
-#include "gazebo_wrapper.h"
+#if ENABLE_LIBGZ
+    #include "gazebo_wrapper.h"
+#endif
 
 // External dependencies from core.c
 extern AddressList addressLists[];
@@ -336,6 +337,7 @@ void dumplogger(unsigned int cpu_index, void *udata) {
     dump_log_buffer_to_file(&addressLists[entry.idx], entry.file_name);
 }
 
+#if ENABLE_LIBGZ
 void gz_service(unsigned int cpu_index, void *udata) {
 	static float yaw = 0.0;
     if (set_rover_pose(yaw) == 0) {
@@ -345,6 +347,7 @@ void gz_service(unsigned int cpu_index, void *udata) {
         printf("Failed to set pose\n");
     }
 }
+#endif
 
 // Helper functions that need to be implemented or declared
 unsigned long long* parse_addresses(const char *input, size_t *count) {

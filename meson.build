@@ -19,31 +19,60 @@ if not libpython.found()
 endif
 
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
+deps = [glib, libpython, python_dep]
 
-libgz_wrapper_dep = declare_dependency(
-  include_directories: include_directories('/root/rooney/PRehost/gazebo/fastdyn'),
-  link_args: ['-L/root/rooney/PRehost/gazebo/fastdyn/build/lib', '-lgz_wrapper'],
-)
+# USER RELATED FLAGS. USER CAN ADD CUSTOM LIBS
+ENABLE_LIBGZ = get_option('enable_libgz')
+if ENABLE_LIBGZ
+  libgz_wrapper_dep = declare_dependency(
+    include_directories: include_directories('../PRehost/gazebo/fastdyn'),
+    link_args: ['-L../PRehost/gazebo/fastdyn/build/lib', '-lgz_wrapper'],
+  )
+  deps += libgz_wrapper_dep
+endif
 
+ENABLE_LIBHW = get_option('enable_libhw')
+if ENABLE_LIBHW
 libhw_dep = declare_dependency(
   include_directories: include_directories('/root/rooney/libhw/include'),
   link_args: ['-L/root/rooney/libhw/out', '-lhw', '-lstlink']
 )
+  deps +=libhw_dep
+endif
 
+#Based on the configurations, generate config.h
+configure_file(
+  input : 'config.h.in',
+  output : 'config.h',
+  configuration : {
+    'ENABLE_LIBGZ' : ENABLE_LIBGZ,
+    'ENABLE_LIBHW' : ENABLE_LIBHW,
+  }
+)
+#config_inc = include_directories(meson.current_build_dir())
+
+
+QEMU_DIR = get_option('qemu_path')
 qemu_include = include_directories(
-  '/root/rooney/qemu/include/qemu/',
-  '/root/rooney/qemu/include'
+  join_paths(QEMU_DIR, 'include', 'qemu'),
+  join_paths(QEMU_DIR, '..', 'qemu', 'include')
+  
 )
 
 # --- Collect all source files
 srcs = files(
   'core/core.c',
-  'device_models/dev.c',
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
-  'device_models/passthrough/passthrough.c'
 )
+
+if get_option('device_models')
+  srcs += files(
+  'device_models/dev.c',
+  'device_models/passthrough/passthrough.c'
+  )
+endif
 
 # --- Project include dir
 local_include = include_directories('include')
@@ -53,6 +82,6 @@ fastdyn_target = shared_module(
   'fastdyn',
   srcs,
   include_directories: [qemu_include, local_include],
-  dependencies: [glib, libpython, libhw_dep, python_dep, libgz_wrapper_dep],
+  dependencies: deps,
   install: false
 )

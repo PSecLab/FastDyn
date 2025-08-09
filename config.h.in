@@ -1,0 +1,5 @@
+#pragma once
+
+#define ENABLE_LIBGZ @ENABLE_LIBGZ@
+
+#define ENABLE_LIBHW @ENABLE_LIBHW@

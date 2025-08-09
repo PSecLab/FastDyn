@@ -1,0 +1,10 @@
+#QEMU DIR PATHS
+option('qemu_path', type: 'string', value: '../../qemu', description: 'Path to the QEMU')
+
+#USER Libraries
+option('enable_libhw', type: 'boolean', value: false, description: 'Enable libhw support')
+option('enable_libgz', type: 'boolean', value: false, description: 'Enable gazebo lib support')
+
+#Configuration Options
+option('device_models', type: 'boolean', value: false, description: 'Enable device models support')
+
