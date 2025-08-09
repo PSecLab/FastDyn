@@ -68,20 +68,24 @@ def generate_gemini_prompt(peripheral_directory: str) -> str:
     qemu_api_list = """
 - `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes guest memory.
 - `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads guest memory.
+- `int qemu_plugin_read_register(int reg, uint8_t *buf)`: Reads a register of VM. reg is number of register 0 is R0 in ARM.
+- `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_raise_irq(int irq)`: Raises an interrupt line.
-- `qemu_plugin_mmio_register`: Registers callbacks for MMIO read and write requests for a specific memory region.
-- `uint64_t my_unimp_read(void *opaque, hwaddr offset, unsigned size)`: Signature for a callback that receives VM MMIO reads.
+- `void qemu_plugin_raise_irq(int irq)`: raises an interrupt line.
+- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Arms a timer for future.
+- `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
+- `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: The return value is timer file descriptor. You can pass data to callback using data field.
+- `uint64_t my_unimp_read(void *opaque, hwaddr offset, unsigned size)`: Signature for a callback that receives VM MMIO read.
 - `void my_unimp_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
-- `QEMU_PLUGIN_ENTRY_POINT(qemu_plugin_install)`: The main entry point for a QEMU plugin.
 """
 
     # Assemble the prompt, escaping literal curly braces {{ and }} in the C code example
     prompt = f"""
-You are an expert reverse engineer specializing in embedded systems and writing C device models for the QEMU emulator.
-Your task is to analyze the following summary of MMIO trace data and generate a complete C device model suitable for a QEMU plugin.
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
+Your task is to analyze the following summary of MMIO trace data and generate a complete C device model.
 
-## Available QEMU Plugin APIs
-You **must** use the following APIs to construct the device model. Pay close attention to `qemu_plugin_mmio_register` and the read/write callback signatures.
+## Available  APIs
+You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
 ```c
 {qemu_api_list.strip()}
 ```
@@ -131,29 +135,28 @@ A concise, one-paragraph summary of this peripheral's likely purpose and overall
 A bulleted list of the important registers mentioned in the traces and their inferred functions.
 
 ### 3. C Device Model Source Code
-The complete C source code for the device model. The code must be fully self-contained and ready to be compiled as a QEMU plugin. Use the following structure as a guide:
+The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> will give you access to all APIs i mentioned. 
 
 ```c
 // Device Model for {peripheral_name}
 
 // Inferred Register Functions:
-// - BSRR: Bit Set/Reset Register.
-// - MODER: GPIO Mode Register.
-// ... add other registers here ...
+// ... add registers here ...
 
-// This function represents the one-time setup sequence.
-void initialize_{peripheral_name.lower()}() {{{{
-    // Example: GPIOG->MODER = 0x04000000; // Set pin PG14 to output
-    // ... translate the init.txt sequence into C-like assignments ...
+// This function will emulation all device reads
+uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{{{
+    // Example: return device->register; // Return some register value from device
+	// ... {peripheral_name.lower()} reads, the retuned value will be emulation of device ...
 }}}}
 
-// This function represents the main, high-frequency runtime loop.
-void run_{peripheral_name.lower()}_loop() {{{{
-    while (1) {{{{
-        // Example: GPIOG->BSRR = 0x2000; // Set PG13 high
-        // Example: GPIOG->BSRR = 0x40000000; // Set PG14 low
-        // ... translate the primary loop_pattern_1.txt into C-like assignments ...
-    }}}}
+// This function will emulate all device writes
+void {peripheral_name.lower()}_write(void *opaque, hwaddr offset, uint64_t value, unsigned size) {{{{
+        // Example: GPIOG->BSRR = value; // Set PG13 high
+        // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
+}}}}
+
+void {peripheral_name.lower()}_init() {{{{
+		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
 }}}}
 ```
 """
