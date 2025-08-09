@@ -20,14 +20,19 @@ endif
 
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
 
+libgz_wrapper_dep = declare_dependency(
+  include_directories: include_directories('/root/rooney/PRehost/gazebo/fastdyn'),
+  link_args: ['-L/root/rooney/PRehost/gazebo/fastdyn/build/lib', '-lgz_wrapper'],
+)
+
 libhw_dep = declare_dependency(
-  include_directories: include_directories('/data/libhw/include'),
-  link_args: ['-L/data/libhw/out', '-lhw']
+  include_directories: include_directories('/root/rooney/libhw/include'),
+  link_args: ['-L/root/rooney/libhw/out', '-lhw', '-lstlink']
 )
 
 qemu_include = include_directories(
-  '/data/qemu/include/qemu/',
-  '/data/qemu/include'
+  '/root/rooney/qemu/include/qemu/',
+  '/root/rooney/qemu/include'
 )
 
 # --- Collect all source files
@@ -44,11 +49,10 @@ srcs = files(
 local_include = include_directories('include')
 
 
-shared_module(
+fastdyn_target = shared_module(
   'fastdyn',
   srcs,
   include_directories: [qemu_include, local_include],
-  dependencies: [glib, libpython, libhw_dep, python_dep],
+  dependencies: [glib, libpython, libhw_dep, python_dep, libgz_wrapper_dep],
   install: false
 )
-
