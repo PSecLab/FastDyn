@@ -4,6 +4,7 @@
 #include <qemu-plugin.h>
 #include <stdint.h>
 #include "common.h"
+#include "config.h"
 
 // Virtual instruction functions
 void raiseirq(unsigned int cpu_index, void *udata);
