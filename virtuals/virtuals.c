@@ -16,7 +16,9 @@
 #include <string.h>
 #include <ctype.h>
 
+#include "config.h"
 #include "common.h"
+
 #include <utils.h>
 #include <device.h>
 #include <python.h>
@@ -56,7 +58,9 @@ cb_entry_t cb_registry[] = {
     { "start_budgeting", start_budgeting},
     { "dyninst_lib", dyninst_lib},
     { "fastdyn_callback", fastdyn_callback},
+#if ENABLE_LIBGZ
     { "gz_service", gz_service},
+#endif
 };
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);

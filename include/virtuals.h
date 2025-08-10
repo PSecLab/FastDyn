@@ -22,7 +22,9 @@ void start_budgeting(unsigned int cpu_index, void *udata);
 /**
  * @brief Callback to communicate with gazebo
  */
+#if ENABLE_LIBGZ
 void gz_service(unsigned int cpu_index, void *udata);
+#endif
 
 // Helper functions
 unsigned char get_random_byte(void);

@@ -4,8 +4,8 @@ qemu_path ?= ../../qemu
 
 all: clean setup
 	meson setup build -Dqemu_path=$(qemu_path) \
-	-Denable_libhw=false -Denable_libgz=false \
-	-Ddevice_models=false
+	-Denable_libhw=true -Denable_libgz=true \
+	-Ddevice_models=true
 	ninja -C build
 
 setup: clean

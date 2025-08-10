@@ -25,8 +25,8 @@ deps = [glib, libpython, python_dep]
 ENABLE_LIBGZ = get_option('enable_libgz')
 if ENABLE_LIBGZ
   libgz_wrapper_dep = declare_dependency(
-    include_directories: include_directories('../PRehost/gazebo/fastdyn'),
-    link_args: ['-L../PRehost/gazebo/fastdyn/build/lib', '-lgz_wrapper'],
+    include_directories: include_directories('/root/rooney/PRehost/gazebo/fastdyn'),
+    link_args: ['-L/root/rooney/PRehost/gazebo/fastdyn/build/lib', '-lgz_wrapper'],
   )
   deps += libgz_wrapper_dep
 endif
@@ -45,8 +45,8 @@ configure_file(
   input : 'config.h.in',
   output : 'config.h',
   configuration : {
-    'ENABLE_LIBGZ' : ENABLE_LIBGZ,
-    'ENABLE_LIBHW' : ENABLE_LIBHW,
+    'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
+    'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0, 
   }
 )
 #config_inc = include_directories(meson.current_build_dir())
