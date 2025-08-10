@@ -63,6 +63,9 @@ qemu_include = include_directories(
   
 )
 
+# --- Project include dir
+local_include = include_directories('include')
+
 # --- Collect all source files
 srcs = files(
   'core/core.c',
@@ -72,14 +75,19 @@ srcs = files(
 )
 
 if get_option('device_models')
+  libdl_dep = cc.find_library('dl', required: true)
+  deps += libdl_dep
   srcs += files(
   'device_models/dev.c',
-  'device_models/passthrough/passthrough.c'
+  'device_models/passthrough/passthrough.c',
+  'device_models/elder/elder.c',
+  'device_models/elder/device_config.c',
+  'device_models/elder/inih/ini.c'
   )
-endif
 
-# --- Project include dir
-local_include = include_directories('include')
+  device_models_inc = include_directories('device_models/elder/inih/')
+  local_include = [local_include, device_models_inc]
+endif
 
 
 fastdyn_target = shared_module(

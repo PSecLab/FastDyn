@@ -155,7 +155,7 @@ void {peripheral_name.lower()}_write(void *opaque, hwaddr offset, uint64_t value
         // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
 }}}}
 
-void {peripheral_name.lower()}_init() {{{{
+void {peripheral_name.lower()}_init(void *opaque) {{{{
 		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
 }}}}
 ```
