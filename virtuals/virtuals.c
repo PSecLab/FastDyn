@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <glib.h>
-#include <Python.h>
 
 #include <qemu-plugin.h>
 #include <stdint.h>
@@ -32,10 +31,13 @@ extern size_t listCount;
 extern uint32_t qemu_get_register(int reg);
 extern void qemu_set_register(uint32_t value, int reg);
 
-// Global variables for Python integration
-static uint8_t py_init = false;
-static PyObject *fastdyn_interceptor = NULL;
-static PyObject *halucinator_initialize = NULL;
+#if ENABLE_LIBPY
+#include <Python.h>
+    // Global variables for Python integration
+    static uint8_t py_init = false;
+    static PyObject *fastdyn_interceptor = NULL;
+    static PyObject *halucinator_initialize = NULL;
+#endif
 
 /**
  * @brief Callback registry
@@ -206,6 +208,7 @@ void dyninst_lib(unsigned int cpu_index, void *udata) {
     qemu_plugin_load_elf((char *) udata);
 }
 
+#if ENABLE_LIBPY
 void fastdyn_callback(unsigned int cpu_index, void *udata) {
     const char *input = (const char *) udata;
     if (!py_init) {
@@ -322,6 +325,7 @@ void fastdyn_callback(unsigned int cpu_index, void *udata) {
         }
     }
 }
+#endif
 
 void dyninst(unsigned int cpu_index, void *udata) {
     AddrFilePair parsed = parse_addr_file((char *)udata);

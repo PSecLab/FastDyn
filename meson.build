@@ -1,30 +1,36 @@
 project('fastdyn', 'c')
 cc = meson.get_compiler('c')
 
-python3 = import('python').find_installation('python3')
-python_dep = python3.dependency()
-
-python_versions = ['python3.10', 'python3.11', 'python3.12', 'python3.13', 'python3.14', 'python3.15']
-libpython = dependency('', required: false)
-
-foreach v : python_versions
-  libpython = cc.find_library(v, required: false)
-  if libpython.found()
-    break
-  endif
-endforeach
-
-if not libpython.found()
-  error('Required Python library not found (3.10 - 3.15)')
-endif
-
+#glib support
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
-deps = [glib, libpython, python_dep]
+deps = [glib]
 
 #debugging FLAGS
 DEBUG_PRINT = get_option('DEBUG_PRINT')
 
-# USER RELATED FLAGS. USER CAN ADD CUSTOM LIBS
+#PYTHON Support
+ENABLE_LIBPY = get_option('enable_libpy')
+if ENABLE_LIBPY
+  python3 = import('python').find_installation('python3')
+  python_dep = python3.dependency()
+
+  python_versions = ['python3.10', 'python3.11', 'python3.12', 'python3.13', 'python3.14', 'python3.15']
+  libpython = dependency('', required: false)
+
+  foreach v : python_versions
+    libpython = cc.find_library(v, required: false)
+    if libpython.found()
+      break
+    endif
+  endforeach
+  if not libpython.found()
+    error('Required Python library not found (3.10 - 3.15)')
+  endif
+
+  deps+=[libpython, python_dep]
+endif
+
+# USER FLAGS. USER CAN ADD CUSTOM LIBS
 ENABLE_LIBGZ = get_option('enable_libgz')
 if ENABLE_LIBGZ
   libgz_wrapper_dep = declare_dependency(
@@ -50,6 +56,7 @@ configure_file(
   configuration : {
     'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
     'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0, 
+    'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0, 
     'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0, 
   }
 )

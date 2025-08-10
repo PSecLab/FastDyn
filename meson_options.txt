@@ -7,4 +7,7 @@ option('enable_libgz', type: 'boolean', value: false, description: 'Enable gazeb
 
 #Configuration Options
 option('device_models', type: 'boolean', value: false, description: 'Enable device models support')
+option('enable_libpy', type: 'boolean', value: false, description: 'Enable Python Library')
+
+#debugging options
 option('DEBUG_PRINT', type: 'boolean', value: false, description: 'Enable Debugging prints')
