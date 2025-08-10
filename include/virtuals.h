@@ -19,6 +19,7 @@ void dyninst_lib(unsigned int cpu_index, void *udata);
 void fastdyn_callback(unsigned int cpu_index, void *udata);
 void timer_start(unsigned int cpu_index, void *udata);
 void start_budgeting(unsigned int cpu_index, void *udata);
+void debug_log(unsigned int cpu_index, void *udata);
 
 /**
  * @brief Callback to communicate with gazebo
