@@ -309,7 +309,6 @@ int counter;
 #define ANCHOR		(0x106cc)
 
 
-PyMODINIT_FUNC PyInit_emb(void);
 uint32_t qemu_get_register(int reg);
 uint32_t qemu_get_register(int reg)
 {
@@ -721,9 +720,10 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Core initialization failed");
 	}
 
-	if (vm_init(argc, argv) != 0) {
-			utils_die("VM Init Failed");
+	if (python_vm_setup(argc, argv) != 0) {
+			utils_die("Python VM Init Failed");
 	}
+
 	if (dev_init(argc, argv) != 0) {
 			utils_die("Device Init Failed");
 	}

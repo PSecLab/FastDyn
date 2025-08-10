@@ -21,6 +21,9 @@ endif
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
 deps = [glib, libpython, python_dep]
 
+#debugging FLAGS
+DEBUG_PRINT = get_option('DEBUG_PRINT')
+
 # USER RELATED FLAGS. USER CAN ADD CUSTOM LIBS
 ENABLE_LIBGZ = get_option('enable_libgz')
 if ENABLE_LIBGZ
@@ -47,6 +50,7 @@ configure_file(
   configuration : {
     'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
     'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0, 
+    'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0, 
   }
 )
 #config_inc = include_directories(meson.current_build_dir())
