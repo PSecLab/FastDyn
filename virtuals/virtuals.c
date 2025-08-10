@@ -58,7 +58,8 @@ cb_entry_t cb_registry[] = {
     { "timer_start", timer_start},
     { "start_budgeting", start_budgeting},
     { "dyninst_lib", dyninst_lib},
-    { "fastdyn_callback", fastdyn_callback},
+    { "fastdyn_callback", fastdyn_callback}, 
+	{ "debug_log", debug_log}
 #if ENABLE_LIBGZ
     { "gz_service", gz_service},
 #endif
@@ -164,6 +165,17 @@ void randstate(unsigned int cpu_index, void *udata) {
     } else {
         printf("Failed to parse addresses.\n");
     }
+}
+
+void debug_log(unsigned int cpu_index, void *udata) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    double fractional_seconds = tv.tv_sec + tv.tv_usec / 1e6;
+
+    const char *msg = (const char *)udata;
+
+    printf("[%u][%.6f] : %s\n", cpu_index, fractional_seconds, msg);
 }
 
 void updatepc(unsigned int cpu_index, void *udata) {
