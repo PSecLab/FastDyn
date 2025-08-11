@@ -44,7 +44,7 @@ ENABLE_LIBHW = get_option('enable_libhw')
 if ENABLE_LIBHW
 libhw_dep = declare_dependency(
   include_directories: include_directories('../../libhw/include'),
-  link_args: ['-L../..//libhw/out', '-lhw', '-lstlink']
+  link_args: ['-L../../libhw/out', '-lhw', '-lstlink']
 )
   deps +=libhw_dep
 endif

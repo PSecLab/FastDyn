@@ -8,6 +8,7 @@
 #include <glib.h>
 
 #include <qemu-plugin.h>
+#include <sys/time.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -58,10 +59,15 @@ cb_entry_t cb_registry[] = {
     { "timer_start", timer_start},
     { "start_budgeting", start_budgeting},
     { "dyninst_lib", dyninst_lib},
-    { "fastdyn_callback", fastdyn_callback}, 
-	{ "debug_log", debug_log}
+#if ENABLE_LIBPY
+    { "fastdyn_callback", fastdyn_callback},
+#endif
+	{ "debug_log", debug_log},
 #if ENABLE_LIBGZ
     { "gz_service", gz_service},
+    { "copy_state_to_frontend", copy_state_to_frontend},
+    { "compass_block_read", compass_block_read},
+    { "send_mavlink_gps_data", send_mavlink_gps_data},
 #endif
 };
 
@@ -357,15 +363,7 @@ void dumplogger(unsigned int cpu_index, void *udata) {
 }
 
 #if ENABLE_LIBGZ
-void gz_service(unsigned int cpu_index, void *udata) {
-	static float yaw = 0.0;
-    if (set_rover_pose(yaw) == 0) {
-        printf("Pose set successfully\n");
-		yaw += 30.0;
-	} else {
-        printf("Failed to set pose\n");
-    }
-}
+#include "gazebo.c"
 #endif
 
 // Helper functions that need to be implemented or declared

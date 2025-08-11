@@ -22,10 +22,25 @@ void start_budgeting(unsigned int cpu_index, void *udata);
 void debug_log(unsigned int cpu_index, void *udata);
 
 /**
- * @brief Callback to communicate with gazebo
+ * @brief Callbacks to communicate with gazebo
  */
 #if ENABLE_LIBGZ
 void gz_service(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Wheel Encoder Copy state to Frontend function
+ */
+void copy_state_to_frontend(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Compass Block Read function
+ */
+void compass_block_read(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Send mavlink GPS to firmware
+ */
+void send_mavlink_gps_data(unsigned int cpu_index, void *udata);
 #endif
 
 // Helper functions
