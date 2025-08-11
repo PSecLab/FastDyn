@@ -24,6 +24,7 @@
 #include <virtuals.h>
 #if ENABLE_LIBGZ
     #include "gazebo_wrapper.h"
+    #include "gazebo.c"
 #endif
 
 // External dependencies from core.c
@@ -361,10 +362,6 @@ void dumplogger(unsigned int cpu_index, void *udata) {
     parse_file_entry((const char*) udata, &entry);
     dump_log_buffer_to_file(&addressLists[entry.idx], entry.file_name);
 }
-
-#if ENABLE_LIBGZ
-#include "gazebo.c"
-#endif
 
 // Helper functions that need to be implemented or declared
 unsigned long long* parse_addresses(const char *input, size_t *count) {
