@@ -66,6 +66,9 @@ class DeviceTestHarness:
         self.read_func_name = read_func_name
         self.write_func_name = write_func_name
         self.verbose = verbose
+        self.errors = 0
+        self.match  = 0
+        self.writes = 0
         self.lib = None
 
     def _log_info(self, msg):
@@ -141,12 +144,15 @@ class DeviceTestHarness:
                         c_model_value = self.read_func(None, offset, size)
                         if c_model_value == expected_value:
                             self._log_success(f"Read Match:    Offset 0x{offset:02x}. Expected 0x{expected_value:x}, Got 0x{c_model_value:x}")
+                            self.match = self.match + 1
                         else:
                             self._log_warning(f"Read Mismatch: Offset 0x{offset:02x}. Expected 0x{expected_value:x}, but got 0x{c_model_value:x}")
+                            self.errors = self.errors + 1
 
                     elif op_type.lower() == "write":
                         self._log_info(f"Write Operation: Offset 0x{offset:02x}, Value 0x{expected_value:x}")
                         self.write_func(None, offset, expected_value, size)
+                        self.writes = self.writes + 1
                     self._log_info("-" * 50)
         
         self._log_success("Trace processing complete.")
@@ -192,5 +198,17 @@ if __name__ == "__main__":
         print(f"{Fore.RED}An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"{Fore.GREEN} Verification Ran Fine, If you dont see any errors your device model is good to go!")
+    print(f"{Fore.CYAN}--- Harness Configuration ---")
+    print(f"{Fore.CYAN}  Library Path: {harness.lib_path}")
+    print(f"{Fore.CYAN}  Trace File:   {harness.trace_file_path}")
+    print(f"{Fore.CYAN}  Base Address: {hex(harness.base_addr)}")
+    print(f"{Fore.CYAN}  Memory Size:  {hex(harness.size)}")
+    print(f"{Fore.CYAN}  Init Func:    '{harness.init_func_name}'")
+    print(f"{Fore.CYAN}  Read Func:    '{harness.read_func_name}'")
+    print(f"{Fore.CYAN}  Write Func:   '{harness.write_func_name}'")
+    print(f"{Fore.CYAN}---------------------------{Style.RESET_ALL}")
+    if harness.errors > 0:
+        print(f"{Fore.RED}Result -> Matches: {harness.match}, Errors: {harness.errors}, Writes: {harness.writes}{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.GREEN}Result -> Matches: {harness.match}, Errors: {harness.errors}, Writes: {harness.writes}{Style.RESET_ALL}")
 

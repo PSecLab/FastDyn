@@ -75,8 +75,9 @@ def generate_gemini_prompt(peripheral_directory: str) -> str:
 - `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Arms a timer for future.
 - `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
 - `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: The return value is timer file descriptor. You can pass data to callback using data field.
-- `uint64_t my_unimp_read(void *opaque, hwaddr offset, unsigned size)`: Signature for a callback that receives VM MMIO read.
-- `void my_unimp_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
+- `uint64_t my_unimp_read(void *opaque, hwaddr address, unsigned size)`: Signature for a callback that receives VM MMIO read. address is the address of the MMIO access and size is size of access.
+- `void my_unimp_write(void *opaque, hwaddr address, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
+- 'void dev_debug(char *str)`: Any debug messages must be logged using this function.
 """
 
     # Assemble the prompt, escaping literal curly braces {{ and }} in the C code example
@@ -150,7 +151,7 @@ uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size
 }}}}
 
 // This function will emulate all device writes
-void {peripheral_name.lower()}_write(void *opaque, hwaddr offset, uint64_t value, unsigned size) {{{{
+void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{{{
         // Example: GPIOG->BSRR = value; // Set PG13 high
         // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
 }}}}

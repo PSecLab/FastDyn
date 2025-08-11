@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 
+#ifdef ENABLE_DEV_DEBUG
+    #define dev_debug(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+    #define dev_debug(fmt, ...) do {} while (0)
+#endif
+
 typedef unsigned long hwaddr;
 
 /**
