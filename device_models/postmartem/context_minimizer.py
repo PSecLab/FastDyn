@@ -3,6 +3,7 @@ import re
 import sys
 import argparse
 import subprocess
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -17,17 +18,20 @@ init(autoreset=True)
 @dataclass
 class MMIOAccess:
     timestamp_ns: int
-    address: int
-    value: int
     access_type: str
-    pc: int
+    address: Optional[int] = None
+    value: Optional[int] = None
+    pc: Optional[int] = None
     peripheral: Optional[str] = None
     register: Optional[str] = None
     register_desc: Optional[str] = None
+    vector: Optional[int] = None
 
     def __repr__(self):
         ts_sec = self.timestamp_ns / 1e9
         access_str = f"[{ts_sec:10.6f}] {self.access_type.upper():<5} "
+        if self.access_type == 'interrupt':
+            return f"[{ts_sec:10.6f}] INTERRUPT on {self.peripheral}, Vector={self.vector} (0x{self.vector:X})"
         if self.peripheral and self.register:
             access_str += f"to {self.peripheral}->{self.register} (0x{self.address:08X}) value=0x{self.value:X}, pc=0x{self.pc:X}"
         else:
@@ -52,11 +56,15 @@ class MMIOAnalyzer:
 
     def _build_peripheral_map(self):
         self.peripheral_map = {}
+        self.interrupt_map = {}
         for p in self.device.peripherals:
             size = 0x400
             if hasattr(p, 'address_block') and p.address_block:
                 size = p.address_block.size
             self.peripheral_map[(p.base_address, p.base_address + size)] = p
+            if hasattr(p, 'interrupts') and p.interrupts:
+                for i in p.interrupts:
+                    self.interrupt_map[i.value] = p.name
         print(f"SVD parsed successfully. Found {len(self.device.peripherals)} peripherals.")
 
     def _find_register_for_address(self, addr: int):
@@ -72,11 +80,29 @@ class MMIOAnalyzer:
             r'\[\s*(?P<timestamp>\d+\.\d+)\s*\]\s*(?P<type>Read|Write):\s*address\s*=\s*(?P<address>0x[0-9a-fA-F]+),\s*'
             r'size\s*=\s*\d+\s*bytes,\s*value\s*=\s*(?P<value>0x[0-9a-fA-F]+),\s*pc=(?P<pc>0x[0-9a-fA-F]+)'
         )
+        interrupt_pattern = re.compile(
+            r'\[\s*(?P<timestamp>\d+\.\d+)\s*\]\s*Interrupt Taken:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)'
+        )
         enriched_accesses = []
         try:
             with open(log_path, 'r') as f:
                 for line_num, line in enumerate(f, 1):
                     match = log_pattern.match(line.strip())
+                    interrupt_match = interrupt_pattern.match(line.strip())
+                    if interrupt_match:
+                        data = interrupt_match.groupdict()
+                        vector = int(data['vector'], 16)
+                        p_name = self.interrupt_map.get(vector)
+                        if p_name is None:
+                            print(Style.BRIGHT + Fore.RED + f"[ERROR] On log line {line_num}: Failed to map interrupt vector {vector} (0x{vector:X}) to any SVD peripheral.")
+                            sys.exit(1)
+                        access = MMIOAccess(
+                            timestamp_ns=int(float(data['timestamp']) * 1e9),
+                            access_type='interrupt',
+                            peripheral=p_name,
+                            vector=vector
+                        )
+                        enriched_accesses.append(access)
                     if not match: continue
                     data = match.groupdict()
                     address = int(data['address'], 16)
@@ -95,6 +121,12 @@ class MMIOAnalyzer:
         print(f"Log correlated successfully. Total valid accesses parsed: {len(enriched_accesses)}")
         return enriched_accesses
 
+    def _get_op_key(self, acc: MMIOAccess) -> Tuple:
+        """Creates a unique tuple representing an operation for frequency counting."""
+        if acc.access_type == 'interrupt':
+            return (acc.peripheral, acc.access_type, acc.vector)
+        else:
+            return (acc.peripheral, acc.register, acc.access_type)
     def separate_init_and_runtime(self, accesses: List[MMIOAccess]) -> Tuple[List[MMIOAccess], List[MMIOAccess]]:
         print(f"  Separating accesses...")
         op_key = lambda acc: (acc.peripheral, acc.register, acc.access_type)
@@ -229,6 +261,95 @@ class MMIOAnalyzer:
             
         return results if results else ["No registers with sufficient read data for entropy analysis."]
 
+        # --- NEW: ISR Detection Method ---
+     # --- MODIFIED: ISR analysis now groups and counts repeating ISRs ---
+    def analyze_isr_behavior(self, all_events: List[MMIOAccess], isr_window_ns: int) -> List[str]:
+        """Finds repeating ISRs and reports their frequency."""
+        print("  Analyzing Interrupt Service Routines (ISRs)...")
+        
+        interrupt_indices = [i for i, event in enumerate(all_events) if event.access_type == 'interrupt']
+        if not interrupt_indices:
+            return ["No interrupts found in the entire log."]
+
+        op_counts = Counter(self._get_op_key(evt) for evt in all_events)
+
+        # Store ISRs by their abstract trace (the sequence of operations)
+        isrs_by_trace = defaultdict(list)
+
+        for i in interrupt_indices:
+            interrupt_event = all_events[i]
+            isr_trace_concrete = []
+            
+            for j in range(i + 1, len(all_events)):
+                subsequent_event = all_events[j]
+                time_delta = subsequent_event.timestamp_ns - interrupt_event.timestamp_ns
+
+                if 0 < time_delta <= isr_window_ns:
+                    if subsequent_event.access_type != 'interrupt':
+                        isr_trace_concrete.append(subsequent_event)
+                elif time_delta > isr_window_ns:
+                    break
+            
+            # Create an abstract key for the trace to group identical ISRs
+            abstract_trace = tuple(self._get_op_key(evt) for evt in isr_trace_concrete)
+            
+            # Store the first concrete example of this trace
+            if not isrs_by_trace[abstract_trace]:
+                 isrs_by_trace[abstract_trace].append(interrupt_event) # Store the trigger
+                 isrs_by_trace[abstract_trace].extend(isr_trace_concrete) # Store the actions
+            else:
+                 # We've already stored an example, just increment a counter conceptually
+                 # The count will be the length of the list of triggers
+                 isrs_by_trace[abstract_trace].append(interrupt_event)
+
+
+        # Filter for repeating ISRs and format the output
+        findings = []
+        # Sort by frequency (most common ISR first)
+        sorted_isrs = sorted(isrs_by_trace.items(), key=lambda item: len(item[1]), reverse=True)
+
+        for abstract_trace, concrete_events in sorted_isrs:
+            count = 0
+            trace_triggers = [evt for evt in concrete_events if evt.access_type == 'interrupt']
+            trace_count = sum(1 for evt in concrete_events if evt.access_type == 'interrupt')
+
+            if trace_count > 1: # Only report ISRs that happened more than once
+                time_frequency_info = ""
+                interrupt_trigger = concrete_events[0]
+                isr_body = concrete_events[1:len(abstract_trace)+1]
+
+                trigger_key = self._get_op_key(interrupt_trigger)
+                total_interrupt_count = op_counts.get(trigger_key, 0)
+
+                time_frequency_info = ""
+                if len(trace_triggers) > 1:
+                    deltas = [(trace_triggers[k+1].timestamp_ns - trace_triggers[k].timestamp_ns) for k in range(len(trace_triggers)-1)]
+                    if deltas:
+                        mean_delta_ns = sum(deltas) / len(deltas)
+                        variance = sum([(d - mean_delta_ns) ** 2 for d in deltas]) / len(deltas)
+                        std_dev_ns = math.sqrt(variance)
+                        if std_dev_ns < (mean_delta_ns * 0.05):
+                             time_frequency_info = f"# Time Analysis: Periodic, occurs approx. every {mean_delta_ns / 1e6:.3f} ms (std dev: {std_dev_ns / 1e6:.3f} ms)\n"
+                        else:
+                             time_frequency_info = f"# Time Analysis: Aperiodic, average interval {mean_delta_ns / 1e6:.3f} ms (std dev: {std_dev_ns / 1e6:.3f} ms)\n"
+
+                header = (f"## Repeating ISR for Vector {interrupt_trigger.vector} (0x{interrupt_trigger.vector:X}) ##\n"
+                          f"# Total Interrupts on this Vector: {total_interrupt_count}\n"
+                          f"# Occurrences of this specific ISR trace: {trace_count}\n"
+                          f"{time_frequency_info}") 
+
+                finding_str = header
+                finding_str += f"{interrupt_trigger}\n"
+                if not isr_body:
+                    finding_str += "  - ISR consists of no MMIO activity.\n"
+                else:
+                    finding_str += "  - Inferred ISR Trace:\n"
+                    for trace_event in isr_body:
+                        finding_str += f"    {trace_event}\n"
+                findings.append(finding_str)
+            
+        return findings if findings else ["No repeating ISR patterns detected."]
+
 
 def discover_svd_files():
     repo_dir = "cmsis-svd-data"; repo_url = "https://github.com/cmsis-svd/cmsis-svd-data.git"
@@ -261,6 +382,7 @@ if __name__ == "__main__":
     parser.add_argument("--method", type=str, default='minimal_cycle', choices=['minimal_cycle', 'ngram'], help="Algorithm for pattern detection.")
     parser.add_argument("--n", type=int, default=4, help="The sequence length for 'ngram' method (default: 4).")
     parser.add_argument("--list-platforms", action="store_true", help="List all discovered platform names and exit.")
+    parser.add_argument("--isr-window", type=int, default=100000, help="Time window in nanoseconds to capture an ISR trace after an interrupt (default: 100000).")
     
     args = parser.parse_args()
     svd_file_map = discover_svd_files()
@@ -297,6 +419,10 @@ if __name__ == "__main__":
         f.write(f"Found {len(accesses_by_peripheral)} active peripherals:\n")
         for p_name in sorted(accesses_by_peripheral.keys()): f.write(f"  - {p_name}\n")
 
+    print("-" * 60)
+
+    print("--- Analyzing Global Interrupt Behavior ---")
+    all_isr_findings = analyzer.analyze_isr_behavior(all_accesses, isr_window_ns=args.isr_window)
     print("-" * 60)
 
     for peripheral, p_accesses in sorted(accesses_by_peripheral.items()):
@@ -353,5 +479,15 @@ if __name__ == "__main__":
             for finding in entropy_findings:
                 f.write(f"- {finding}\n")
         print(f"  Entropy analysis saved to: {entropy_file_path}")
-        
+
+        # Filter the global ISR findings for the current peripheral
+        peripheral_isr_findings = [f for f in all_isr_findings if f"INTERRUPT on {peripheral}" in f]
+        if peripheral_isr_findings:
+            isr_file_path = os.path.join(peripheral_dir, "isr_analysis.txt")
+            with open(isr_file_path, 'w') as f:
+                f.write(f"# Inferred Interrupt Service Routines for {peripheral}\n")
+                f.write(f"# (Actions captured within {args.isr_window} ns of the interrupt)\n\n")
+                for finding in peripheral_isr_findings:
+                    f.write(f"{finding}\n")
+            print(f"  ISR analysis saved to: {isr_file_path}")
     print("-" * 60); print("Analysis complete.")
