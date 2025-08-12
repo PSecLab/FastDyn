@@ -610,6 +610,7 @@ static int core_parse_arguments(int argc, char ** argv) {
 	return 0;
 }
 
+
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
