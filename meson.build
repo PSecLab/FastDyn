@@ -55,9 +55,9 @@ configure_file(
   output : 'config.h',
   configuration : {
     'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
-    'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0, 
-    'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0, 
-    'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0, 
+    'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0,
+    'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0,
+    'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0,
   }
 )
 #config_inc = include_directories(meson.current_build_dir())
@@ -66,8 +66,8 @@ configure_file(
 QEMU_DIR = get_option('qemu_path')
 qemu_include = include_directories(
   join_paths(QEMU_DIR, 'include', 'qemu'),
-  join_paths(QEMU_DIR, '..', 'qemu', 'include')
-  
+  join_paths(QEMU_DIR, 'include')
+
 )
 
 # --- Project include dir

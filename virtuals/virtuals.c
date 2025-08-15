@@ -35,18 +35,20 @@ extern void qemu_set_register(uint32_t value, int reg);
 
 #if ENABLE_LIBPY
 #include <Python.h>
+#include "../python/python.c"
     // Global variables for Python integration
     static uint8_t py_init = false;
+    static uint8_t peripheral_server_init = true;
     static PyObject *fastdyn_interceptor = NULL;
     static PyObject *halucinator_initialize = NULL;
 #endif
 
 /**
  * @brief Callback registry
- * 
+ *
  * To register a new callback, add a new entry to this list,
  * declare the function in virtuals.h and implement it here.
- * 
+ *
  */
 cb_entry_t cb_registry[] = {
     { "updatepc", updatepc },
@@ -213,10 +215,10 @@ void timer_start(unsigned int cpu_index, void *udata) {
     //One shot
     int timer = qemu_plugin_timer_new_ns(my_timer_callback, (void *)msg);
     qemu_plugin_timer_alarm(timer, 1e6);
-#else 
+#else
     //Periodic
     qemu_plugin_timer_new_period_ns(my_timer_callback, (void *)msg, 1e6);
-#endif 
+#endif
 }
 
 void start_budgeting(unsigned int cpu_index, void *udata) {
@@ -329,7 +331,8 @@ void fastdyn_callback(unsigned int cpu_index, void *udata) {
         DEBUG_LOG("input pc: %s\n",input);
 
         //Build the arguments. -> PC Value passed by the user when registering the callback!
-        PyObject *fastdyn_callback_args = PyTuple_Pack(1, PyUnicode_FromString(input));
+        PyObject *fastdyn_callback_args = PyTuple_Pack(2, PyUnicode_FromString(input), PyLong_FromLong(peripheral_server_init));
+        peripheral_server_init = false;
 
         // Call the Initialize function
         PyObject *fastdyn_callback_return_val = PyObject_CallObject(fastdyn_interceptor, fastdyn_callback_args);

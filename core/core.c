@@ -623,9 +623,11 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Core initialization failed");
 	}
 
+    #if ENABLE_LIBHW
 	if (dev_init(argc, argv) != 0) {
 			utils_die("Device Init Failed");
 	}
+    #endif
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
