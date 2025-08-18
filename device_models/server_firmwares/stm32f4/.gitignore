@@ -1,0 +1,9 @@
+stm32f769i-eval-bsp/
+stm32f7xx_hal_driver/
+./build/
+build/
+cmsis_device_f7/
+rtmk.map
+sizeinfo
+.cflags
+CMSIS_5/
