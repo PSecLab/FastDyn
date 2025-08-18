@@ -2,6 +2,7 @@
 #define DEVICE_H
 
 #include <stdint.h>
+#include <qemu/qemu-plugin.h>
 
 #ifdef ENABLE_DEV_DEBUG
     #define dev_debug(fmt, ...) printf(fmt, ##__VA_ARGS__)
