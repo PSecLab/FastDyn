@@ -53,7 +53,6 @@
  * It gets called when the TIM1 counter overflows.
  */
 void TIM1_UP_TIM10_IRQHandler(void) {
-	  __asm__ volatile ("bkpt #0");
     // Check if the update interrupt flag is set
     if (TIM1_SR & (1 << 0)) {
         // Toggle the green LED (PD12)
@@ -69,7 +68,6 @@ void TIM1_UP_TIM10_IRQHandler(void) {
  * @brief  Main program.
  */
 int timer_test(void) {
-	#if 01
     // 1. Enable the clock for GPIOD
     RCC_AHB1ENR |= (1 << 3); // Set bit 3 to enable GPIOD clock
 
@@ -88,9 +86,6 @@ int timer_test(void) {
 
     // 5. Enable the TIM1 update interrupt
     TIM1_DIER |= (1 << 0); // Set UIE bit to enable update interrupt
-
-#endif 
-
 
     // 6. Enable the TIM1 update interrupt in the NVIC
     // The IRQ number for TIM1_UP_TIM10 is 25.

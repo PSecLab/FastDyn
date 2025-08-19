@@ -60,9 +60,12 @@ static void* dev_thread_fn(void* arg) {
 				for (int i =0; i<16; i++) {
 					dev_debug("Register%d: 0x%lx\n", i, hw_read_reg(hw, i));
 				}
+				int firing_line = hw_read_reg(hw, 0);
+				printf("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));
+                printf("Register%d: 0x%lx\n", 15, hw_read_reg(hw, 15));
 				hw_board_run(hw);
 				usleep(2500000);
-				printf("Register%d: 0x%lx\n", 15, hw_read_reg(hw, 15));
+				qemu_plugin_raise_irq(firing_line);
 		} else {
 			pthread_mutex_unlock(&hw_mutex);
 			usleep(2500000);
