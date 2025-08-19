@@ -42,7 +42,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 	current->write(handler, address, value, size);
 
 	if (handler && (strcmp(handler, "generic_io") == 0)) {
-            return 0;
+           return 0;
     }
 
 	// Continue internal operation
@@ -69,7 +69,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 	*buf = value;
 
 	if (handler && (strcmp(handler, "generic_io") == 0)) {
-			return 0;
+		return 0;
 	}
 	// Continue internal operation
 	return 1;
