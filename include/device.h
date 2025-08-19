@@ -35,9 +35,10 @@ typedef struct DeviceModel {
 } DeviceModel;
 
 typedef struct unimp_exporter {
-    uint64_t (*read)(void *opaque, hwaddr offset, unsigned size);
-    void (*write)(void *opaque, hwaddr offset, uint64_t value, unsigned size);
+    int (*read)(char * handler, hwaddr addr, uint64_t *buf, hwaddr len);
+    int (*write)(char * handler, hwaddr addr, uint64_t value, hwaddr len);
 } DEV_XPORTER;
+
 
 
 int dev_init(int argc, char ** argv);
