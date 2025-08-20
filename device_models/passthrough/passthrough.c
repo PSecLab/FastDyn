@@ -45,6 +45,7 @@ static void passthrough_write(void *opaque, hwaddr address, uint64_t value, unsi
         utils_die("HW Write Failed");
     }
 }
+static pthread_cond_t irq_cv = PTHREAD_COND_INITIALIZER;
 static int irq_pending;
 static void* dev_thread_fn(void* arg) {
     (void)arg;
@@ -55,21 +56,26 @@ static void* dev_thread_fn(void* arg) {
         qemu_plugin_raise_irq(15);
 #endif
 		pthread_mutex_lock(&hw_mutex);
-		if (!irq_pending && hw_board_halted(hw)) {
-				pthread_mutex_unlock(&hw_mutex);
+		// Wait until no IRQ is pending
+        while (irq_pending) {
+            pthread_cond_wait(&irq_cv, &hw_mutex);
+        }
+
+
+		if (hw_board_halted(hw)) {
 				for (int i =0; i<16; i++) {
 					dev_debug("Register%d: 0x%lx\n", i, hw_read_reg(hw, i));
 				}
-				pthread_mutex_lock(&hw_mutex);
 				int firing_line = hw_read_reg(hw, 0);
 				irq_pending = firing_line;
+
 				dev_debug("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));
                 dev_debug("Register%d: 0x%lx\n", 15, hw_read_reg(hw, 15));
 				pthread_mutex_unlock(&hw_mutex);
 				qemu_plugin_raise_irq(firing_line);
 		} else {
 			pthread_mutex_unlock(&hw_mutex);
-			usleep(250000);
+			usleep(40000);
 		}
     }
 
@@ -81,6 +87,7 @@ static int passthrough_serve(int line) {
 	hw_write_reg(hw, 1, line);
 	hw_board_run(hw);
 	irq_pending =0;
+	pthread_cond_signal(&irq_cv);
 	pthread_mutex_unlock(&hw_mutex);
 	return 0;
 }
