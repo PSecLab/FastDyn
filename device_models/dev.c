@@ -98,11 +98,24 @@ void dev_notify_irq(int number) {
 	utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
               sec, usec, number);
 
+	current->interrupt(number);
+
+}
+
+void dev_irqret_hook(int number) {
+    time_t sec;
+    long usec;
+    dev_get_timestamp(&sec, &usec);
+    utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
+              sec, usec, number);
+
+	current->serve(number);
+
 }
 
 int dev_init(int argc, char ** argv) {
 	// Regisgter IRQ listener for logging
-	qemu_plugin_register_irq_hook(dev_notify_irq);
+	qemu_plugin_register_irq_hook(dev_notify_irq, dev_irqret_hook);
 	char * dev_model_info = utils_get_arg("dev", argc, argv);
 
 	if (dev_model_info) {

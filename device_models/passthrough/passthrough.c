@@ -45,7 +45,7 @@ static void passthrough_write(void *opaque, hwaddr address, uint64_t value, unsi
         utils_die("HW Write Failed");
     }
 }
-
+static int irq_pending;
 static void* dev_thread_fn(void* arg) {
     (void)arg;
 
@@ -55,24 +55,39 @@ static void* dev_thread_fn(void* arg) {
         qemu_plugin_raise_irq(15);
 #endif
 		pthread_mutex_lock(&hw_mutex);
-		if (hw_board_halted(hw)) {
+		if (!irq_pending && hw_board_halted(hw)) {
 				pthread_mutex_unlock(&hw_mutex);
 				for (int i =0; i<16; i++) {
 					dev_debug("Register%d: 0x%lx\n", i, hw_read_reg(hw, i));
 				}
+				pthread_mutex_lock(&hw_mutex);
 				int firing_line = hw_read_reg(hw, 0);
-				printf("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));
-                printf("Register%d: 0x%lx\n", 15, hw_read_reg(hw, 15));
-				hw_board_run(hw);
-				usleep(2500000);
+				irq_pending = firing_line;
+				dev_debug("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));
+                dev_debug("Register%d: 0x%lx\n", 15, hw_read_reg(hw, 15));
+				pthread_mutex_unlock(&hw_mutex);
 				qemu_plugin_raise_irq(firing_line);
 		} else {
 			pthread_mutex_unlock(&hw_mutex);
-			usleep(2500000);
+			usleep(250000);
 		}
     }
 
     return NULL;
+}
+
+static int passthrough_serve(int line) {
+	pthread_mutex_lock(&hw_mutex);
+	hw_write_reg(hw, 1, line);
+	hw_board_run(hw);
+	irq_pending =0;
+	pthread_mutex_unlock(&hw_mutex);
+	return 0;
+}
+
+static int passthrough_interrupt(int line) {
+		(void)line;
+		return 0;
 }
 
 static int passthrough_init(char *argument) {
@@ -90,11 +105,14 @@ static int passthrough_init(char *argument) {
     return 0;
 }
 
+
 // The public definition of the passthrough device model
 DeviceModel passthrough_model_def = {
     .name = "passthrough",
     .read = passthrough_read,
     .write = passthrough_write,
 	.init = passthrough_init,
+	.serve = passthrough_serve,
+	.interrupt = passthrough_interrupt,
 };
 
