@@ -91,7 +91,7 @@ class MMIOAnalyzer:
                     interrupt_match = interrupt_pattern.match(line.strip())
                     if interrupt_match:
                         data = interrupt_match.groupdict()
-                        vector = int(data['vector'], 16)
+                        vector = int(data['vector'], 16) - 16
                         p_name = self.interrupt_map.get(vector)
                         if p_name is None:
                             print(Style.BRIGHT + Fore.RED + f"[ERROR] On log line {line_num}: Failed to map interrupt vector {vector} (0x{vector:X}) to any SVD peripheral.")

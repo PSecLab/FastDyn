@@ -114,11 +114,11 @@ void dev_irqret_hook(int number) {
 }
 
 int dev_init(int argc, char ** argv) {
-	// Regisgter IRQ listener for logging
-	qemu_plugin_register_irq_hook(dev_notify_irq, dev_irqret_hook);
 	char * dev_model_info = utils_get_arg("dev", argc, argv);
 
 	if (dev_model_info) {
+		// Regisgter IRQ listener for logging
+	    qemu_plugin_register_irq_hook(dev_notify_irq, dev_irqret_hook);
 		char *sep = strchr(dev_model_info, ':');
 		if (sep) {
 			*sep = '\0';

@@ -51,6 +51,7 @@ extern void qemu_set_register(uint32_t value, int reg);
  *
  */
 cb_entry_t cb_registry[] = {
+	{ "printreg", printreg },
     { "updatepc", updatepc },
     { "updatereg", updatereg},
     { "updatemem", updatemem},
@@ -185,6 +186,11 @@ void debug_log(unsigned int cpu_index, void *udata) {
     const char *msg = (const char *)udata;
 
     printf("[%u][%.6f] : %s\n", cpu_index, fractional_seconds, msg);
+}
+
+void printreg(unsigned int cpu_index, void *udata) {
+	unsigned long reg = strtoul((char *)(udata), NULL, 16);
+	printf("Reg %lu:0x%08x\n", reg, qemu_get_register(reg));
 }
 
 void updatepc(unsigned int cpu_index, void *udata) {
