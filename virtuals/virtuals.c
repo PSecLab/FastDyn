@@ -36,11 +36,6 @@ extern void qemu_set_register(uint32_t value, int reg);
 #if ENABLE_LIBPY
 #include <Python.h>
 #include "../python/python.c"
-    // Global variables for Python integration
-    static uint8_t py_init = false;
-    static uint8_t peripheral_server_init = true;
-    static PyObject *fastdyn_interceptor = NULL;
-    static PyObject *halucinator_initialize = NULL;
 #endif
 
 /**
@@ -228,126 +223,6 @@ void start_budgeting(unsigned int cpu_index, void *udata) {
 void dyninst_lib(unsigned int cpu_index, void *udata) {
     qemu_plugin_load_elf((char *) udata);
 }
-
-#if ENABLE_LIBPY
-void fastdyn_callback(unsigned int cpu_index, void *udata) {
-    const char *input = (const char *) udata;
-    if (!py_init) {
-        //Initialize the Python Interpreter
-        Py_Initialize();
-
-        PyRun_SimpleString("import sys");
-        PyRun_SimpleString("import os");
-        PyRun_SimpleString("sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)");
-        PyRun_SimpleString("sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', buffering=1)");
-        PyRun_SimpleString("sys.path.append('.')");
-
-        //Load the module for the C APIs <-> Python Interaction.
-        PyObject *hal_reg_mem = PyUnicode_FromString("src.halucinator.hal_reg_mem");
-        PyObject *hal_reg_mem_module = PyImport_Import(hal_reg_mem);
-        Py_DECREF(hal_reg_mem);
-
-        if (!hal_reg_mem_module) {
-            PyErr_Print();
-            fprintf(stderr, "Failed to load Python script.\n");
-        }
-
-        Py_XDECREF(hal_reg_mem_module);
-
-        //Qemu -> Halucinator (Single Process)
-        //Let's initialize the Halucinator Hal_initialzer -> For now, the configurations are defined inside the file, will update later, once stable.
-        PyObject *Halucinator = PyUnicode_FromString("src.halucinator.main");
-        PyObject *Halucinator_module = PyImport_Import(Halucinator);
-
-        //Intercept Function to be called once the qemu starts halucinator. (initialize once)
-        PyObject *Intercepts_file = PyUnicode_FromString("src.halucinator.bp_handlers.intercepts");
-        PyObject *Intercepts_module = PyImport_Import(Intercepts_file);
-
-        Py_DECREF(Halucinator);
-        Py_DECREF(Intercepts_file);
-
-        if (Halucinator_module != NULL && Intercepts_module != NULL) {
-            //Get the Halucinator Initializer function
-            halucinator_initialize = PyObject_GetAttrString(Halucinator_module, "halucinator_initialize");
-
-            //Get the intecptor function from the intercepts module.
-            fastdyn_interceptor = PyObject_GetAttrString(Intercepts_module, "intercept_fastdyn_callback");
-
-            //verify the existance of the halucinator_initialize
-            if (halucinator_initialize && PyCallable_Check(halucinator_initialize)) {
-                //TODO: Improve this logic :>
-                //Empyty block, don't do anything, just want to catch errors here
-            } else {
-                //Add garbage handling mabye when we go out of scope
-                Py_DECREF(Halucinator_module);
-                PyErr_Print();
-                exit(1);
-            }
-
-            if (fastdyn_interceptor && PyCallable_Check(fastdyn_interceptor)) {
-                py_init = true;
-            } else {
-                //Add garbage handling mabye when we go out of scope
-                Py_DECREF(Intercepts_module);
-                PyErr_Print();
-                exit(1);
-            }
-            Py_DECREF(Halucinator_module);
-            Py_DECREF(Intercepts_module);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
-
-        //Let's initialize Halucinator only once!
-        //No arguments, handled by halucinator itself
-        //TODO: In future, find a way to pass arguments from here?
-        PyObject *halucinator_initialize_args = PyTuple_Pack(0);
-
-        // Call the Halucinator Initialize Function
-        PyObject *Halucinator_return_val = PyObject_CallObject(halucinator_initialize, halucinator_initialize_args);
-
-        Py_DECREF(halucinator_initialize_args);
-        //Verify the halucinator was initialized successfully!
-        if (Halucinator_return_val != NULL && PyTuple_Check(Halucinator_return_val)){
-            PyObject *hal_return_val = PyTuple_GetItem(Halucinator_return_val, 0);  // True/False -> show whether halucinator was initialized successfully or not!
-
-            int arg1 = PyObject_IsTrue(hal_return_val);    // Converts True/False to 1/0
-            if (arg1){
-                printf("Successfuly initialized Halucinator...");
-            } else {
-                Py_DECREF(Halucinator_return_val);
-                printf("Error Initializing the Halucinator! Exiting...");
-                exit(1);
-            }
-            Py_DECREF(Halucinator_return_val);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
-    }
-    if (py_init) {
-        DEBUG_LOG("fastdyn api called!\n");
-        DEBUG_LOG("input pc: %s\n",input);
-
-        //Build the arguments. -> PC Value passed by the user when registering the callback!
-        PyObject *fastdyn_callback_args = PyTuple_Pack(2, PyUnicode_FromString(input), PyLong_FromLong(peripheral_server_init));
-        peripheral_server_init = false;
-
-        // Call the Initialize function
-        PyObject *fastdyn_callback_return_val = PyObject_CallObject(fastdyn_interceptor, fastdyn_callback_args);
-
-        Py_DECREF(fastdyn_callback_args);
-        //Verify the halucinator was initialized successfully!
-        if (fastdyn_callback_return_val != NULL && PyTuple_Check(fastdyn_callback_return_val)){
-            Py_DECREF(fastdyn_callback_return_val);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
-    }
-}
-#endif
 
 void dyninst(unsigned int cpu_index, void *udata) {
     AddrFilePair parsed = parse_addr_file((char *)udata);
