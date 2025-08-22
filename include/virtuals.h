@@ -7,6 +7,7 @@
 #include "config.h"
 
 // Virtual instruction functions
+void printreg(unsigned int cpu_index, void *udata);
 void raiseirq(unsigned int cpu_index, void *udata);
 void pulseirq(unsigned int cpu_index, void *udata);
 void updatepc(unsigned int cpu_index, void *udata);

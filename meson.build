@@ -87,6 +87,7 @@ if get_option('device_models')
   srcs += files(
   'device_models/dev.c',
   'device_models/passthrough/passthrough.c',
+  'device_models/classic/classic.c',
   'device_models/elder/elder.c',
   'device_models/elder/device_config.c',
   'device_models/elder/inih/ini.c'
