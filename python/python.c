@@ -13,6 +13,7 @@ static PyObject *fastdyn_interceptor = NULL;
 static PyObject *halucinator_initialize = NULL;
 static PyObject *dev_notify_irq_callback = NULL;
 static PyObject *dev_irqret_hook_callback = NULL;
+uint32_t curr_bkpt_addr = 0;
 
 PyMODINIT_FUNC PyInit_emb(void);
 
@@ -118,7 +119,13 @@ void initialize_halucinator_python_vm(void) {
 
 void fastdyn_callback(unsigned int cpu_index, void *udata) {
     const char *input = (const char *) udata;
-    if (!py_init) {
+	if (input[0] == '*') {
+	    curr_bkpt_addr = (uint32_t) strtoul(input + 1, NULL, 16);
+	} else {
+	    curr_bkpt_addr = (uint32_t) strtoul(input, NULL, 16);
+	}
+
+	if (!py_init) {
 		initialize_halucinator_python_vm();
     }
     if (py_init) {
@@ -227,8 +234,12 @@ int python_vm_setup(void) {
 //Expose read/write registers/memory API from here...
 uint32_t read_reg(int reg);
 uint32_t read_reg(int reg){
-	uint32_t reg_val = qemu_get_register(reg);
-	return reg_val;
+	if (reg == 15){
+		return curr_bkpt_addr;
+	} else {
+		uint32_t reg_val = qemu_get_register(reg);
+		return reg_val;
+	}
 }
 static PyObject *read_reg_callback(PyObject *self, PyObject *args) {
 	return PyCapsule_New((void *)read_reg, "read_reg_func", NULL);
@@ -248,6 +259,9 @@ static PyObject *read_floating_reg_callback(PyObject *self, PyObject *args) {
 void write_reg(int reg, uint32_t val);
 void write_reg(int reg, uint32_t val){
 	qemu_set_register(val, reg);
+	if (reg == 15) {
+		curr_bkpt_addr = val; //update the current value of PC
+	}
 }
 static PyObject *write_reg_callback(PyObject *self, PyObject *args) {
 	return PyCapsule_New((void *)write_reg, "write_reg_func", NULL);
