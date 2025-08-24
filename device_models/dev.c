@@ -2,11 +2,10 @@
 #include <time.h>
 #include <utils.h>
 #include <device.h>
-#include <hw.h>
 #include <core.h>
 #include "models.c"
 
-// Global current device model 
+// Global current device model
 static DeviceModel * current = NULL;
 static FILE * io_logger;
 
@@ -65,7 +64,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 	utils_log_to_file(io_logger, "[%5ld.%06ld] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
               sec, usec, address, size, size * 2, value, pc);
 
-	
+
 	*buf = value;
 
 	if (handler && (strcmp(handler, "generic_io") == 0)) {
@@ -73,7 +72,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 	}
 	// Continue internal operation
 	return 1;
-	
+
 }
 
 // Base hardware reader and writer
@@ -125,13 +124,13 @@ int dev_init(int argc, char ** argv) {
 			char *name = dev_model_info;
 	        char *arg = sep + 1;
 
-			current = find_device_model(name); 
+			current = find_device_model(name);
 
 			if (!current) {
 					utils_die("Device Model not found.");
 			}
 
-			// Generic Things 
+			// Generic Things
 			qemu_plugin_unimp_export_device((void *)&importer);
 			io_logger = fopen("io.log", "w");
 			if (start_ts.tv_sec == 0 && start_ts.tv_nsec == 0) {

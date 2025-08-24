@@ -50,6 +50,7 @@ libhw_dep = declare_dependency(
 endif
 
 #Based on the configurations, generate config.h
+ENABLE_LIBDEV = get_option('device_models')
 configure_file(
   input : 'config.h.in',
   output : 'config.h',
@@ -58,6 +59,7 @@ configure_file(
     'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0,
     'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0,
     'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0,
+    'ENABLE_LIBDEV' : ENABLE_LIBDEV ? 1:0,
   }
 )
 #config_inc = include_directories(meson.current_build_dir())
@@ -81,17 +83,23 @@ srcs = files(
   'virtuals/virtuals.c',
 )
 
-if get_option('device_models')
+if ENABLE_LIBDEV
   libdl_dep = cc.find_library('dl', required: true)
   deps += libdl_dep
   srcs += files(
   'device_models/dev.c',
-  'device_models/passthrough/passthrough.c',
   'device_models/classic/classic.c',
+  'device_models/halucinator/halucinator.c',
+  )
+
+if ENABLE_LIBHW
+  srcs += files(
+  'device_models/passthrough/passthrough.c',
   'device_models/elder/elder.c',
   'device_models/elder/device_config.c',
   'device_models/elder/inih/ini.c'
   )
+endif
 
   device_models_inc = include_directories('device_models/elder/inih/')
   local_include = [local_include, device_models_inc]

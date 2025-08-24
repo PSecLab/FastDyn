@@ -623,7 +623,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Core initialization failed");
 	}
 
-    #if ENABLE_LIBHW
+    #if ENABLE_LIBHW | ENABLE_LIBDEV
 	if (dev_init(argc, argv) != 0) {
 			utils_die("Device Init Failed");
 	}

@@ -3,16 +3,14 @@
 #include <python.h>
 #include <ctype.h>
 
-// Global current device model
-static struct timespec start_ts;
-
 // Global variables for Python integration
-static uint8_t py_init = false;
-static uint8_t peripheral_server_init = true;
-static PyObject *fastdyn_interceptor = NULL;
-static PyObject *halucinator_initialize = NULL;
-static PyObject *dev_notify_irq_callback = NULL;
-static PyObject *dev_irqret_hook_callback = NULL;
+uint8_t py_init = false;
+uint8_t peripheral_server_init = true;
+PyObject *fastdyn_interceptor = NULL;
+PyObject *halucinator_initialize = NULL;
+PyObject *dev_notify_irq_callback = NULL;
+PyObject *dev_irqret_hook_callback = NULL;
+PyObject *device_model_callback = NULL;
 uint32_t curr_bkpt_addr = 0;
 
 PyMODINIT_FUNC PyInit_emb(void);
@@ -62,6 +60,8 @@ void initialize_halucinator_python_vm(void) {
 		dev_notify_irq_callback = PyObject_GetAttrString(Intercepts_module, "notify_irq_callback");
 		dev_irqret_hook_callback = PyObject_GetAttrString(Intercepts_module, "irqret_hook_callback");
 
+		//Get the device model / peripheral handler callback from the intercept module.
+		device_model_callback = PyObject_GetAttrString(Intercepts_module, "periph_access_callback");
 
 		//verify the existance of the halucinator_initialize
 		if (halucinator_initialize && PyCallable_Check(halucinator_initialize)) {
@@ -150,74 +150,6 @@ void fastdyn_callback(unsigned int cpu_index, void *udata) {
     }
 }
 
-static inline void dev_get_timestamp(time_t *sec, long *usec) {
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	// Calculate offset from start
-	*sec = ts.tv_sec - start_ts.tv_sec;
-	*usec = (ts.tv_nsec - start_ts.tv_nsec) / 1000;
-	if (*usec < 0) {
-		*sec -= 1;
-		*usec += 1000000;
-	}
-}
-
-void dev_notify_irq(int number) {
-	time_t sec;
-    long usec;
-    dev_get_timestamp(&sec, &usec);
-	DEBUG_LOG("[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
-			sec, usec, number);
-
-	if (!py_init) {
-		initialize_halucinator_python_vm();
-	}
-	if (py_init) {
-        //Build the arguments. -> interrupt number passed
-        PyObject *dev_notify_irq_args = PyTuple_Pack(1, PyLong_FromLong(number));
-
-        // Call the Initialize function
-        PyObject *dev_notify_irq_return_val = PyObject_CallObject(dev_notify_irq_callback, dev_notify_irq_args);
-
-        Py_DECREF(dev_notify_irq_args);
-        //Verify the halucinator was initialized successfully!
-        if (dev_notify_irq_return_val != NULL && PyTuple_Check(dev_notify_irq_return_val)){
-            Py_DECREF(dev_notify_irq_return_val);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
-	}
-}
-
-void dev_irqret_hook(int number) {
-	time_t sec;
-    long usec;
-	dev_get_timestamp(&sec, &usec);
-	DEBUG_LOG("[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
-			sec, usec, number);
-
-	if (!py_init) {
-		initialize_halucinator_python_vm();
-	}
-	if (py_init) {
-        //Build the arguments. -> interrupt number passed
-        PyObject *dev_irqret_hook_args = PyTuple_Pack(1, PyLong_FromLong(number));
-
-        // Call the Initialize function
-        PyObject *dev_irqret_hook_return_val = PyObject_CallObject(dev_irqret_hook_callback, dev_irqret_hook_args);
-
-        Py_DECREF(dev_irqret_hook_args);
-        //Verify the halucinator was initialized successfully!
-        if (dev_irqret_hook_return_val != NULL && PyTuple_Check(dev_irqret_hook_return_val)){
-            Py_DECREF(dev_irqret_hook_return_val);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
-		}
-}
-
 int python_vm_setup(void) {
 	// Shutdown the Python Interpreter if already started.
 	Py_Finalize();
@@ -225,8 +157,6 @@ int python_vm_setup(void) {
     //Register QEMU-API Module
     PyImport_AppendInittab("qemuapi", PyInit_emb);
 
-	//Register IRQ Listener for logging interrupts.
- 	qemu_plugin_register_irq_hook(dev_notify_irq, dev_irqret_hook);
 	//Python Interpreter can be used anywhere now!
 	return 0;
 }

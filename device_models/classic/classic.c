@@ -1,5 +1,4 @@
 #include <device.h>
-#include <hw.h>
 #include <utils.h>
 #include <pthread.h>
 #include <unistd.h>

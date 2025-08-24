@@ -1,12 +1,18 @@
-extern DeviceModel passthrough_model_def;
-extern DeviceModel elder_model_def;
+#if ENABLE_LIBHW
+	extern DeviceModel passthrough_model_def;
+	extern DeviceModel elder_model_def;
+#endif
 extern DeviceModel classic_model_def;
+extern DeviceModel halucinator_model_def;
 
 // The global, statically-defined array of device models.
 static DeviceModel *all_devices[] = {
-	&passthrough_model_def,
-	&elder_model_def,
-	&classic_model_def
+	#if ENABLE_LIBHW
+		&passthrough_model_def,
+		&elder_model_def,
+	#endif
+	&classic_model_def,
+	&halucinator_model_def
 };
 
 // Calculate the number of devices at compile time.
