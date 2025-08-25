@@ -233,6 +233,24 @@ static PyObject *virtual_clock_callback(PyObject *self, PyObject *args) {
 	return PyCapsule_New((void *)virtual_clock, "virtual_clock_func", NULL);
 }
 
+void python_pulseirq(uint64_t irq_num) {
+    qemu_plugin_pulse_irq(irq_num);
+}
+
+static PyObject *pulse_irq_callback(PyObject *self, PyObject *args) {
+	return PyCapsule_New((void *)python_pulseirq, "pulse_irq_func", NULL);
+}
+
+
+void python_raiseirq(uint64_t irq_num) {
+	printf("irq num is %ld", irq_num);
+	qemu_plugin_raise_irq(irq_num);
+}
+
+static PyObject *raise_irq_callback(PyObject *self, PyObject *args) {
+	return PyCapsule_New((void *)python_raiseirq, "raise_irq_func", NULL);
+}
+
 // Python method definitions for both read and write
 static PyMethodDef EmbMethods[] = {
 	{"read_reg_callback", read_reg_callback, METH_NOARGS, "Returns a pointer to the C read_reg callback function"},
@@ -242,6 +260,8 @@ static PyMethodDef EmbMethods[] = {
 	{"virtual_clock_callback", virtual_clock_callback, METH_NOARGS, "Returns a pointer to the C write_reg callback function"},
 	{"write_floating_reg_callback", write_floating_reg_callback, METH_NOARGS, "Returns a pointer to the C write_reg callback function"},
 	{"read_floating_reg_callback", read_floating_reg_callback, METH_NOARGS, "Returns a pointer to the C write_reg callback function"},
+	{"raise_irq_callback", raise_irq_callback, METH_NOARGS, "Raises an interrupt with a given interrupt number"},
+	{"pulse_irq_callback", pulse_irq_callback, METH_NOARGS, "Pulses an interrupt with a given interrupt number"},
 	{NULL, NULL, 0, NULL}
 };
 
