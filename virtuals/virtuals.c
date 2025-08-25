@@ -90,11 +90,21 @@ static void my_timer_callback(void *opaque) {
 
 // Virtual instruction functions
 void raiseirq(unsigned int cpu_index, void *udata) {
-    qemu_plugin_raise_irq(15);
+	 // Interpret udata as a string
+    const char *str = (const char *)udata;
+
+    // Convert string to integer (auto-detect base: 0x = hex, 0 = octal, else decimal)
+    unsigned long num = strtoul(str, NULL, 0);
+    qemu_plugin_raise_irq(num);
 }
 
 void pulseirq(unsigned int cpu_index, void *udata) {
-    qemu_plugin_pulse_irq(15);
+	// Interpret udata as a string
+    const char *str = (const char *)udata;
+
+    // Convert string to integer (auto-detect base: 0x = hex, 0 = octal, else decimal)
+    unsigned long num = strtoul(str, NULL, 0);
+    qemu_plugin_pulse_irq(num);
 }
 
 void updatemem(unsigned int cpu_index, void *udata) {
