@@ -20,7 +20,9 @@
 // #include "common.h"
 #include <utils.h>
 #include <device.h>
+#if ENABLE_LIBPY
 #include <python.h>
+#endif 
 #include <virtuals.h>
 #if ENABLE_LIBGZ
     #include "gazebo_wrapper.h"

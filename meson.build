@@ -17,6 +17,8 @@ if ENABLE_LIBPY
   python_versions = ['python3.10', 'python3.11', 'python3.12', 'python3.13', 'python3.14', 'python3.15']
   libpython = dependency('', required: false)
 
+  srcs += files('device_models/halucinator/halucinator.c')
+
   foreach v : python_versions
     libpython = cc.find_library(v, required: false)
     if libpython.found()
@@ -89,7 +91,6 @@ if ENABLE_LIBDEV
   srcs += files(
   'device_models/dev.c',
   'device_models/classic/classic.c',
-  'device_models/halucinator/halucinator.c',
   )
 
 if ENABLE_LIBHW
