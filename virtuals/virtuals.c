@@ -226,7 +226,7 @@ void timer_start(unsigned int cpu_index, void *udata) {
     const char *msg = "Hello from QEMU timer!";
 #if 01
     //One shot
-    int timer = qemu_plugin_timer_new_ns(my_timer_callback, (void *)msg);
+    uint64_t timer = qemu_plugin_timer_new_ns(my_timer_callback, (void *)msg);
     qemu_plugin_timer_alarm(timer, 1e6);
 #else
     //Periodic
