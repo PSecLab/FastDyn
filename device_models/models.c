@@ -1,3 +1,4 @@
+#include <config.h>
 #if ENABLE_LIBHW
 	extern DeviceModel passthrough_model_def;
 	extern DeviceModel elder_model_def;

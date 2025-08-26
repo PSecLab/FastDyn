@@ -47,12 +47,13 @@ static void passthrough_write(void *opaque, hwaddr address, uint64_t value, unsi
 }
 static pthread_cond_t irq_cv = PTHREAD_COND_INITIALIZER;
 static int irq_pending;
+#define TEST_INTERRUPT_THREAD
 static void* dev_thread_fn(void* arg) {
     (void)arg;
 
     while (1) {
 #ifdef TEST_INTERRUPT_THREAD
-        sleep(10);
+        sleep(5);
         qemu_plugin_raise_irq(15);
 #endif
 		pthread_mutex_lock(&hw_mutex);
