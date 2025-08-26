@@ -17,6 +17,8 @@ if ENABLE_LIBPY
   python_versions = ['python3.10', 'python3.11', 'python3.12', 'python3.13', 'python3.14', 'python3.15']
   libpython = dependency('', required: false)
 
+  srcs += files('device_models/halucinator/halucinator.c')
+
   foreach v : python_versions
     libpython = cc.find_library(v, required: false)
     if libpython.found()
@@ -50,14 +52,16 @@ libhw_dep = declare_dependency(
 endif
 
 #Based on the configurations, generate config.h
+ENABLE_LIBDEV = get_option('device_models')
 configure_file(
   input : 'config.h.in',
   output : 'config.h',
   configuration : {
     'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
-    'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0, 
-    'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0, 
-    'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0, 
+    'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0,
+    'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0,
+    'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0,
+    'ENABLE_LIBDEV' : ENABLE_LIBDEV ? 1:0,
   }
 )
 #config_inc = include_directories(meson.current_build_dir())
@@ -66,8 +70,8 @@ configure_file(
 QEMU_DIR = get_option('qemu_path')
 qemu_include = include_directories(
   join_paths(QEMU_DIR, 'include', 'qemu'),
-  join_paths(QEMU_DIR, '..', 'qemu', 'include')
-  
+  join_paths(QEMU_DIR, 'include')
+
 )
 
 # --- Project include dir
@@ -81,16 +85,22 @@ srcs = files(
   'virtuals/virtuals.c',
 )
 
-if get_option('device_models')
+if ENABLE_LIBDEV
   libdl_dep = cc.find_library('dl', required: true)
   deps += libdl_dep
   srcs += files(
   'device_models/dev.c',
+  'device_models/classic/classic.c',
+  )
+
+if ENABLE_LIBHW
+  srcs += files(
   'device_models/passthrough/passthrough.c',
   'device_models/elder/elder.c',
   'device_models/elder/device_config.c',
   'device_models/elder/inih/ini.c'
   )
+endif
 
   device_models_inc = include_directories('device_models/elder/inih/')
   local_include = [local_include, device_models_inc]

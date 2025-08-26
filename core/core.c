@@ -26,7 +26,9 @@ int isdigit(int c);
 #include "common.h"
 #include <utils.h>
 #include <device.h>
+#if ENABLE_LIBPY
 #include <python.h>
+#endif 
 #include <virtuals.h>  // For lookup_callback function
 
 static const char * runtime;
@@ -610,6 +612,7 @@ static int core_parse_arguments(int argc, char ** argv) {
 	return 0;
 }
 
+
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
@@ -622,9 +625,11 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Core initialization failed");
 	}
 
+    #if ENABLE_LIBHW | ENABLE_LIBDEV
 	if (dev_init(argc, argv) != 0) {
 			utils_die("Device Init Failed");
 	}
+    #endif
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);

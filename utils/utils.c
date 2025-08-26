@@ -27,6 +27,8 @@ void utils_log_to_file(FILE *fp, const char *fmt, ...) {
     va_start(args, fmt);
     vfprintf(fp, fmt, args);
     va_end(args);
+
+	fflush(fp);  // ensure log is flushed to disk
 }
 
 FILE *utils_log_fp(void) {
