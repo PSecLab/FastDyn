@@ -16,8 +16,6 @@
 #include <string.h>
 #include <ctype.h>
 
-// #include "config.h"
-// #include "common.h"
 #include <utils.h>
 #include <device.h>
 #include <python.h>
