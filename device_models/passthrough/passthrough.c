@@ -98,29 +98,38 @@ static int passthrough_interrupt(int line) {
 		return 0;
 }
 
+static int passthrough_init(char *argument);
+// The public definition of the passthrough device model
+DeviceModel passthrough_model_def = {
+    .name = "passthrough",
+    .read = passthrough_read,
+    .write = passthrough_write,
+    .init = passthrough_init,
+    .serve = passthrough_serve,
+    .interrupt = passthrough_interrupt,
+};
 static int passthrough_init(char *argument) {
-    hw = hw_connect(argument, NULL, 0);
-    if (!hw) {
+	char * tok = strtok(argument, "*");
+	hw = hw_connect(tok, NULL, 0);
+	if (!hw) {
         utils_die("HW connection failed.");
         return 1;
     }
+	tok = strtok(NULL, "*");
+	Range ranges[10];
+    int n = utils_parse_ranges(tok, ranges, 10);
 
     if (pthread_create(&dev_thread, NULL, dev_thread_fn, NULL) != 0) {
         perror("Failed to create thread");
         return 1;
     }
 
+	for (int i = 0; i < n; i++) {
+        dev_register_device_model(ranges[i].start, ranges[i].end, &passthrough_model_def);
+    }
+
     return 0;
 }
 
 
-// The public definition of the passthrough device model
-DeviceModel passthrough_model_def = {
-    .name = "passthrough",
-    .read = passthrough_read,
-    .write = passthrough_write,
-	.init = passthrough_init,
-	.serve = passthrough_serve,
-	.interrupt = passthrough_interrupt,
-};
 

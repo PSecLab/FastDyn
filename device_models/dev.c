@@ -168,7 +168,7 @@ static inline int parse_models(const char *s, ModelEntry *entries, int max_entri
     strncpy(buffer, s, sizeof(buffer));
     buffer[sizeof(buffer)-1] = '\0';
 
-    char *token = strtok(buffer, ",");
+    char *token = strtok(buffer, "%");
     while (token && count < max_entries) {
         char *colon = strchr(token, ':');
         if (colon) {
@@ -185,7 +185,7 @@ static inline int parse_models(const char *s, ModelEntry *entries, int max_entri
             entries[count].args[0] = '\0';
         }
         count++;
-        token = strtok(NULL, ",");
+        token = strtok(NULL, "%");
     }
 
     return count;

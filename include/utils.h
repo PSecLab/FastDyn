@@ -19,6 +19,11 @@
   #define DEBUG_LOG(fmt, ...) ((void)0)
 #endif
 
+typedef struct {
+    unsigned long start;
+    unsigned long end;
+} Range;
+
 // Print error message and exit
 void utils_die(const char *msg);
 
@@ -27,4 +32,6 @@ void utils_die(const char *msg);
 char *utils_get_arg(const char *key, int argc, char **argv);
 
 int utils_init(int argc, char ** argv);
+
+int utils_parse_ranges(const char *s, Range *ranges, int max_ranges);
 #endif // UTILS_H

@@ -3,11 +3,6 @@
 #include <pthread.h>
 #include <unistd.h>
 
-typedef struct {
-    unsigned long start;
-    unsigned long end;
-} Range;
-
 static uint64_t classic_read(void *opaque, hwaddr address, unsigned size) {
     (void)opaque;
     return 0;
@@ -33,7 +28,7 @@ int classic_parse_ranges(const char *s, Range *ranges, int max_ranges) {
     strncpy(buffer, s, sizeof(buffer));
     buffer[sizeof(buffer)-1] = '\0';
 
-    char *token = strtok(buffer, ",");
+    char *token = strtok(buffer, "~");
     while (token && count < max_ranges) {
         // Remove leading spaces
         while (*token == ' ') token++;
@@ -64,7 +59,7 @@ DeviceModel classic_model_def = {
 
 static int classic_init(char *argument) {
 	Range ranges[10];
-	int n = classic_parse_ranges(argument, ranges, 10);
+	int n = utils_parse_ranges(argument, ranges, 10);
 	for (int i = 0; i < n; i++) {
         dev_register_device_model(ranges[i].start, ranges[i].end, &classic_model_def);
     }

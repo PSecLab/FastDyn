@@ -40,3 +40,28 @@ int utils_init(int argc, char** argv) {
 	if (!fp) return -1;
 	return 0;
 }
+
+int utils_parse_ranges(const char *s, Range *ranges, int max_ranges) {
+    int count = 0;
+    char buffer[256];
+    strncpy(buffer, s, sizeof(buffer));
+    buffer[sizeof(buffer)-1] = '\0';
+
+    char *token = strtok(buffer, "~");
+    while (token && count < max_ranges) {
+        // Remove leading spaces
+        while (*token == ' ') token++;
+
+        char *dash = strchr(token, '-');
+        if (dash) {
+            *dash = '\0';
+            ranges[count].start = strtoul(token, NULL, 0); // auto-detect hex with 0x
+            ranges[count].end   = strtoul(dash + 1, NULL, 0);
+            count++;
+        }
+
+        token = strtok(NULL, ",");
+    }
+
+    return count;
+}
