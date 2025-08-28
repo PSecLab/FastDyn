@@ -4,6 +4,7 @@ cc = meson.get_compiler('c')
 #glib support
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
 deps = [glib]
+srcs = []
 
 #debugging FLAGS
 DEBUG_PRINT = get_option('DEBUG_PRINT')
@@ -78,7 +79,7 @@ qemu_include = include_directories(
 local_include = include_directories('include')
 
 # --- Collect all source files
-srcs = files(
+srcs += files(
   'core/core.c',
   'python/python.c',
   'utils/utils.c',
