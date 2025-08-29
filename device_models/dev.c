@@ -14,9 +14,13 @@ static DeviceModel *system_lut[SYSTEM_NUM_SLOTS];
 
 static inline DeviceModel **dev_select_lut(hwaddr addr) {
     switch (addr >> 28) { // top 4 bits
-        case 0x4: return device_lut;  // Peripheral MMIO
-        case 0xE: return system_lut;  // System Control Block
-        default: return NULL;         // unknown region
+        case 0x4:
+		case 0x5:
+			return device_lut;  // Peripheral MMIO
+        case 0xE:
+			return system_lut;  // System Control Block
+        default:
+			return NULL;        // unknown region
     }
 }
 
@@ -140,7 +144,7 @@ void dev_irqret_hook(int number) {
 	if (dev) {
 		dev->serve(number);
 	}
-#endif 
+#endif
 
 }
 
@@ -200,7 +204,7 @@ int dev_init(int argc, char ** argv) {
 	    qemu_plugin_register_irq_hook(dev_notify_irq, dev_irqret_hook);
 		qemu_plugin_unimp_export_device((void *)&importer);
 		io_logger = fopen("io.log", "w");
-			
+
 		if (start_ts.tv_sec == 0 && start_ts.tv_nsec == 0) {
 			    clock_gettime(CLOCK_MONOTONIC, &start_ts);
 		}
