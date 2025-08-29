@@ -19,11 +19,10 @@ void initialize_halucinator_python_vm(void) {
 	//Initialize the Python Interpreter
 	Py_Initialize();
 
-	PyRun_SimpleString("import sys");
-	PyRun_SimpleString("import os");
-	PyRun_SimpleString("sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)");
-	PyRun_SimpleString("sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', buffering=1)");
-	PyRun_SimpleString("sys.path.append('.')");
+    PyRun_SimpleString("import sys, os\n"
+                       "sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)\n"
+                       "sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', buffering=1)\n"
+                       "sys.path.append('.')\n");
 
 	//Load the module for the C APIs <-> Python Interaction.
 	PyObject *hal_reg_mem = PyUnicode_FromString("src.halucinator.hal_reg_mem");
@@ -105,6 +104,8 @@ void initialize_halucinator_python_vm(void) {
 		int arg1 = PyObject_IsTrue(hal_return_val);    // Converts True/False to 1/0
 		if (arg1){
 			printf("Successfuly initialized Halucinator...\n");
+			// 7. Release the GIL so Python threads can run later
+		    PyEval_SaveThread();
 		} else {
 			Py_DECREF(Halucinator_return_val);
 			printf("Error Initializing the Halucinator! Exiting...");
@@ -128,26 +129,29 @@ void fastdyn_callback(unsigned int cpu_index, void *udata) {
 	if (!py_init) {
 		initialize_halucinator_python_vm();
     }
-    if (py_init) {
-        DEBUG_LOG("fastdyn api called!\n");
-        DEBUG_LOG("input pc: %s\n",input);
 
-        //Build the arguments. -> PC Value passed by the user when registering the callback!
-        PyObject *fastdyn_callback_args = PyTuple_Pack(2, PyUnicode_FromString(input), PyLong_FromLong(peripheral_server_init));
-        peripheral_server_init = false;
+	PyGILState_STATE gstate = PyGILState_Ensure();
 
-        // Call the Initialize function
-        PyObject *fastdyn_callback_return_val = PyObject_CallObject(fastdyn_interceptor, fastdyn_callback_args);
+	DEBUG_LOG("fastdyn api called!\n");
+	DEBUG_LOG("input pc: %s\n",input);
 
-        Py_DECREF(fastdyn_callback_args);
-        //Verify the halucinator was initialized successfully!
-        if (fastdyn_callback_return_val != NULL && PyTuple_Check(fastdyn_callback_return_val)){
-            Py_DECREF(fastdyn_callback_return_val);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
-    }
+	//Build the arguments. -> PC Value passed by the user when registering the callback!
+	PyObject *fastdyn_callback_args = PyTuple_Pack(2, PyUnicode_FromString(input), PyLong_FromLong(peripheral_server_init));
+	peripheral_server_init = false;
+
+	// Call the Initialize function
+	PyObject *fastdyn_callback_return_val = PyObject_CallObject(fastdyn_interceptor, fastdyn_callback_args);
+
+	Py_DECREF(fastdyn_callback_args);
+	//Verify the halucinator was initialized successfully!
+	if (fastdyn_callback_return_val != NULL && PyTuple_Check(fastdyn_callback_return_val)){
+		Py_DECREF(fastdyn_callback_return_val);
+	} else {
+		PyErr_Print();
+		exit(1);
+	}
+	PyGILState_Release(gstate);
+
 }
 
 int python_vm_setup(void) {
@@ -243,7 +247,6 @@ static PyObject *pulse_irq_callback(PyObject *self, PyObject *args) {
 
 
 void python_raiseirq(uint64_t irq_num) {
-	printf("irq num is %ld", irq_num);
 	qemu_plugin_raise_irq(irq_num);
 }
 

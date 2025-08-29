@@ -26,9 +26,11 @@ int isdigit(int c);
 #include "common.h"
 #include <utils.h>
 #include <device.h>
+#include <config.h>
 #if ENABLE_LIBPY
 #include <python.h>
-#endif 
+#endif
+
 #include <virtuals.h>  // For lookup_callback function
 
 static const char * runtime;

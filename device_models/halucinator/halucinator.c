@@ -27,35 +27,35 @@ static uint64_t halucinator_read(void *opaque, hwaddr req_address, unsigned req_
 			if (!py_init) {
 				initialize_halucinator_python_vm();
 			}
-			if (py_init) {
-				//Build the arguments. -> access_req, req_address, req_size, req_write_val, actual_region_base_addr, actual_region_size
+			PyGILState_STATE gstate = PyGILState_Ensure();
 
-				PyObject *device_model_args = PyTuple_Pack(7, PyLong_FromLong(curr_pc), PyLong_FromLong(access_req), PyLong_FromLong(req_address),
-				PyLong_FromLong(req_write_val), PyLong_FromLong(req_size), PyLong_FromLong(regions[i].base_addr), PyLong_FromLong(regions[i].size));
+			//Build the arguments. -> access_req, req_address, req_size, req_write_val, actual_region_base_addr, actual_region_size
+			PyObject *device_model_args = PyTuple_Pack(7, PyLong_FromLong(curr_pc), PyLong_FromLong(access_req), PyLong_FromLong(req_address),
+			PyLong_FromLong(req_write_val), PyLong_FromLong(req_size), PyLong_FromLong(regions[i].base_addr), PyLong_FromLong(regions[i].size));
 
-				// Call the Initialize function
-				PyObject *device_model_return_val = PyObject_CallObject(device_model_callback, device_model_args);
+			// Call the Initialize function
+			PyObject *device_model_return_val = PyObject_CallObject(device_model_callback, device_model_args);
 
-				if (device_model_return_val != NULL) {
-					// Check if it is an integer
-					if (PyLong_Check(device_model_return_val)) {
-						ret_val = PyLong_AsUnsignedLongLong(device_model_return_val);
-					} else {
-						// Unexpected type
-						printf("Error:: Expected uint64_t return type!!");
-						PyErr_Print();
-						Py_DECREF(device_model_return_val);
-						exit(1);
-					}
-
-					Py_DECREF(device_model_return_val);  // safe to DECREF after extracting value
+			if (device_model_return_val != NULL) {
+				// Check if it is an integer
+				if (PyLong_Check(device_model_return_val)) {
+					ret_val = PyLong_AsUnsignedLongLong(device_model_return_val);
 				} else {
-					// NULL return value (Python error)
+					// Unexpected type
 					printf("Error:: Expected uint64_t return type!!");
 					PyErr_Print();
+					Py_DECREF(device_model_return_val);
 					exit(1);
 				}
+
+				Py_DECREF(device_model_return_val);  // safe to DECREF after extracting value
+			} else {
+				// NULL return value (Python error)
+				printf("Error:: Expected uint64_t return type!!");
+				PyErr_Print();
+				exit(1);
 			}
+			PyGILState_Release(gstate);
 		}
     }
 
@@ -73,35 +73,36 @@ static void halucinator_write(void *opaque, hwaddr req_address, uint64_t req_wri
 			if (!py_init) {
 				initialize_halucinator_python_vm();
 			}
-			if (py_init) {
-				//Build the arguments. -> access_req, req_address, req_size, req_write_val, actual_region_base_addr, actual_region_size
+			PyGILState_STATE gstate = PyGILState_Ensure();
 
-				PyObject *device_model_args = PyTuple_Pack(7, PyLong_FromLong(curr_pc), PyLong_FromLong(access_req), PyLong_FromLong(req_address),
-				PyLong_FromLong(req_write_val), PyLong_FromLong(req_size), PyLong_FromLong(regions[i].base_addr), PyLong_FromLong(regions[i].size));
+			//Build the arguments. -> access_req, req_address, req_size, req_write_val, actual_region_base_addr, actual_region_size
+			PyObject *device_model_args = PyTuple_Pack(7, PyLong_FromLong(curr_pc), PyLong_FromLong(access_req), PyLong_FromLong(req_address),
+			PyLong_FromLong(req_write_val), PyLong_FromLong(req_size), PyLong_FromLong(regions[i].base_addr), PyLong_FromLong(regions[i].size));
 
-				// Call the Initialize function
-				PyObject *device_model_return_val = PyObject_CallObject(device_model_callback, device_model_args);
+			// Call the Initialize function
+			PyObject *device_model_return_val = PyObject_CallObject(device_model_callback, device_model_args);
 
-				if (device_model_return_val != NULL) {
-					// Check if it is an integer
-					if (PyBool_Check(device_model_return_val)) {
-						//no need to do anything just silent skip.
-					} else {
-						// Unexpected type
-						printf("Error:: Expected bool return type!!");
-						PyErr_Print();
-						Py_DECREF(device_model_return_val);
-						exit(1);
-					}
-
-					Py_DECREF(device_model_return_val);  // safe to DECREF after extracting value
+			if (device_model_return_val != NULL) {
+				// Check if it is an integer
+				if (PyBool_Check(device_model_return_val)) {
+					//no need to do anything just silent skip.
 				} else {
-					// NULL return value (Python error)
-					printf("Error:: Received NULL but Expected bool return type!!");
+					// Unexpected type
+					printf("Error:: Expected bool return type!!");
 					PyErr_Print();
+					Py_DECREF(device_model_return_val);
 					exit(1);
 				}
+
+				Py_DECREF(device_model_return_val);  // safe to DECREF after extracting value
+			} else {
+				// NULL return value (Python error)
+				printf("Error:: Received NULL but Expected bool return type!!");
+				PyErr_Print();
+				exit(1);
 			}
+			PyGILState_Release(gstate);
+
 		}
     }
 }
@@ -128,22 +129,27 @@ static int halucinator_interrupt(int number) {
 	if (!py_init) {
 		initialize_halucinator_python_vm();
 	}
-	if (py_init) {
-        //Build the arguments. -> interrupt number passed
-        PyObject *dev_notify_irq_args = PyTuple_Pack(1, PyLong_FromLong(number));
+	// Always acquire GIL before calling Python APIs
+	PyGILState_STATE gstate = PyGILState_Ensure();
 
-        // Call the Initialize function
-        PyObject *dev_notify_irq_return_val = PyObject_CallObject(dev_notify_irq_callback, dev_notify_irq_args);
+	//Build the arguments. -> interrupt number passed
+	PyObject *dev_notify_irq_args = PyTuple_Pack(1, PyLong_FromLong(number));
 
-        Py_DECREF(dev_notify_irq_args);
-        //Verify the halucinator was initialized successfully!
-        if (dev_notify_irq_return_val != NULL && PyTuple_Check(dev_notify_irq_return_val)){
-            Py_DECREF(dev_notify_irq_return_val);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
+	// Call the Initialize function
+	PyObject *dev_notify_irq_return_val = PyObject_CallObject(dev_notify_irq_callback, dev_notify_irq_args);
+
+	Py_DECREF(dev_notify_irq_args);
+	//Verify the halucinator was initialized successfully!
+	if (dev_notify_irq_return_val != NULL && PyTuple_Check(dev_notify_irq_return_val)){
+		Py_DECREF(dev_notify_irq_return_val);
+	} else {
+		PyErr_Print();
+		exit(1);
 	}
+
+
+	// Release GIL
+	PyGILState_Release(gstate);
 	return 0;
 }
 
@@ -157,23 +163,23 @@ static int halucinator_serve(int number) {
 	if (!py_init) {
 		initialize_halucinator_python_vm();
 	}
-	if (py_init) {
-        //Build the arguments. -> interrupt number passed
-        PyObject *dev_irqret_hook_args = PyTuple_Pack(1, PyLong_FromLong(number));
+	PyGILState_STATE gstate = PyGILState_Ensure();
+	//Build the arguments. -> interrupt number passed
+	PyObject *dev_irqret_hook_args = PyTuple_Pack(1, PyLong_FromLong(number));
 
-        // Call the Initialize function
-        PyObject *dev_irqret_hook_return_val = PyObject_CallObject(dev_irqret_hook_callback, dev_irqret_hook_args);
+	// Call the Initialize function
+	PyObject *dev_irqret_hook_return_val = PyObject_CallObject(dev_irqret_hook_callback, dev_irqret_hook_args);
 
-        Py_DECREF(dev_irqret_hook_args);
-        //Verify the halucinator was initialized successfully!
-        if (dev_irqret_hook_return_val != NULL && PyTuple_Check(dev_irqret_hook_return_val)){
-            Py_DECREF(dev_irqret_hook_return_val);
-        } else {
-            PyErr_Print();
-            exit(1);
-        }
-		}
-		return 0;
+	Py_DECREF(dev_irqret_hook_args);
+	//Verify the halucinator was initialized successfully!
+	if (dev_irqret_hook_return_val != NULL && PyTuple_Check(dev_irqret_hook_return_val)){
+		Py_DECREF(dev_irqret_hook_return_val);
+	} else {
+		PyErr_Print();
+		exit(1);
+	}
+    PyGILState_Release(gstate);
+	return 0;
 }
 
 static int halucinator_init(char *input) {
