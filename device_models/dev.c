@@ -63,7 +63,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 			dev->write(dev->opaque, address, value, size);
 	}
 
-	if (handler && (strcmp(handler, "generic_io") == 0)) {
+	if (handler && (handler[0] == 'g')) {
            return 0;
     }
 
@@ -94,7 +94,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 		dev_debug("IO Access not handled");
 	}
 
-	if (handler && (strcmp(handler, "generic_io") == 0)) {
+	if (handler && (handler[0] == 'g')) {
 		return 0;
 	}
 
