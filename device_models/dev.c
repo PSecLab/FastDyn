@@ -60,7 +60,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 
 	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
 	if (dev) {
-			dev->write(handler, address, value, size);
+			dev->write(dev->opaque, address, value, size);
 	}
 
 	if (handler && (strcmp(handler, "generic_io") == 0)) {
@@ -84,7 +84,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 
 	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
     if (dev) {
-        value = dev->read(handler, address, size);
+        value = dev->read(dev->opaque, address, size);
 		utils_log_to_file(io_logger, "[%5ld.%06ld] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
               sec, usec, address, size, size * 2, value, pc);
 

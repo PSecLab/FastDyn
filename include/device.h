@@ -31,6 +31,7 @@ typedef int (*DeviceIRQFunc)(int);
  */
 typedef struct DeviceModel {
     const char *name;
+    void *opaque;
     DeviceReadFunc read;
     DeviceWriteFunc write;
 	DeviceInit init;
