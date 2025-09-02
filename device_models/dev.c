@@ -47,18 +47,22 @@ static inline void dev_get_timestamp(time_t *sec, long *usec) {
 }
 
 static int dev_write(char * handler, long unsigned int address, uint64_t value, long unsigned int size) {
+#ifdef DEV_LOGGER
 	uint64_t pc = core_get_pc();
 	time_t sec;
 	long usec;
 	dev_get_timestamp(&sec, &usec);
+#endif 
 	DeviceModel **lut = dev_select_lut(address);
     hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
 	unsigned idx = dev_addr_to_slot(address, region_base);
 
+#ifdef DEV_LOGGER
 	utils_log_to_file(io_logger,"[%5ld.%06ld] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
               sec, usec, address, size, size * 2, value, pc);
+#endif 
 
-	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
+	DeviceModel *dev = lut[idx];
 	if (dev) {
 			dev->write(dev->opaque, address, value, size);
 	}
@@ -72,21 +76,25 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 }
 
 static int dev_read(char * handler, long unsigned int address, uint64_t *buf, long unsigned int size) {
+#ifdef DEV_LOGGER
 	uint64_t pc = core_get_pc();
-	uint64_t value;
 	time_t sec;
     long usec;
+	dev_get_timestamp(&sec, &usec);
+#endif
+	uint64_t value;
 	DeviceModel **lut = dev_select_lut(address);
 	hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
 	unsigned idx = dev_addr_to_slot(address, region_base);
-    dev_get_timestamp(&sec, &usec);
 
 
-	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
+	DeviceModel *dev = lut[idx];
     if (dev) {
         value = dev->read(dev->opaque, address, size);
+#ifdef DEV_LOGGER
 		utils_log_to_file(io_logger, "[%5ld.%06ld] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
               sec, usec, address, size, size * 2, value, pc);
+#endif 
 
 		*buf = value;
 	}

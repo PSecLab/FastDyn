@@ -25,9 +25,6 @@ static uint64_t halucinator_read(void *opaque, hwaddr req_address, unsigned req_
     HalucinatorState *state = (HalucinatorState *)opaque;
     hwaddr base_addr = state->start;
 
-	if (!py_init) {
-		initialize_halucinator_python_vm();
-	}
 	PyGILState_STATE gstate = PyGILState_Ensure();
 
 	//Build the arguments. -> access_req, req_address, req_size, req_write_val, actual_region_base_addr, actual_region_size
@@ -70,9 +67,6 @@ static void halucinator_write(void *opaque, hwaddr req_address, uint64_t req_wri
     HalucinatorState *state = (HalucinatorState *)opaque;
     hwaddr base_addr = state->start;
 
-	if (!py_init) {
-		initialize_halucinator_python_vm();
-	}
 	PyGILState_STATE gstate = PyGILState_Ensure();
 
 	//Build the arguments. -> access_req, req_address, req_size, req_write_val, actual_region_base_addr
@@ -80,27 +74,8 @@ static void halucinator_write(void *opaque, hwaddr req_address, uint64_t req_wri
 	PyLong_FromLong(req_write_val), PyLong_FromLong(req_size), PyLong_FromLong(base_addr));
 
 	// Call the Initialize function
-	PyObject *device_model_return_val = PyObject_CallObject(device_model_callback, device_model_args);
+	PyObject_CallObject(device_model_callback, device_model_args);
 
-	if (device_model_return_val != NULL) {
-		// Check if it is an integer
-		if (PyBool_Check(device_model_return_val)) {
-			//no need to do anything just silent skip.
-		} else {
-			// Unexpected type
-			printf("Error:: Expected bool return type!!");
-			PyErr_Print();
-			Py_DECREF(device_model_return_val);
-			exit(1);
-		}
-
-		Py_DECREF(device_model_return_val);  // safe to DECREF after extracting value
-	} else {
-		// NULL return value (Python error)
-		printf("Error:: Received NULL but Expected bool return type!!");
-		PyErr_Print();
-		exit(1);
-	}
 	PyGILState_Release(gstate);
 }
 
@@ -203,6 +178,7 @@ DeviceModel halucinator_model_def = {
 int halucinator_init(char *argument) {
     Range ranges[10];
     int n = utils_parse_ranges(argument, ranges, 10);
+	initialize_halucinator_python_vm();
     for (int i = 0; i < n; i++) {
         HalucinatorState *state = malloc(sizeof(HalucinatorState));
 
