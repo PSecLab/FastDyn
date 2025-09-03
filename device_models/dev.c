@@ -62,7 +62,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
               sec, usec, address, size, size * 2, value, pc);
 #endif 
 
-	DeviceModel *dev = lut[idx];
+	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
 	if (dev) {
 			dev->write(dev->opaque, address, value, size);
 	}
@@ -88,7 +88,8 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 	unsigned idx = dev_addr_to_slot(address, region_base);
 
 
-	DeviceModel *dev = lut[idx];
+
+	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
     if (dev) {
         value = dev->read(dev->opaque, address, size);
 #ifdef DEV_LOGGER
