@@ -60,8 +60,8 @@ typedef struct unimp_exporter {
 #define NUM_SLOTS   (DEVICE_SIZE / SLOT_SIZE)
 
 // System Control Block → system_lut
-#define SYSTEM_BASE 0xE000E000ULL
-#define SYSTEM_SIZE 0x1000
+#define SYSTEM_BASE 0xE0000000ULL
+#define SYSTEM_SIZE 0x10000000ULL
 #define SYSTEM_NUM_SLOTS (SYSTEM_SIZE / SLOT_SIZE)
 
 
