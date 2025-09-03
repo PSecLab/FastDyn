@@ -10,7 +10,7 @@
 #include "virtuals.h"
 
 static volatile char * storage_memory = NULL;
-static const size_t storage_size = 16 * 1024; // 16KB of simulated storage
+static const size_t storage_size = 32 * 1024; // 32KB of simulated storage
 
 void storage_read_block(unsigned int cpu_index, void *udata) {
     uint8_t * temp_buffer = NULL;
@@ -30,6 +30,7 @@ void storage_read_block(unsigned int cpu_index, void *udata) {
 
     if (offset + size > storage_size) {
         fprintf(stderr, "Storage read out of bounds\n");
+        fprintf(stderr, "Offset: %u, Size: %u, Storage Size: %zu\n", offset, size, storage_size);
         goto end;
     }
 
@@ -109,5 +110,26 @@ void hrt_micros64(unsigned int cpu_index, void *udata) {
     qemu_set_register(micros_upper_32, ARM_V7M_R0);
     qemu_set_register(micros_lower_32, ARM_V7M_R1);
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+void ap_hal_micros32(unsigned int cpu_index, void *udata) {
+    int64_t nanos = qemu_plugin_get_virtual_timer();
+
+    printf("ap_hal_micros32 called, nanos: %ld\n", nanos);
+    printf("PC before: 0x%08x\n", qemu_get_register(ARM_V7M_PC));
+    printf("LR before: 0x%08x\n", qemu_get_register(ARM_V7M_LR));
+
+    if (nanos < 0) {
+        fprintf(stderr, "Error getting virtual timer\n");
+        return;
+    }
+
+    uint32_t micros = (uint32_t)(nanos / 1000);
+
+    qemu_set_register(micros, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    printf("PC after: 0x%08x\n", qemu_get_register(ARM_V7M_PC));
+    printf("LR after: 0x%08x\n", lr);
     qemu_set_register(lr, ARM_V7M_PC);
 }

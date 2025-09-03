@@ -72,6 +72,7 @@ cb_entry_t cb_registry[] = {
     { "storage_read_block", storage_read_block},
     { "storage_write_block", storage_write_block},
     { "hrt_micros64", hrt_micros64},
+    { "ap_hal_micros32", ap_hal_micros32},
 };
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);

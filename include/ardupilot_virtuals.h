@@ -46,4 +46,16 @@ void storage_write_block(unsigned int cpu_index, void *udata);
  */
 void hrt_micros64(unsigned int cpu_index, void *udata);
 
+/**
+ * @brief ArduPilot HAL Microseconds function
+ *
+ * This function retrieves the current value of the system timer in
+ * microseconds. It is used to emulate the behavior of getting the
+ * system time in ArduPilot firmware.
+ *
+ * @param cpu_index The index of the CPU (core) executing the instruction.
+ * @param udata User-defined data passed to the function (not used here).
+ */
+void ap_hal_micros32(unsigned int cpu_index, void *udata);
+
 #endif // FASTDYN_INCLUDE_ARDUPILOT_VIRTUALS_H
