@@ -20,8 +20,9 @@
 #include <device.h>
 #if ENABLE_LIBPY
 #include <python.h>
-#endif 
+#endif
 #include <virtuals.h>
+#include "ardupilot_virtuals.c"
 #if ENABLE_LIBGZ
     #include "gazebo_wrapper.h"
     #include "gazebo.c"
@@ -68,6 +69,9 @@ cb_entry_t cb_registry[] = {
     { "compass_block_read", compass_block_read},
     { "send_mavlink_gps_data", send_mavlink_gps_data},
 #endif
+    { "storage_read_block", storage_read_block},
+    { "storage_write_block", storage_write_block},
+    { "hrt_micros64", hrt_micros64},
 };
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);

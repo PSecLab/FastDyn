@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "common.h"
 #include "config.h"
+#include "ardupilot_virtuals.h"
 
 // Virtual instruction functions
 void printreg(unsigned int cpu_index, void *udata);
@@ -66,4 +67,4 @@ extern void qemu_set_register(uint32_t value, int reg);
 // Initialization function
 int virtuals_init(int argc, char **argv);
 
-#endif // VIRTUALS_H 
+#endif // VIRTUALS_H
