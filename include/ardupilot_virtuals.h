@@ -10,6 +10,34 @@
 #ifndef FASTDYN_INCLUDE_ARDUPILOT_VIRTUALS_H
 #define FASTDYN_INCLUDE_ARDUPILOT_VIRTUALS_H
 
+typedef struct port_intctx_t {
+    uint32_t r4;
+    uint32_t r5;
+    uint32_t r6;
+    uint32_t r7;
+    uint32_t r8;
+    uint32_t r9;
+    uint32_t r10;
+    uint32_t r11;
+    uint32_t lr;
+} port_intctx_t;
+
+typedef struct port_extctx_t {
+    uint32_t r0;
+    uint32_t r1;
+    uint32_t r2;
+    uint32_t r3;
+    uint32_t r12;
+    uint32_t lr;
+    uint32_t pc;
+    uint32_t xpsr;
+} port_extctx_t;
+
+typedef struct port_context_t {
+    port_intctx_t intctx;
+    port_extctx_t extctx;
+} port_context_t;
+
 /**
  * @brief Storage Read Block function
  *

@@ -151,8 +151,28 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
 
     printf("Switching context: %s -> %s\n", thread2_name, thread1_name);
 
-    uint32_t lr = qemu_get_register(ARM_V7M_LR);
-    qemu_set_register(lr, ARM_V7M_PC);
+    printf("\nRegisters before switch:\n");
+
+    uint32_t thread1_ctx_offset = thread1 + 0xc;
+    uint32_t thread2_ctx_offset = thread2 + 0xc;
+
+    port_context_t ctx1;
+    port_context_t ctx2;
+
+    qemu_plugin_read_memory(thread1_ctx_offset, (uint8_t*)&ctx1.intctx, sizeof(port_intctx_t));
+    qemu_plugin_read_memory(thread2_ctx_offset, (uint8_t*)&ctx2.intctx, sizeof(port_intctx_t));
+
+    printf("R4: 0x%08x -> 0x%08x\n", ctx2.intctx.r4, ctx1.intctx.r4);
+    printf("R5: 0x%08x -> 0x%08x\n", ctx2.intctx.r5, ctx1.intctx.r5);
+    printf("R6: 0x%08x -> 0x%08x\n", ctx2.intctx.r6, ctx1.intctx.r6);
+    printf("R7: 0x%08x -> 0x%08x\n", ctx2.intctx.r7, ctx1.intctx.r7);
+    printf("R8: 0x%08x -> 0x%08x\n", ctx2.intctx.r8, ctx1.intctx.r8);
+    printf("R9: 0x%08x -> 0x%08x\n", ctx2.intctx.r9, ctx1.intctx.r9);
+    printf("R10: 0x%08x -> 0x%08x\n", ctx2.intctx.r10, ctx1.intctx.r10);
+    printf("R11: 0x%08x -> 0x%08x\n", ctx2.intctx.r11, ctx1.intctx.r11);
+    printf("LR: 0x%08x -> 0x%08x\n", ctx2.intctx.lr, ctx1.intctx.lr);
+
+    printf("\n");
 }
 
 // END OF FILE
