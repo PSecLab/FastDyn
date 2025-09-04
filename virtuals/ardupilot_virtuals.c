@@ -40,6 +40,8 @@ void storage_read_block(unsigned int cpu_index, void *udata) {
         goto end;
     }
 
+    printf("storage_read_block: offset=0x%08x, address=0x%08x, size=%u\n", offset, address, size);
+
     memcpy(temp_buffer, (void*)(storage_memory + offset), size);
 
     qemu_plugin_write_memory(address, temp_buffer, size);
@@ -117,8 +119,6 @@ void ap_hal_micros32(unsigned int cpu_index, void *udata) {
     int64_t nanos = qemu_plugin_get_virtual_timer();
 
     printf("ap_hal_micros32 called, nanos: %ld\n", nanos);
-    printf("PC before: 0x%08x\n", qemu_get_register(ARM_V7M_PC));
-    printf("LR before: 0x%08x\n", qemu_get_register(ARM_V7M_LR));
 
     if (nanos < 0) {
         fprintf(stderr, "Error getting virtual timer\n");
@@ -128,8 +128,31 @@ void ap_hal_micros32(unsigned int cpu_index, void *udata) {
     uint32_t micros = (uint32_t)(nanos / 1000);
 
     qemu_set_register(micros, ARM_V7M_R0);
+}
+
+void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
+    uint32_t thread1 = qemu_get_register(ARM_V7M_R0);
+    uint32_t thread2 = qemu_get_register(ARM_V7M_R1);
+
+    uint32_t thread1_name_offset = thread1 + 0x1c;
+    uint32_t thread2_name_offset = thread2 + 0x1c;
+
+    uint32_t thread1_name_ptr = 0;
+    uint32_t thread2_name_ptr = 0;
+
+    qemu_plugin_read_memory(thread1_name_offset, (uint8_t*)&thread1_name_ptr, sizeof(uint32_t));
+    qemu_plugin_read_memory(thread2_name_offset, (uint8_t*)&thread2_name_ptr, sizeof(uint32_t));
+
+    char thread1_name[17] = {0};
+    char thread2_name[17] = {0};
+
+    qemu_plugin_read_memory(thread1_name_ptr, (uint8_t*)thread1_name, sizeof(thread1_name));
+    qemu_plugin_read_memory(thread2_name_ptr, (uint8_t*)thread2_name, sizeof(thread2_name));
+
+    printf("Switching context: %s -> %s\n", thread2_name, thread1_name);
+
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
-    printf("PC after: 0x%08x\n", qemu_get_register(ARM_V7M_PC));
-    printf("LR after: 0x%08x\n", lr);
     qemu_set_register(lr, ARM_V7M_PC);
 }
+
+// END OF FILE

@@ -58,4 +58,12 @@ void hrt_micros64(unsigned int cpu_index, void *udata);
  */
 void ap_hal_micros32(unsigned int cpu_index, void *udata);
 
+/**
+ * @brief ChibiOS helper to debug context switching
+ *
+ * @param cpu_index The index of the CPU (core) executing the instruction.
+ * @param udata User-defined data passed to the function (not used here).
+ */
+void chDbgContextSwitching(unsigned int cpu_index, void *udata);
+
 #endif // FASTDYN_INCLUDE_ARDUPILOT_VIRTUALS_H
