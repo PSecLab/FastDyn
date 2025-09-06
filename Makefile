@@ -17,5 +17,9 @@ all: clean setup
 setup: clean
 	mkdir -p build
 
+docs:
+	doxygen Doxyfile
+
 clean:
-	rm -rf build
+	rm -rf build docs
+

@@ -1,8 +1,21 @@
-/*
- * Copyright (C) 2018, Emilio G. Cota <cota@braap.org>
+/**
+ * @file core.c
+ * @brief Core module for the dynamic analysis QEMU plugin.
  *
- * License: GNU GPL, version 2 or later.
- *   See the COPYING file in the top-level directory.
+ * This file implements the core functionality of a dynamic analysis
+ * plugin for QEMU. It is responsible for initializing the plugin,
+ * handling CPU and memory events, and providing hooks for analysis
+ * routines during emulation.
+ *
+ * The core module sets up the plugin environment, registers callbacks,
+ * and maintains the internal state required to track and analyze
+ * the execution of guest code.
+ *
+ * @note This module is tightly coupled with QEMU's plugin API and
+ *       should be used only within the context of QEMU dynamic analysis.
+ *
+ * @author Arslan Khan
+ * @date 2025-09-06
  */
 int isdigit(int c);
 #include <ctype.h>
@@ -38,7 +51,24 @@ static const char * runtime;
 AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
 
-// Helper: Parse "0xADDR:REGISTER" format
+/**
+ * @brief Parses a token string into a logger entry.
+ *
+ * This function takes a string of the form "address:reg" and parses
+ * it into a `LoggerEntry` structure. The address is interpreted as
+ * an unsigned integer (hex or decimal), and the register number is
+ * parsed as a simple integer.
+ *
+ * @param token The input string to parse, expected in "address:reg" format.
+ * @param entry Pointer to a `LoggerEntry` structure where the parsed
+ *              address and register will be stored.
+ *
+ * @return `true` if parsing was successful, `false` if the input
+ *         string does not contain a colon or is otherwise invalid.
+ *
+ * @note The function modifies the input string by inserting a null
+ *       terminator at the colon position.
+ */
 bool parse_entry(const char* token, LoggerEntry* entry);
 bool parse_entry(const char* token, LoggerEntry* entry) {
     char* colonPos = strchr(token, ':');
