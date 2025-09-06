@@ -1,4 +1,4 @@
-.PHONY: all clean
+.PHONY: all clean docs
 
 qemu_path ?= ../../qemu
 LIBGZ ?= false
