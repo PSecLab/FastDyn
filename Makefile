@@ -1,4 +1,4 @@
-.PHONY: all clean
+.PHONY: all clean docs
 
 qemu_path ?= ../../qemu
 LIBGZ ?= false
@@ -17,5 +17,9 @@ all: clean setup
 setup: clean
 	mkdir -p build
 
+docs:
+	doxygen Doxyfile
+
 clean:
-	rm -rf build
+	rm -rf build docs
+
