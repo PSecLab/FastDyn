@@ -943,7 +943,7 @@ WARN_LOGFILE           =
 # spaces. See also FILE_PATTERNS and EXTENSION_MAPPING
 # Note: If this tag is empty the current directory is searched.
 
-INPUT                  = ./core/ ./virtuals/ ./utils/ ./scripts/ ./ptyhon/ ./device_models/ ./README.md ./docs/*.md 
+INPUT                  = ./core/ ./virtuals/ ./utils/ ./scripts/ ./ptyhon/ ./device_models/ ./README.md ./docs/ 
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses
@@ -983,7 +983,8 @@ INPUT_FILE_ENCODING    =
 # provided as doxygen C comment), *.py, *.pyw, *.f90, *.f95, *.f03, *.f08,
 # *.f18, *.f, *.for, *.vhd, *.vhdl, *.ucf, *.qsf and *.ice.
 
-FILE_PATTERNS          = *.c \
+FILE_PATTERNS          = */docs/*.md \
+						 *.c \
                          *.cc \
                          *.cxx \
                          *.cxxm \
