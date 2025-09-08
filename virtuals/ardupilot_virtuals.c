@@ -24,13 +24,13 @@ void storage_read_block(unsigned int cpu_index, void *udata) {
         memset((void*)storage_memory, 0xFF, storage_size); // Initialize to 0xFF
     }
 
-    uint32_t offset = qemu_get_register(ARM_V7M_R1);
-    uint32_t address = qemu_get_register(ARM_V7M_R2);
-    uint32_t size = qemu_get_register(ARM_V7M_R3);
+    uint32_t dst = qemu_get_register(ARM_V7M_R1);
+    uint16_t loc = (uint16_t)qemu_get_register(ARM_V7M_R2);
+    size_t size = (size_t)qemu_get_register(ARM_V7M_R3);
 
-    if (offset + size > storage_size) {
+    if (loc + size > storage_size) {
         fprintf(stderr, "Storage read out of bounds\n");
-        fprintf(stderr, "Offset: %u, Size: %u, Storage Size: %zu\n", offset, size, storage_size);
+        fprintf(stderr, "Offset: %u, Size: %lu, Storage Size: %zu\n", loc, size, storage_size);
         goto end;
     }
 
@@ -40,17 +40,17 @@ void storage_read_block(unsigned int cpu_index, void *udata) {
         goto end;
     }
 
-    printf("storage_read_block: offset=0x%08x, address=0x%08x, size=%u\n", offset, address, size);
+    printf("storage_read_block: offset=0x%08x, address=0x%08x, size=%lu\n", loc, dst, size);
 
-    memcpy(temp_buffer, (void*)(storage_memory + offset), size);
+    memcpy(temp_buffer, (void*)(storage_memory + loc), size);
 
-    qemu_plugin_write_memory(address, temp_buffer, size);
+    qemu_plugin_write_memory(dst, temp_buffer, size);
 
     // return from function and return 0
+end:
     qemu_set_register(0, ARM_V7M_R0);
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
     qemu_set_register(lr, ARM_V7M_PC);
-end:
     if (temp_buffer) {
         free(temp_buffer);
     }
@@ -68,11 +68,11 @@ void storage_write_block(unsigned int cpu_index, void *udata) {
         memset((void*)storage_memory, 0xFF, storage_size); // Initialize to 0xFF
     }
 
-    uint32_t offset = qemu_get_register(ARM_V7M_R1);
-    uint32_t address = qemu_get_register(ARM_V7M_R2);
-    uint32_t size = qemu_get_register(ARM_V7M_R3);
+    uint16_t loc = (uint16_t)qemu_get_register(ARM_V7M_R1);
+    uint32_t src = qemu_get_register(ARM_V7M_R2);
+    size_t size = (size_t)qemu_get_register(ARM_V7M_R3);
 
-    if (address + size > storage_size) {
+    if (loc + size > storage_size) {
         fprintf(stderr, "Storage write out of bounds\n");
         goto end;
     }
@@ -83,15 +83,15 @@ void storage_write_block(unsigned int cpu_index, void *udata) {
         goto end;
     }
 
-    qemu_plugin_read_memory(address, temp_buffer, size);
+    qemu_plugin_read_memory(src, temp_buffer, size);
 
-    memcpy((void*)(storage_memory + offset), temp_buffer, size);
+    memcpy((void*)(storage_memory + loc), temp_buffer, size);
 
     // return from function and return 0
+end:
     qemu_set_register(0, ARM_V7M_R0);
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
     qemu_set_register(lr, ARM_V7M_PC);
-end:
     if (temp_buffer) {
         free(temp_buffer);
     }
@@ -153,24 +153,24 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
 
     printf("\nRegisters before switch:\n");
 
-    uint32_t thread1_ctx_offset = thread1 + 0xc;
-    uint32_t thread2_ctx_offset = thread2 + 0xc;
+    // uint32_t thread1_ctx_offset = thread1 + 0xc;
+    // uint32_t thread2_ctx_offset = thread2 + 0xc;
 
-    port_context_t ctx1;
-    port_context_t ctx2;
+    // port_context_t ctx1;
+    // port_context_t ctx2;
 
-    qemu_plugin_read_memory(thread1_ctx_offset, (uint8_t*)&ctx1.intctx, sizeof(port_intctx_t));
-    qemu_plugin_read_memory(thread2_ctx_offset, (uint8_t*)&ctx2.intctx, sizeof(port_intctx_t));
+    // qemu_plugin_read_memory(thread1_ctx_offset, (uint8_t*)&ctx1.intctx, sizeof(port_intctx_t));
+    // qemu_plugin_read_memory(thread2_ctx_offset, (uint8_t*)&ctx2.intctx, sizeof(port_intctx_t));
 
-    printf("R4: 0x%08x -> 0x%08x\n", ctx2.intctx.r4, ctx1.intctx.r4);
-    printf("R5: 0x%08x -> 0x%08x\n", ctx2.intctx.r5, ctx1.intctx.r5);
-    printf("R6: 0x%08x -> 0x%08x\n", ctx2.intctx.r6, ctx1.intctx.r6);
-    printf("R7: 0x%08x -> 0x%08x\n", ctx2.intctx.r7, ctx1.intctx.r7);
-    printf("R8: 0x%08x -> 0x%08x\n", ctx2.intctx.r8, ctx1.intctx.r8);
-    printf("R9: 0x%08x -> 0x%08x\n", ctx2.intctx.r9, ctx1.intctx.r9);
-    printf("R10: 0x%08x -> 0x%08x\n", ctx2.intctx.r10, ctx1.intctx.r10);
-    printf("R11: 0x%08x -> 0x%08x\n", ctx2.intctx.r11, ctx1.intctx.r11);
-    printf("LR: 0x%08x -> 0x%08x\n", ctx2.intctx.lr, ctx1.intctx.lr);
+    // printf("R4: 0x%08x -> 0x%08x\n", ctx2.intctx.r4, ctx1.intctx.r4);
+    // printf("R5: 0x%08x -> 0x%08x\n", ctx2.intctx.r5, ctx1.intctx.r5);
+    // printf("R6: 0x%08x -> 0x%08x\n", ctx2.intctx.r6, ctx1.intctx.r6);
+    // printf("R7: 0x%08x -> 0x%08x\n", ctx2.intctx.r7, ctx1.intctx.r7);
+    // printf("R8: 0x%08x -> 0x%08x\n", ctx2.intctx.r8, ctx1.intctx.r8);
+    // printf("R9: 0x%08x -> 0x%08x\n", ctx2.intctx.r9, ctx1.intctx.r9);
+    // printf("R10: 0x%08x -> 0x%08x\n", ctx2.intctx.r10, ctx1.intctx.r10);
+    // printf("R11: 0x%08x -> 0x%08x\n", ctx2.intctx.r11, ctx1.intctx.r11);
+    // printf("LR: 0x%08x -> 0x%08x\n", ctx2.intctx.lr, ctx1.intctx.lr);
 
     printf("\n");
 }
