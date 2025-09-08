@@ -21,5 +21,5 @@ docs:
 	doxygen Doxyfile
 
 clean:
-	rm -rf build docs
+	rm -rf build docs/html/* 
 
