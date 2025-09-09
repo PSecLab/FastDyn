@@ -9,8 +9,31 @@
 
 // Virtual instruction functions
 void printreg(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Raise IRQ function
+ *
+ * This virtual instruction raises an interrupt request (IRQ) of a specific number.
+ * The number is 0 indexed, so raising IRQ 0 will trigger the first interrupt in the vector table.
+ * For example, interrupt number 28 should be raised using the number 44 (28 + 16 for ARM Cortex-M).
+ *
+ * Example usage in virtuals.txt:
+ * 0xDEADBEEF raiseirq 44
+ */
 void raiseirq(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Pulse IRQ function
+ *
+ * This virtual instruction pulses an interrupt request (IRQ) of a specific number.
+ * The number is 0 indexed, so pulsing IRQ 0 will trigger the first interrupt in the vector table.
+ * For example, interrupt number 28 should be pulsed using the number 44 (28 + 16 for ARM Cortex-M).
+ *
+ * Example usage in virtuals.txt:
+ * 0xDEADBEEF pulseirq 44
+ */
 void pulseirq(unsigned int cpu_index, void *udata);
+
 void updatepc(unsigned int cpu_index, void *udata);
 void updatereg(unsigned int cpu_index, void *udata);
 void updatemem(unsigned int cpu_index, void *udata);
