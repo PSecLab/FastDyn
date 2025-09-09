@@ -177,7 +177,7 @@ static inline int parse_models(const char *s, ModelEntry *entries, int max_entri
     }
 
     int count = 0;
-    char buffer[256];
+    char buffer[1024];
     strncpy(buffer, s, sizeof(buffer));
     buffer[sizeof(buffer)-1] = '\0';
 

@@ -56,7 +56,14 @@ static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned s
 	}
 }
 
-
+static int elder_init(char * argument);
+// The public definition of the elder device model
+DeviceModel elder_model_def = {
+    .name = "elder",
+    .read = elder_read,
+    .write = elder_write,
+    .init = elder_init,
+};
 
 static int elder_init(char * argument) {
 	char *sep = strchr(argument, '@');
@@ -69,10 +76,19 @@ static int elder_init(char * argument) {
     *sep = '\0';
 
     char *hw_arg = argument;
-    char *scroll_arg = sep + 1;
+	char *scroll_arg = strtok(sep+1, "*");
+
+	char *tok = strtok(NULL, "*");
+	Range ranges[10];
+    int n = utils_parse_ranges(tok, ranges, 10);
+
+
 
     printf("Will use Backend: %s\n", hw_arg);
     printf("and the scroll: %s\n", scroll_arg);
+	for (int i = 0; i < n; i++) {
+        dev_register_device_model(ranges[i].start, ranges[i].end, &elder_model_def);
+    }
 
 	device_count = parse_config(scroll_arg, configs, MAX_DEVICES);
     if (device_count < 0) {
@@ -116,12 +132,3 @@ static int elder_init(char * argument) {
 
 	return 0;
 }
-
-// The public definition of the elder device model
-DeviceModel elder_model_def = {
-    .name = "elder",
-    .read = elder_read,
-    .write = elder_write,
-	.init = elder_init,
-};
-

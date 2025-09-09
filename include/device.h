@@ -46,7 +46,7 @@ typedef struct DeviceModel {
 
 typedef struct {
     char model[64];
-    char args[64];
+    char args[512];
 } ModelEntry;
 
 
