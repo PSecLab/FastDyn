@@ -47,6 +47,13 @@ typedef struct port_context_t {
  *
  * @param cpu_index The index of the CPU (core) executing the instruction.
  * @param udata User-defined data passed to the function (not used here).
+ *
+ * Example usage in virtuals.txt:
+ * 0xDEADBEEF storage_read_block *
+ *
+ * The '*' indicates that the virtual instruction is modifying the program counter (PC).
+ * This tells QEMU to not execute the instruction at 0xDEADBEEF, but instead jump to the
+ * new PC value set within the virtual function.
  */
 void storage_read_block(unsigned int cpu_index, void *udata);
 
@@ -59,6 +66,9 @@ void storage_read_block(unsigned int cpu_index, void *udata);
  *
  * @param cpu_index The index of the CPU (core) executing the instruction.
  * @param udata User-defined data passed to the function (not used here).
+ *
+ * Example usage in virtuals.txt:
+ * 0xDEADBEEF storage_write_block *
  */
 void storage_write_block(unsigned int cpu_index, void *udata);
 
@@ -71,6 +81,9 @@ void storage_write_block(unsigned int cpu_index, void *udata);
  *
  * @param cpu_index The index of the CPU (core) executing the instruction.
  * @param udata User-defined data passed to the function (not used here).
+ *
+ * Example usage in virtuals.txt:
+ * 0xDEADBEEF hrt_micros64 *
  */
 void hrt_micros64(unsigned int cpu_index, void *udata);
 
@@ -83,6 +96,9 @@ void hrt_micros64(unsigned int cpu_index, void *udata);
  *
  * @param cpu_index The index of the CPU (core) executing the instruction.
  * @param udata User-defined data passed to the function (not used here).
+ *
+ * Example usage in virtuals.txt:
+ * 0xDEADBEEF ap_hal_micros32
  */
 void ap_hal_micros32(unsigned int cpu_index, void *udata);
 
@@ -91,6 +107,9 @@ void ap_hal_micros32(unsigned int cpu_index, void *udata);
  *
  * @param cpu_index The index of the CPU (core) executing the instruction.
  * @param udata User-defined data passed to the function (not used here).
+ *
+ * Example usage in virtuals.txt:
+ * 0xDEADBEEF chDbgContextSwitching
  */
 void chDbgContextSwitching(unsigned int cpu_index, void *udata);
 
