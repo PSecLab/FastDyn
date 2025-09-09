@@ -21,8 +21,11 @@ __attribute__((naked)) void init_regs(void) {
     );
 }
 int main() {
-#ifdef TRAIN
+#ifdef TRAIN_TIMER
 		timer_test();
+#endif
+#ifdef TRAIN_GPIO
+		gpio_test();
 #endif
 		while(1);
 }

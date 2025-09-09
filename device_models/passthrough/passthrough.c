@@ -47,7 +47,7 @@ static void passthrough_write(void *opaque, hwaddr address, uint64_t value, unsi
 }
 static pthread_cond_t irq_cv = PTHREAD_COND_INITIALIZER;
 static int irq_pending;
-#define TEST_INTERRUPT_THREAD
+
 static void* dev_thread_fn(void* arg) {
     (void)arg;
 

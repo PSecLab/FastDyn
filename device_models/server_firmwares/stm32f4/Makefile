@@ -19,10 +19,10 @@ HAL_INSTALL ?= ./stm32f4xx_hal_driver/
 
 
 
-SOURCE_FILES += main.c interrupt_server.c timer_test.c
+SOURCE_FILES += main.c interrupt_server.c timer_test.c gpio_test.c
 
 #Finalize configuration variables based on project/demo
-CFLAGS = ${CFLAGS_${PROJECT}_${DEMO}} -O0 -nostdlib -DSTM32F429xx 
+CFLAGS += ${CFLAGS_${PROJECT}_${DEMO}} -O0 -nostdlib -DSTM32F429xx 
 #LDFLAGS = ${LDFLAGS_${PROJECT}_${DEMO}} //Pretty much every configuration uses the same ld flags, can extend in future.
 LDFLAGS = -v -T ./scripts/stm32_flash.ld  -specs=nano.specs --specs=rdimon.specs #-lc -lrdimon
 LDFLAGS += -Xlinker -Map=${BUILD_DIR}/output.map
@@ -47,7 +47,6 @@ CFLAGS += $(INCLUDE_DIRS)
 
 CFLAGS += -flto=thin --target=arm-none-eabi -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -O0 -g 
 
-CFLAGS += -DTRAIN
 
 
 

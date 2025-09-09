@@ -1,4 +1,4 @@
-#ifdef TRAIN
+#ifdef TRAIN_TIMER
 /**
  * @file main.c
  * @brief Bare-metal example for TIM1 on STM32F4-Discovery board.
@@ -102,4 +102,4 @@ int timer_test(void) {
         // The processor can be put into a low-power mode here if desired.
     }
 }
-#endif
+#endif /* TRAIN_TIMER */

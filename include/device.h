@@ -10,6 +10,9 @@
     #define dev_debug(fmt, ...) do {} while (0)
 #endif
 
+/* Required for Elder model */
+#define DEV_LOGGER
+
 
 
 typedef unsigned long hwaddr;
