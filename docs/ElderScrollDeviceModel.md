@@ -35,7 +35,7 @@ This will generate I/O logs. Make sure the device logger is enabled in FastDyn:
 #define DEV_LOGGER
 ```
 
-## Example of `io.log`
+#### Example of `io.log`
 ```
 [   14.401824] Read:   address = 0x40023830, size = 4 bytes, value = 0x00100000, pc=0x080006AA
 [   14.402171] Write:  address = 0x40023830, size = 4 bytes, value = 0x00100040, pc=0x080006B0
@@ -49,8 +49,125 @@ This will generate I/O logs. Make sure the device logger is enabled in FastDyn:
 [   14.407784] Write:  address = 0x40021814, size = 4 bytes, value = 0x00000000, pc=0x080006DA
 ```
 
-## Next Steps
-Create per-device automata for each device and pass them to the LLM for model generation.
+### 5. Automata Creation
+Create per-device automata for each device and pass them to the LLM for model generation. I recommend using a virtual environment for this.
+
+```bash
+python3 -mvenv fastdyn
+python3 ./fastdyn/bin/activate
+pip3 install -r ./requirements.txt
+cd device_models/postmartem
+make new # This assumes qemu path, open Makefile to change for now.
+```
+
+If everything goes perfectly, you should see prints like this:
+```
+Analysis starting. Output will be saved in the 'out_min_ctxt' directory.
+------------------------------------------------------------
+--- Analyzing Global Interrupt Behavior ---
+  Analyzing Interrupt Service Routines (ISRs)...
+------------------------------------------------------------
+
+--- Analyzing Peripheral: GPIOG ---
+  Separating accesses...
+  Separation complete. Init accesses: 4, Runtime accesses: 2350
+  Initialization context saved to: out_min_ctxt/GPIOG/init.txt
+  Full runtime trace saved to: out_min_ctxt/GPIOG/runtime_full_trace.txt
+  Finding patterns in runtime accesses...
+  Detected pattern saved to: out_min_ctxt/GPIOG/loop_pattern_1.txt
+  Detected pattern saved to: out_min_ctxt/GPIOG/loop_pattern_2.txt
+  Analyzing stateful behavior...
+  Stateful analysis saved to: out_min_ctxt/GPIOG/state.txt
+  Analyzing entropy of read values...
+  Entropy analysis saved to: out_min_ctxt/GPIOG/entropy.txt
+
+--- Analyzing Peripheral: RCC ---
+  Separating accesses...
+  No dominant repetitive operation found. Classifying all as initialization.
+  Initialization context saved to: out_min_ctxt/RCC/init.txt
+  Full runtime trace saved to: out_min_ctxt/RCC/runtime_full_trace.txt
+  Finding patterns in runtime accesses...
+  Analyzing stateful behavior...
+  Stateful analysis saved to: out_min_ctxt/RCC/state.txt
+  Analyzing entropy of read values...
+  Entropy analysis saved to: out_min_ctxt/RCC/entropy.txt
+------------------------------------------------------------
+Analysis complete.
+```
+
+The out_min_ctxt folder has the output related to each device. 
+
+```
+(fastdyn) abk6349@e5-cse-359-01:~/data/fastdyn/device_models/postmartem$ tree ./out_min_ctxt/
+./out_min_ctxt/
+├── GPIOG
+│   ├── entropy.txt
+│   ├── init.txt
+│   ├── loop_pattern_1.txt
+│   ├── loop_pattern_2.txt
+│   ├── runtime_full_trace.txt
+│   └── state.txt
+├── RCC
+│   ├── entropy.txt
+│   ├── init.txt
+│   ├── runtime_full_trace.txt
+│   └── state.txt
+└── summary.txt
+
+3 directories, 11 files
+
+```
+
+The meaning of each file is as follows:
+- entropy.txt: Finds the entropy of each register; high entropy indicates it's a data field.
+- init.txt: Finds the initialization patterns for each device.
+- loop_pattern_XX: Tells about extracted automaton/recurring patterns for each device.
+- state.txt: Tells about stateful registers, indicating device register is stateful.
+- summary.txt: Gives an overall summary of the analysis.
+
+### 6. Prompt Creation/Model Generation.
+If you have an OPENAI Key add it to prompt.py to automatiaclly run the query. If no, your prompt_gen.py to generate the query for one of the device. 
+
+```
+python3 ./prompt_gen.py GPIOG
+cat ./prompt.txt
+```
+
+### 7. Running verifier.
+Since the output of LLM maybe buggy, we run the verifier in a low-cost emulator to replay the learned trace to verify the accuracy of the generated model. If the same trace is replicated, it means the firmware will not know the difference in the IO Model of the device. 
+```
+cd verifier
+```
+Paste the code in gen.c 
+```
+make
+python3 ./test.py --lib ./gen.so  --trace /data/qemu/build/io.log --init-func gpiog_init --read-func gpiog_read --write-func gpiog_write --base-addr 0x40021800 #Make sure to fix things accordingly.
+```
+
+### 8. Reiterate until no mismatches.
+If there are no matches, the verifier will print messages like this:
+```
+--- Harness Configuration ---
+  Library Path: ./gen.so
+  Trace File:   /data/qemu/build/io.log
+  Base Address: 0x40021800
+  Memory Size:  0x1000
+  Init Func:    'gpiog_init'
+  Read Func:    'gpiog_read'
+  Write Func:   'gpiog_write'
+---------------------------
+Result -> Matches: 1177, Errors: 0, Writes: 1177
+```
+
+After this, save the newly learned model (the gen.so file) in the scroll for the elder scroll model. This is how the scroll looks:
+``` ini
+[gpiog]
+libpath = /home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so
+base = 0x40021800
+size = 0x1000
+```
+
+### 9. Run FastDyn with the Elder Scroll device model. 
 
 [Back to Main Page](FastDynDeviceModel.md)
 
