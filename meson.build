@@ -78,12 +78,19 @@ qemu_include = include_directories(
 # --- Project include dir
 local_include = include_directories('include')
 
+# Find BFD and libiberty
+bfd_dep = cc.find_library('bfd', required: true)
+
+deps += bfd_dep
+# deps += iberty_dep
+
 # --- Collect all source files
 srcs += files(
   'core/core.c',
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
+  'libs/bfd_hash_table.c',
 )
 
 if ENABLE_LIBDEV
