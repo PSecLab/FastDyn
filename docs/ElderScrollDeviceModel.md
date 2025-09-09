@@ -168,6 +168,26 @@ size = 0x1000
 ```
 
 ### 9. Run FastDyn with the Elder Scroll device model. 
+Use the elder device model, you can tell it about the scroll using an @ seperator, this is what the input to elder model look like:
+```
+dev=elder:[libhw backend]@[path-to-a scroll]*[input-ranges to listen to]
+```
+Here is an example:
+```
+dev=elder:stlink@/home/faculty/abk6349/data/fastdyn/device_models/elder/tests/devices.ini*0x40000000-0x5FFFFFFF~0xE0000000-0xEFFFFFFF
+```
+Example command for full invocation:
+```
+run --plugin /data/fastdyn/build/libfastdyn.so,dev=elder:stlink@/home/faculty/abk6349/data/fastdyn/device_models/elder/tests/devices.ini*0x40000000-0x5FFFFFFF~0xE0000000-0xEFFFFFFF,monitor=../ws/monitor.elf,logger=../ws/log_config.txt,virtual=../ws/virtuals.txt,detour=../ws/detours.txt,modifier=../ws/modifiers.txt -d in_asm,op -D qemu.log -machine cortexm,memory-backend=ram0 -monitor telnet:127.0.0.1:5555,server,nowait -semihosting --semihosting-config enable=on,target=native -qmp unix:/tmp/qmp-sock,server,nowait -kernel /home/faculty/abk6349/data/fastdyn/device_models/server_firmwares/stm32f4/RTOSDemo.axf -serial stdio -nographic -object memory-backend-file,id=ram0,mem-path=/dev/shm/my_m4_ram3,size=512M,share=on -object memory-backend-file,id=ram1,mem-path=/dev/shm/my_m4_ram,size=512K,share=on -global cortexm-soc.shram_backend=ram1  -global cortexm-soc.ram_baseaddr=0x20000000  -global cortexm-soc.shram_baseaddr=0x30000000 -qmp unix:/tmp/qmp.sock,server=on,wait=off -chardev socket,id=char0,path=/tmp/usart1.sock,server=on,wait=off -device stm32f2xx-usart,id=usart1,chardev=char0,addr=0x40011000 -cpu cortex-m7 -global armv7m.init-nsvtor=0x08000000 -S -s
+```
+If everything goes successfully, fastdyn will load your new learned device model:
+```
+Will use Backend: stlink
+and the scroll: /home/faculty/abk6349/data/fastdyn/device_models/elder/tests/devices.ini
+Loading device [gpiog] from /home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so
+```
+
+Enjoy a faster emulation of the learned GPIO model!!
 
 [Back to Main Page](FastDynDeviceModel.md)
 
