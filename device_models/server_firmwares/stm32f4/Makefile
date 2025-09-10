@@ -47,6 +47,8 @@ CFLAGS += $(INCLUDE_DIRS)
 
 CFLAGS += -flto=thin --target=arm-none-eabi -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -O0 -g 
 
+CFLAGS += $(CFLAGS_EXTRA)
+
 
 
 

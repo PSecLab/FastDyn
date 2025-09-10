@@ -14,10 +14,16 @@ make bc && make exec
 ```
 
 ### 2. Run FastDyn Passthrough Device Model
-Use the following trick to get the GPIO firmware to run in QEMU:
+Use the following command to get the GPIO firmware to run in QEMU:
 ```bash
-CFLAG=-DTRAIN_GPIO
+CFLAG_EXTRA=-DTRAIN_GPIO
 ```
+For example:
+```bash
+make bc CFLAG_EXTRA=-DTRAIN_GPIO
+make exec CFLAG_EXTRA=-DTRAIN_GPIO
+```
+
 
 ### 3. Capture I/O Accesses
 Once the proxy firmware is flashed, run QEMU with the following device model arguments to capture all I/O accesses in passthrough mode with ST-Link as the interface:
@@ -27,7 +33,16 @@ dev=passthrough:stlink*0x40000000-0x5FFFFFFF~0xE0000000-0xEFFFFFFF
 
 ### 4. Example Command
 ```bash
-run --plugin /data/fastdyn/build/libfastdyn.so,dev=passthrough:stlink*0x40000000-0x5FFFFFFF~0xE0000000-0xEFFFFFFF,monitor=../ws/monitor.elf,logger=../ws/log_config.txt,virtual=../ws/virtuals.txt,detour=../ws/detours.txt,modifier=../ws/modifiers.txt -d in_asm,op -D qemu.log -machine cortexm,memory-backend=ram0 -monitor telnet:127.0.0.1:5555,server,nowait -semihosting --semihosting-config enable=on,target=native -qmp unix:/tmp/qmp-sock,server,nowait -kernel /home/faculty/abk6349/data/fastdyn/device_models/serve...
+qemu-system-arm \           
+  --plugin /home/cseuser/work/fastdyn/FastDyn/build/libfastdyn.so,dev=passthrough:stlink*0x40000000-0x5FFFFFFF~0xE0000000-0xEFFFFFFF \
+  -d in_asm,op -D qemu.log \
+  -object memory-backend-file,id=ram1,mem-path=/dev/shm/my_m4_ram,size=512K,share=on -machine cortexm,memory-backend=ram0 -global cortexm-soc.shram_backend=ram1  -global cortexm-soc.ram_baseaddr=0x20000000  -global cortexm-soc.shram_baseaddr=0x30000000 \
+  -monitor telnet:127.0.0.1:5555,server,nowait \
+  -semihosting --semihosting-config enable=on,target=native -cpu cortex-m4 \
+  -qmp unix:/tmp/qmp-sock,server,nowait \
+  -object memory-backend-file,id=ram0,mem-path=/dev/shm/my_m4_ram3,size=512M,share=on \
+  -kernel /home/cseuser/work/fastdyn/FastDyn/device_models/server_firmwares/stm32f4/build/RTOSDemo.axf \
+  -global armv7m.init-nsvtor=0x08000000 -s -S
 ```
 
 This will generate I/O logs. Make sure the device logger is enabled in FastDyn:
@@ -138,14 +153,14 @@ Since the output of LLM maybe buggy, we run the verifier in a low-cost emulator 
 ```
 cd verifier
 ```
-Paste the code in gen.c 
+Paste the code in tests/gen.c 
 ```
 make
 python3 ./test.py --lib ./gen.so  --trace /data/qemu/build/io.log --init-func gpiog_init --read-func gpiog_read --write-func gpiog_write --base-addr 0x40021800 #Make sure to fix things accordingly.
 ```
 
 ### 8. Reiterate until no mismatches.
-If there are no matches, the verifier will print messages like this:
+If there are no mis-matches, the verifier will print messages like this:
 ```
 --- Harness Configuration ---
   Library Path: ./gen.so
@@ -190,4 +205,5 @@ Loading device [gpiog] from /home/faculty/abk6349/data/fastdyn/device_models/pos
 Enjoy a faster emulation of the learned GPIO model!!
 
 [Back to Main Page](FastDynDeviceModel.md)
+
 
