@@ -19,7 +19,7 @@ HAL_INSTALL ?= ./stm32f4xx_hal_driver/
 
 
 
-SOURCE_FILES += main.c interrupt_server.c timer_test.c gpio_test.c
+SOURCE_FILES += main.c interrupt_server.c timer_test.c gpio_test.c usart_test.c
 
 #Finalize configuration variables based on project/demo
 CFLAGS += ${CFLAGS_${PROJECT}_${DEMO}} -O0 -nostdlib -DSTM32F429xx 
@@ -46,6 +46,8 @@ OBJ_FILES := $(SOURCE_FILES:%.c=$(BUILD_DIR)/%.o)
 CFLAGS += $(INCLUDE_DIRS)
 
 CFLAGS += -flto=thin --target=arm-none-eabi -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -O0 -g 
+
+CFLAGS += $(CFLAGS_EXTRA)
 
 
 

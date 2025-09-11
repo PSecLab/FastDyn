@@ -27,6 +27,9 @@ int main() {
 #ifdef TRAIN_GPIO
 		gpio_test();
 #endif
+#ifdef TRAIN_USART
+		usart_test();
+#endif
 		while(1);
 }
 
