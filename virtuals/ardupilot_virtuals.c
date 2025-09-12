@@ -175,4 +175,8 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
     printf("\n");
 }
 
+void debug_reached(unsigned int cpu_index, void *udata) {
+    printf("Debug: Reached debug_reached virtual function\n");
+}
+
 // END OF FILE

@@ -65,15 +65,16 @@ cb_entry_t cb_registry[] = {
 	{ "debug_log", debug_log},
 #if ENABLE_LIBGZ
     { "gz_service", gz_service},
-    { "copy_state_to_frontend", copy_state_to_frontend},
     { "compass_block_read", compass_block_read},
     { "send_mavlink_gps_data", send_mavlink_gps_data},
+    { "gz_advance_simulation", gz_advance_simulation},
 #endif
     { "storage_read_block", storage_read_block},
     { "storage_write_block", storage_write_block},
     { "hrt_micros64", hrt_micros64},
     { "ap_hal_micros32", ap_hal_micros32},
     { "chDbgContextSwitching", chDbgContextSwitching},
+    { "debug_reached", debug_reached},
 };
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);
