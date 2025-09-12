@@ -37,8 +37,8 @@ endif
 ENABLE_LIBGZ = get_option('enable_libgz')
 if ENABLE_LIBGZ
   libgz_wrapper_dep = declare_dependency(
-    include_directories: include_directories('/root/rooney/PRehost/gazebo/fastdyn'),
-    link_args: ['-L/root/rooney/PRehost/gazebo/fastdyn/build/lib', '-lgz_wrapper'],
+    include_directories: include_directories('./courbet/gazebo'),
+    link_args: ['-L' + meson.current_source_dir() + '/courbet/gazebo/build/lib', '-lgz_wrapper'],
   )
   deps += libgz_wrapper_dep
 endif
