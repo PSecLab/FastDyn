@@ -83,7 +83,7 @@ bc: $(OBJ_FILES)
 	llvm-dis $(BUILD_DIR)/$(BIN).bc
 #	~/projects/Pieces/partitioner/run.py /home/arslan/projects/LBC/FreeRTOS/FreeRTOS/Demo/CORTEX_M4F_STM32F407ZG-SK/pRules.json
 
-exec: build/RTOSDemo.axf.bc #$(CC) -c -ffunction-sections -fdata-sections $(CFLAGS)  $+ -o $(@)
+exec: build/RTOSDemo.axf.bc $(BUILD_DIR)/startup.o #$(CC) -c -ffunction-sections -fdata-sections $(CFLAGS)  $+ -o $(@)
 	llc -filetype=obj build/RTOSDemo.axf.bc
 	$(CC)  --target=arm-none-eabi -mthumb -mcpu=cortex-m4 $(LDFLAGS)  -Xlinker -Map=./build/rtmk.map build/RTOSDemo.axf.bc $(BUILD_DIR)/startup.o -o ./build/RTOSDemo.axf
 
