@@ -1,7 +1,7 @@
 .PHONY: all clean docs
 
 qemu_path ?= ../../qemu
-LIBGZ ?= false
+LIBGZ ?= true
 LIBHW ?= false
 DEV ?= true
 DEBUG_PRINT ?= false
@@ -21,5 +21,5 @@ docs:
 	doxygen Doxyfile
 
 clean:
-	rm -rf build docs/html 
+	rm -rf build docs/html
 

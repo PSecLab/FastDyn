@@ -91,6 +91,8 @@ srcs += files(
   'utils/utils.c',
   'virtuals/virtuals.c',
   'libs/bfd_hash_table.c',
+  'libs/ring_buffer.c',
+  'libs/mavlink_lib.c',
 )
 
 if ENABLE_LIBDEV

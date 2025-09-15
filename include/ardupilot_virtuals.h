@@ -113,4 +113,12 @@ void ap_hal_micros32(unsigned int cpu_index, void *udata);
  */
 void chDbgContextSwitching(unsigned int cpu_index, void *udata);
 
+/**
+ * @brief Debug to just print that we reach here
+ *
+ * @param cpu_index The index of the CPU (core) executing the instruction.
+ * @param udata User-defined data passed to the function (not used here).
+ */
+void debug_reached(unsigned int cpu_index, void *udata);
+
 #endif // FASTDYN_INCLUDE_ARDUPILOT_VIRTUALS_H

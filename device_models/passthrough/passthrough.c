@@ -108,6 +108,7 @@ DeviceModel passthrough_model_def = {
     .serve = passthrough_serve,
     .interrupt = passthrough_interrupt,
 };
+
 static int passthrough_init(char *argument) {
 	char * tok = strtok(argument, "*");
 	hw = hw_connect(tok, NULL, 0);
@@ -115,7 +116,15 @@ static int passthrough_init(char *argument) {
         utils_die("HW connection failed.");
         return 1;
     }
-	tok = strtok(NULL, "*");
+
+    //Register the device models for the addresses
+    tok = strtok(NULL, "*");
+    char *irq_str = strchr(tok, '^');   //search for user-registered interrupts
+    if (irq_str) {
+        *irq_str = '\0'; // terminate ranges part
+        irq_str++;       // move past '^' to interrupts
+    }
+
 	Range ranges[10];
     int n = utils_parse_ranges(tok, ranges, 10);
 
@@ -126,6 +135,19 @@ static int passthrough_init(char *argument) {
 
 	for (int i = 0; i < n; i++) {
         dev_register_device_model(ranges[i].start, ranges[i].end, &passthrough_model_def);
+    }
+
+
+    //Register the device models for the interrupts registered by the user.
+    if (irq_str) {
+    int int_nums;   //number of interrupts registered by the user
+
+    //0-10:20-25 -> 0 to 10 and 20 to 25 interrupts supported
+    int *int_lst = utils_parse_interrupt_ranges(irq_str, &int_nums);
+
+    for (int i =0; i < int_nums; i++) {
+        dev_register_interrupt_device_model(int_lst[i], &passthrough_model_def);
+        }
     }
 
     return 0;

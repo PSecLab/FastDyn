@@ -62,6 +62,9 @@ typedef struct unimp_exporter {
 #define DEVICE_SIZE 0x20000000ULL  // 0x40000000 -> 0x5FFFFFFF, ~512 MB
 #define NUM_SLOTS   (DEVICE_SIZE / SLOT_SIZE)
 
+//Interrupt Handling
+#define MAX_INTERRUPTS 240
+
 // System Control Block → system_lut
 #define SYSTEM_BASE 0xE0000000ULL
 #define SYSTEM_SIZE 0x10000000ULL
@@ -70,4 +73,5 @@ typedef struct unimp_exporter {
 
 int dev_init(int argc, char ** argv);
 void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev);
+void dev_register_interrupt_device_model(int irq_num, DeviceModel *dev);
 #endif // DEVICE_H

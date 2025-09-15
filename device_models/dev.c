@@ -29,7 +29,8 @@ static inline unsigned dev_addr_to_slot(hwaddr addr, hwaddr REGION_BASE)
     return (addr - REGION_BASE) / SLOT_SIZE;
 }
 
-
+//Interrupt LUT
+static DeviceModel *irq_lut[MAX_INTERRUPTS] = {0}; //Initialize all to NULL
 
 
 
@@ -52,7 +53,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 	time_t sec;
 	long usec;
 	dev_get_timestamp(&sec, &usec);
-#endif 
+#endif
 	DeviceModel **lut = dev_select_lut(address);
     hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
 	unsigned idx = dev_addr_to_slot(address, region_base);
@@ -60,7 +61,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 #ifdef DEV_LOGGER
 	utils_log_to_file(io_logger,"[%5ld.%06ld] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
               sec, usec, address, size, size * 2, value, pc);
-#endif 
+#endif
 
 	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
 	if (dev) {
@@ -95,7 +96,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 #ifdef DEV_LOGGER
 		utils_log_to_file(io_logger, "[%5ld.%06ld] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
               sec, usec, address, size, size * 2, value, pc);
-#endif 
+#endif
 
 		*buf = value;
 	}
@@ -133,13 +134,15 @@ void dev_notify_irq(int number) {
     dev_get_timestamp(&sec, &usec);
 	utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
               sec, usec, number);
-#if 0
-	DeviceModel *dev = (idx < NUM_SLOTS) ? device_lut[idx] : NULL;
-    if (dev) {
-        dev->current(number);
-    }
-#endif
 
+	DeviceModel* dev = irq_lut[number];
+	if (dev != NULL) {
+		dev->interrupt(number);
+	}
+	else {
+		utils_log_to_file(io_logger, "Skipping IRQ NUM %d handling as not registered by the user\n", number);
+		printf("Skipping IRQ NUM %d handling as not registered by the user\n", number);
+	}
 }
 
 void dev_irqret_hook(int number) {
@@ -148,13 +151,15 @@ void dev_irqret_hook(int number) {
     dev_get_timestamp(&sec, &usec);
     utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
               sec, usec, number);
-#if 0
-	DeviceModel *dev = (idx < NUM_SLOTS) ? device_lut[idx] : NULL;
-	if (dev) {
+
+	DeviceModel* dev = irq_lut[number];
+	if (dev != NULL) {
 		dev->serve(number);
 	}
-#endif
-
+	else {
+		utils_log_to_file(io_logger, "Skipping IRQ NUM %d handling as not registered by the user\n", number);
+		printf("Skipping IRQ NUM %d handling as not registered by the user\n", number);
+	}
 }
 
 void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev) {
@@ -169,6 +174,17 @@ void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev) {
         lut[i] = dev;
     }
 }
+
+void dev_register_interrupt_device_model(int irq_num, DeviceModel *dev) {
+    // For the passed interrupt number, register the device model
+    if (irq_num < 0 || irq_num >= MAX_INTERRUPTS) {
+        printf("ERROR! IRQ NUM: %d not supported for the given device!\n", irq_num);
+		utils_die("Reconfigure the device model\n");
+    }
+
+    irq_lut[irq_num] = dev;  // register the device
+}
+
 
 static inline int parse_models(const char *s, ModelEntry *entries, int max_entries) {
     // Skip "dev=" prefix if present

@@ -10,5 +10,25 @@
  */
 uint64_t core_get_pc(void);
 
+/**
+ * @brief Read from RAM at the specified address.
+ *
+ * @param address The memory address to read from.
+ * @param size The number of bytes to read.
+ * @param buffer The buffer to store the read data.
+ * @return int 0 on success, -1 on failure.
+ */
+int core_read_ram(uintptr_t address, size_t size, void* buffer);
+
+/**
+ * @brief Write to RAM at the specified address.
+ *
+ * @param address The memory address to write to.
+ * @param size The number of bytes to write.
+ * @param buffer The buffer containing the data to write.
+ * @return int 0 on success, -1 on failure.
+ */
+int core_write_ram(uintptr_t address, size_t size, const void* buffer);
+
 #endif /* CORE_H */
 
