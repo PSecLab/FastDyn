@@ -9,10 +9,11 @@ PROJECT ?= CRTC
 DEMO := Flash
 BUILD_DIR := build
 
-GCC_INSTALL ?= /data/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi/
+GCC_INSTALL ?= /scratch/Fastdyn/toolchains/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi/
 GCC_INSTALL_INCLUDE = $(GCC_INSTALL)arm-none-eabi/include/
 CHECKED_C_INSTALL_INCLUDE ?=/data/checkedc/include
 GCC_INSTALL_LIB ?= $(GCC_INSTALL)arm-none-eabi/lib/thumb/v7-m/nofp/
+GCC_INSTALL_GLIB ?= $(GCC_INSTALL)lib/gcc/arm-none-eabi/13.3.1/thumb/v7-m/nofp/
 BSP_INSTALL ?= ./32f429idiscovery-bsp/
 HAL_INSTALL ?= ./stm32f4xx_hal_driver/
 
@@ -22,12 +23,12 @@ HAL_INSTALL ?= ./stm32f4xx_hal_driver/
 SOURCE_FILES += main.c interrupt_server.c timer_test.c gpio_test.c usart_test.c
 
 #Finalize configuration variables based on project/demo
-CFLAGS += ${CFLAGS_${PROJECT}_${DEMO}} -O0 -nostdlib -DSTM32F429xx 
+CFLAGS += ${CFLAGS_${PROJECT}_${DEMO}} -O0 -nostdlib -DSTM32F429xx
 #LDFLAGS = ${LDFLAGS_${PROJECT}_${DEMO}} //Pretty much every configuration uses the same ld flags, can extend in future.
 LDFLAGS = -v -T ./scripts/stm32_flash.ld  -specs=nano.specs --specs=rdimon.specs #-lc -lrdimon
 LDFLAGS += -Xlinker -Map=${BUILD_DIR}/output.map
 
-LDFLAGS += -L$(GCC_INSTALL_LIB) -L./ -v
+LDFLAGS +=  -L$(GCC_INSTALL_GLIB) -L$(GCC_INSTALL_LIB) -L./ -v
 #LDFLAGS +=  -L./ -v
 INCLUDE_DIRS = ${INCLUDE_DIRS_${PROJECT}_${DEMO}} -I $(PIECES)/partitioner/monitor/include/ -I $(GCC_INSTALL_INCLUDE) -I $(CHECKED_C_INSTALL_INCLUDE)
 #Device Path
@@ -45,9 +46,9 @@ INCLUDE_DIRS += -I$(HAL_INSTALL)/Inc/
 OBJ_FILES := $(SOURCE_FILES:%.c=$(BUILD_DIR)/%.o)
 CFLAGS += $(INCLUDE_DIRS)
 
-CFLAGS += -flto=thin --target=arm-none-eabi -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -O0 -g 
+CFLAGS += -flto=thin --target=arm-none-eabi -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -O0 -g
 
-CFLAGS += $(CFLAGS_EXTRA)
+CFLAGS += $(CFLAG_EXTRA)
 
 
 
@@ -77,7 +78,7 @@ $(BUILD_DIR)/startup.o : startup.s
 clean:
 	-rm -rf build
 
-bc: $(OBJ_FILES) 
+bc: $(OBJ_FILES)
 	$(warning Files are $(OBJ_FILES))
 	llvm-link  -v $+ -o $(BUILD_DIR)/$(BIN).bc
 	llvm-dis $(BUILD_DIR)/$(BIN).bc
@@ -88,10 +89,10 @@ exec: build/RTOSDemo.axf.bc $(BUILD_DIR)/startup.o #$(CC) -c -ffunction-sections
 	$(CC)  --target=arm-none-eabi -mthumb -mcpu=cortex-m4 $(LDFLAGS)  -Xlinker -Map=./build/rtmk.map build/RTOSDemo.axf.bc $(BUILD_DIR)/startup.o -o ./build/RTOSDemo.axf
 
 run:
-	./build_files/qemu-system-arm -M stm32-p103 -semihosting -nographic -kernel $(BUILD_DIR)/RTOSDemo.axf -s -S 
+	./build_files/qemu-system-arm -M stm32-p103 -semihosting -nographic -kernel $(BUILD_DIR)/RTOSDemo.axf -s -S
 
 rop:
-	python3 ./genROPCount.py -b ./build/RTOSDemo.axf -i ./sizeinfo 
+	python3 ./genROPCount.py -b ./build/RTOSDemo.axf -i ./sizeinfo
 
 bcet: $(OBJ_FILES)
 	llvm-link  -v $+ -o $(BUILD_DIR)/$(BIN).bc
