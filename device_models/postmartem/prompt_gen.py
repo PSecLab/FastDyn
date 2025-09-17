@@ -44,7 +44,7 @@ def generate_gemini_prompt(peripheral_directory: str) -> str:
         sys.exit(1)
 
     peripheral_name = os.path.basename(peripheral_directory)
-    
+
     # Find and parse the summary.txt file from the parent directory
     parent_dir = os.path.dirname(peripheral_directory)
     summary_path = os.path.join(parent_dir, "summary.txt")
@@ -72,9 +72,10 @@ def generate_gemini_prompt(peripheral_directory: str) -> str:
 - `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_raise_irq(int irq)`: Raises an interrupt line.
 - `void qemu_plugin_raise_irq(int irq)`: raises an interrupt line.
-- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Arms a timer for future.
+- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Accepts a timer's handle and an absolute nanosecond timestamp to arm that timer to fire at the specified moment for one shot.
 - `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
-- `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: The return value is timer file descriptor. You can pass data to callback using data field.
+- `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
+- `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
 - `uint64_t my_unimp_read(void *opaque, hwaddr address, unsigned size)`: Signature for a callback that receives VM MMIO read. address is the address of the MMIO access and size is size of access.
 - `void my_unimp_write(void *opaque, hwaddr address, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
 - 'void dev_debug(char *str)`: Any debug messages must be logged using this function.
@@ -136,7 +137,7 @@ A concise, one-paragraph summary of this peripheral's likely purpose and overall
 A bulleted list of the important registers mentioned in the traces and their inferred functions.
 
 ### 3. C Device Model Source Code
-The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> will give you access to all APIs i mentioned. 
+The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> will give you access to all APIs i mentioned.
 
 ```c
 // Device Model for {peripheral_name}
@@ -169,14 +170,14 @@ if __name__ == "__main__":
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("peripheral", help="Name of the peripheral to model (e.g., 'GPIOG').")
-    
+
     args = parser.parse_args()
-    
+
     # Construct the path from the base directory and the peripheral name
     peripheral_path = os.path.join(ANALYSIS_OUTPUT_DIR, args.peripheral)
-    
+
     final_prompt = generate_gemini_prompt(peripheral_path)
-    
+
     with open("prompt.txt", "w") as f:
         f.write(final_prompt + "\n")
 
