@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <stdio.h>
+#include "ring_buffer.h"
 
 #define MAVLINK_STX 0xFD
 
@@ -89,3 +90,4 @@ int mav_finalize_message_chan_send(int sockfd,
 
     return 0;
 }
+
