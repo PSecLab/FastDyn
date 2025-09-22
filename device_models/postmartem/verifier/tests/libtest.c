@@ -17,3 +17,7 @@ uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data) {
 int64_t qemu_plugin_get_virtual_timer(void) {
 	return 0;
 }
+
+uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period) {
+    return 0;
+}

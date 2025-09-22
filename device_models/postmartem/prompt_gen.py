@@ -78,11 +78,16 @@ def generate_gemini_prompt(peripheral_directory: str) -> str:
 - `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
 - `uint64_t my_unimp_read(void *opaque, hwaddr address, unsigned size)`: Signature for a callback that receives VM MMIO read. address is the address of the MMIO access and size is size of access.
 - `void my_unimp_write(void *opaque, hwaddr address, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
-- 'void dev_debug(char *str)`: Any debug messages must be logged using this function.
+- `void dev_debug(char *str)`: Any debug messages must be logged using this function.
+- `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for the pseudo-terminal device /tmp/usart1_pty
+- `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
+- `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
 """
 
     # Assemble the prompt, escaping literal curly braces {{ and }} in the C code example
     prompt = f"""
+Take this prompt independent from previous prompt history.
+
 You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
 Your task is to analyze the following summary of MMIO trace data and generate a complete C device model.
 
@@ -91,6 +96,12 @@ You **must** use the following APIs to construct the device model. Pay close att
 ```c
 {qemu_api_list.strip()}
 ```
+
+### NOTE
+If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
+
+## Commands:
+After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
 
 --- START OF ANALYSIS DATA ---
 
@@ -137,7 +148,7 @@ A concise, one-paragraph summary of this peripheral's likely purpose and overall
 A bulleted list of the important registers mentioned in the traces and their inferred functions.
 
 ### 3. C Device Model Source Code
-The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> will give you access to all APIs i mentioned.
+The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <devmodels_apis.h> will give you access to all APIs i mentioned.
 
 ```c
 // Device Model for {peripheral_name}
