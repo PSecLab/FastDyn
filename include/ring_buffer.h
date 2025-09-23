@@ -27,10 +27,9 @@ typedef struct {
  * @brief Initialize a ring buffer.
  *
  * @param rb Pointer to the RingBuffer structure.
- * @param storage Pointer to user-provided storage array.
- * @param size Size of the storage array in bytes.
+ * @param size Size of the buffer in bytes.
  */
-void ring_buffer_init(RingBuffer *rb, uint8_t *storage, size_t size);
+int ring_buffer_init(RingBuffer *rb, size_t size);
 
 /**
  * @brief Add a byte to the buffer.

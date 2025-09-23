@@ -4,16 +4,33 @@
  */
 
 #include "ring_buffer.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 
-void ring_buffer_init(RingBuffer *rb, uint8_t *storage, size_t size) {
-    rb->buffer = storage;
+int ring_buffer_init(RingBuffer *rb, size_t size) {
+    rb->buffer = malloc(size);
+    if (!rb->buffer) {
+        // Handle memory allocation failure
+        perror("Failed to allocate ring buffer");
+        return -1;
+    }
     rb->size = size;
     rb->head = 0;
     rb->tail = 0;
-    pthread_mutex_init(&rb->lock, NULL);
+    if (pthread_mutex_init(&rb->lock, NULL) != 0) {
+        free(rb->buffer);
+        return -1;
+    }
+    return 0;
 }
 
 void ring_buffer_destroy(RingBuffer *rb) {
+    free(rb->buffer);
+    rb->buffer = NULL;
+    rb->size = 0;
+    rb->head = 0;
+    rb->tail = 0;
     pthread_mutex_destroy(&rb->lock);
 }
 
@@ -58,12 +75,7 @@ bool ring_buffer_is_full(RingBuffer *rb) {
 
 size_t ring_buffer_count(RingBuffer *rb) {
     pthread_mutex_lock(&rb->lock);
-    size_t count;
-    if (rb->head >= rb->tail) {
-        count = rb->head - rb->tail;
-    } else {
-        count = rb->size - (rb->tail - rb->head);
-    }
+    size_t count = (rb->head + rb->size - rb->tail) % rb->size;
     pthread_mutex_unlock(&rb->lock);
     return count;
 }
