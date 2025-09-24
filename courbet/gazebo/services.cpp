@@ -61,13 +61,22 @@ private:
  * @brief Advances the simulation by one step and gets the model state
  *        from Gazebo.
  *
- * This function exposes the /step_simulation service, which when called,
+ * This class exposes the /step_simulation service, which when called,
  * advances the Gazebo simulation by one step and retrieves the current
  * state of the specified model.
  *
  * @param[in] req An empty request message
  * @param[out] rep The response message containing the model state
  * @return true if the service call was successful, false otherwise
+ *
+ * This class also exposes a /set_servo service to set individual
+ * servo PWM values. The plugin expects a string message in the format
+ * "channel,pwm" where channel is the servo channel (0-15) and pwm
+ * is the PWM value (e.g., 1000-2000).
+ *
+ * @param[in] req A string message with "channel,pwm"
+ * @param[out] rep A boolean message indicating success or failure
+ * @return true if the PWM was set successfully, false otherwise
  */
 
 std::vector<uint16_t> pwm_values_;
@@ -86,6 +95,7 @@ public:
 
     // Advertise the service
     node.Advertise(service_name, &ServoService::OnServiceRequest, this);
+    node.Advertise("/set_servo", &ServoService::OnSetPwmRequest, this);
 
     // Initialize PWM values to 1500
     pwm_values_.resize(16, 1500);
@@ -214,6 +224,35 @@ private:
     return !response.data().empty();
   }
 
+  // Service callback: set individual servo PWM values given (channel, pwm)
+  bool OnSetPwmRequest(const gz::msgs::StringMsg &request,
+                       gz::msgs::Boolean &response)
+  {
+    // Expecting request.data() to be "channel,pwm"
+    auto comma_pos = request.data().find(',');
+    if (comma_pos == std::string::npos)
+    {
+      response.set_data(false);
+      return true;
+    }
+
+    // Parse channel and PWM values
+    int channel = std::stoi(request.data().substr(0, comma_pos));
+    int pwm = std::stoi(request.data().substr(comma_pos + 1));
+    if (channel < 0 || channel >= 16 || pwm < 0 || pwm > 2000)
+    {
+      std::cerr << "Invalid channel or PWM value" << std::endl;
+      std::cerr << "Received: " << request.data() << std::endl;
+      response.set_data(false);
+      return true;
+    }
+
+    // Set PWM value
+    pwm_values_[channel] = pwm;
+    response.set_data(true);
+    return true;
+  }
+
   int sock_{-1};
   sockaddr_in remote_addr_{};
   std::mutex mutex_;
@@ -231,16 +270,31 @@ int main(int argc, char **argv)
 {
   gz::transport::Node node;
 
+  std::string model_name = "r1_rover";
+
+  std::string navsat_topic = "/world/runway/model/r1_rover/link/base_link/sensor/navsat_sensor/navsat";
+  std::string mag_topic = "/world/runway/model/r1_rover/link/base_link/sensor/magnetometer_sensor/magnetometer";
+  if (model_name == "gs_drone") {
+    navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
+    mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
+  }
   GenericSensorService<gz::msgs::NavSat> navSatService(
     node,
-    "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat",
+    navsat_topic,
     "/get_navsat_reading"
   );
 
   GenericSensorService<gz::msgs::Magnetometer> magService(
     node,
-    "/world/runway/model/gs_drone/link/sensors/sensor/mag_sensor/magnetometer",
+    mag_topic,
     "/get_mag_reading"
+  );
+
+  // skip this if not rover
+  GenericSensorService<gz::msgs::Model> jointStateService(
+    node,
+    "/joint_states",
+    "/get_joint_state"
   );
 
   ServoService servoService(
@@ -251,7 +305,7 @@ int main(int argc, char **argv)
     5200
   );
 
-  std::cout << "ArduRover Services running...\n";
+  std::cout << "ArduPilot Services running...\n";
 
   while (true)
   {

@@ -67,20 +67,78 @@ typedef struct {
 } sitl_state_data_t;
 
 /**
- * @brief Debug function to demonstrate control of vehicle in Gazebo
+ * @brief Sets the rover's position as a demo
  *
- * @param name Name of the model to set the pose for
+ * This function sets the rover's position in the Gazebo simulation
+ * to a fixed point with a specified yaw angle. Basically just making
+ * it turn in place.
+ *
  * @param yaw_deg Yaw angle in degrees
- * @return int 0 on success, -1 on failure
+ * @return 1 on success, 0 on failure
  */
 int set_pose(double yaw_deg);
 
-// int get_joint_state(double *motor_0_pos, double *motor_2_pos);
+/**
+ * @brief Gets the current joint states of the rover's motors
+ *
+ * This function retrieves the current positions of the rover's motors
+ * from the Gazebo simulation.
+ *
+ * @param motor_0_pos Pointer to store the position of motor 0
+ * @param motor_2_pos Pointer to store the position of motor 2
+ * @return 1 on success, 0 on failure
+ */
+int get_joint_state(double *motor_0_pos, double *motor_2_pos);
 
+/**
+ * @brief Gets the latest magnetometer reading
+ *
+ * This function retrieves the latest magnetometer reading from the
+ * Gazebo simulation.
+ *
+ * @param mag_x Pointer to store the X component of the magnetic field
+ * @param mag_y Pointer to store the Y component of the magnetic field
+ * @param mag_z Pointer to store the Z component of the magnetic field
+ * @return 1 on success, 0 on failure
+ */
 int get_mag_reading(double *mag_x, double *mag_y, double *mag_z);
 
+/**
+ * @brief Gets the latest GPS reading
+ *
+ * This function retrieves the latest GPS reading from the Gazebo
+ * simulation.
+ *
+ * @param gps_data Pointer to a gps_data_t struct to store the GPS data
+ * @return 1 on success, 0 on failure
+ */
 int get_navsat_reading(gps_data_t *gps_data);
 
+/**
+ * @brief Sets the PWM value for a specific servo channel
+ *
+ * This function sets the PWM value for a specified servo channel
+ * in the Gazebo simulation.
+ *
+ * @param channel The servo channel (0-15)
+ * @param pwm The PWM value to set (0-2000)
+ * @return 1 on success, 0 on failure
+ */
+int set_servo_pwm(int channel, int pwm);
+
+/**
+ * @brief Advances the simulation by a specified number of steps
+ *        and retrieves the current SITL state data.
+ *
+ * This function calls the /step_simulation service in Gazebo to
+ * advance the simulation by the given number of steps. It then
+ * retrieves the current SITL state data including IMU, position,
+ * attitude, velocity, rangefinder readings, wind vane, and airspeed.
+ *
+ * @param steps The number of simulation steps to advance
+ * @param state_data Pointer to a sitl_state_data_t struct to store the state data
+ * @return 1 on success, 0 on failure
+ */
 int advance_simulation(uint32_t steps, sitl_state_data_t *state_data);
 
 #ifdef __cplusplus

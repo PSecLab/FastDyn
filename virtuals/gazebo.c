@@ -16,7 +16,7 @@ const float wheel_radius = 0.069f;
 void gz_service(unsigned int cpu_index, void *udata)
 {
 	static float yaw = 0.0;
-    if (set_pose(yaw) == 0) {
+    if (set_pose(yaw)) {
         printf("Pose set successfully\n");
 		yaw += 30.0;
 	} else {

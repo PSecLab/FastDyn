@@ -135,7 +135,7 @@ int set_pose(double yaw_deg)
     gz::transport::Node node;
 
     gz::msgs::Pose pose_msg;
-    pose_msg.set_name("gs_drone");
+    pose_msg.set_name("r1_rover");
 
     // Position
     auto *pos = pose_msg.mutable_position();
@@ -154,20 +154,20 @@ int set_pose(double yaw_deg)
     bool executed = node.Request("/world/runway/set_pose", pose_msg, 5000, rep, result);
 
     if (!executed || !result)
-        return -1;
+        return 0;
 
-    return 0;
+    return 1;
 }
 
-// int get_joint_state(double *motor_0_pos, double *motor_2_pos) {
-//     gz::msgs::Model response;
-//     if (!request_service("/get_joint_state", response)) {
-//         return 0;
-//     }
-//     *motor_0_pos = response.joint(0).axis1().position();
-//     *motor_2_pos = response.joint(1).axis1().position();
-//     return 1;
-// }
+int get_joint_state(double *motor_0_pos, double *motor_2_pos) {
+    gz::msgs::Model response;
+    if (!request_service("/get_joint_state", response)) {
+        return 0;
+    }
+    *motor_0_pos = response.joint(0).axis1().position();
+    *motor_2_pos = response.joint(1).axis1().position();
+    return 1;
+}
 
 int get_mag_reading(double *mag_x, double *mag_y, double *mag_z) {
     gz::msgs::Magnetometer response;
@@ -186,8 +186,6 @@ int get_navsat_reading(gps_data_t *gps_data) {
         return 0;
     }
 
-    // printf("NavSat types: %s\n", response.GetTypeName().c_str());
-
     gps_data_t data;
     data.lat = response.latitude_deg();
     data.lon = response.longitude_deg();
@@ -204,14 +202,10 @@ int get_navsat_reading(gps_data_t *gps_data) {
 }
 
 int advance_simulation(uint32_t steps, sitl_state_data_t *state_data) {
-    printf("Entering advance_simulation with steps: %u\n", steps);
-
     gz::msgs::StringMsg response;
     if (!request_service("/step_simulation", response)) {
         return 0;
     }
-
-    printf("Received response: %s\n", response.data().c_str());
 
     sitl_state_data_t data;
     if (!parse_sitl_state(response.data(), data)) {
@@ -219,6 +213,26 @@ int advance_simulation(uint32_t steps, sitl_state_data_t *state_data) {
     }
 
     *state_data = data;
+    return 1;
+}
+
+int set_servo_pwm(int channel, int pwm) {
+    if (channel < 0 || channel >= 16 || pwm < 0 || pwm > 2000) {
+        return 0;
+    }
+
+    gz::transport::Node node;
+    gz::msgs::StringMsg request;
+    request.set_data(std::to_string(channel) + "," + std::to_string(pwm));
+
+    gz::msgs::Boolean response;
+    bool result;
+    bool executed = node.Request("/set_servo", request, 5000, response, result);
+
+    if (!executed || !result || !response.data()) {
+        return 0;
+    }
+
     return 1;
 }
 
