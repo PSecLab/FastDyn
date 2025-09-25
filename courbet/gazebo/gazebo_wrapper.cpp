@@ -15,6 +15,10 @@
 #include <iostream>
 #include <cctype>
 #include <cstdlib>
+#include <mutex>
+
+static std::mutex sitl_state_mutex;
+static sitl_state_data_t latest_sitl_state;
 
 template <typename ResponseT>
 bool request_service(const std::string &service_name, ResponseT &response,
@@ -212,7 +216,18 @@ int advance_simulation(uint32_t steps, sitl_state_data_t *state_data) {
         return 0;
     }
 
+    {
+        std::lock_guard<std::mutex> lock(sitl_state_mutex);
+        latest_sitl_state = data;
+    }
+
     *state_data = data;
+    return 1;
+}
+
+int get_latest_sitl_state(sitl_state_data_t *state_data) {
+    std::lock_guard<std::mutex> lock(sitl_state_mutex);
+    *state_data = latest_sitl_state;
     return 1;
 }
 

@@ -141,6 +141,18 @@ int set_servo_pwm(int channel, int pwm);
  */
 int advance_simulation(uint32_t steps, sitl_state_data_t *state_data);
 
+/**
+ * @brief Retrieves the latest SITL state data without advancing the simulation.
+ *
+ * This function provides access to the most recent SITL state data
+ * that was obtained from the Gazebo simulation. It does not advance
+ * the simulation but simply returns the last known state.
+ *
+ * @param state_data Pointer to a sitl_state_data_t struct to store the state data
+ * @return 1 on success, 0 on failure
+ */
+int get_latest_sitl_state(sitl_state_data_t *state_data);
+
 #ifdef __cplusplus
 }
 #endif

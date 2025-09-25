@@ -25,7 +25,8 @@
 #include "ardupilot_virtuals.c"
 #if ENABLE_LIBGZ
     #include "gazebo_wrapper.h"
-    #include "gazebo.c"
+    // #include "gazebo.c"
+    #include "ardurover_virtuals.c"
 #endif
 
 // External dependencies from core.c
@@ -64,10 +65,10 @@ cb_entry_t cb_registry[] = {
 #endif
 	{ "debug_log", debug_log},
 #if ENABLE_LIBGZ
-    { "gz_service", gz_service},
-    { "compass_block_read", compass_block_read},
-    { "send_mavlink_gps_data", send_mavlink_gps_data},
-    { "gz_advance_simulation", gz_advance_simulation},
+    // { "gz_service", gz_service},
+    // { "compass_block_read", compass_block_read},
+    // { "send_mavlink_gps_data", send_mavlink_gps_data},
+    // { "gz_advance_simulation", gz_advance_simulation},
 #endif
     { "storage_read_block", storage_read_block},
     { "storage_write_block", storage_write_block},
