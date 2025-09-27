@@ -19,7 +19,7 @@ def extract_symbols(elf_path, out_path="map.txt"):
         # Write out map.txt
         with open(out_path, "w") as out:
             for name, addr in symbols:
-                out.write(f"{name}:{addr:x}\n")
+                out.write(f"{name}:0x{addr:x}\n")
 
     print(f"Wrote {len(symbols)} symbols to {out_path}")
 

@@ -1,0 +1,7 @@
+0x8108fe0 storage_read_block *
+0x8109010 storage_write_block *
+0x81793ec hrt_micros64 *
+0x08176c1a ap_hal_micros32 
+0x8020efc chDbgContextSwitching 
+0x817b618 raiseirq 44
+0x80e12fc debug_reached 

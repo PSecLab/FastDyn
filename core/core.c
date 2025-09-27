@@ -40,7 +40,6 @@ int isdigit(int c);
 #include <utils.h>
 #include <device.h>
 #include <config.h>
-#include <bfd_hash_table.h>
 #if ENABLE_LIBPY
 #include <python.h>
 #endif
@@ -179,19 +178,8 @@ int parse_update_line(const char *line, UpdateEntry *entry) {
     // First token: update_point
     token = strtok(buf, " \t");
     if (!token) return -1;
-    if (strncmp(token, "0x", 2) != 0) {
-        unsigned long addr;
-        get_symbol_address(token, &addr);
-        if (addr == 0) {
-            fprintf(stderr, "Unknown symbol: %s\n", token);
-            return -1;
-        }
-        printf("Resolved symbol %s to address 0x%lx\n", token, addr);
-        entry->update_point = addr - 1; // Thumb mode adjustment
-    } else {
-        entry->update_point = strtoul(token, &endptr, 0);
-        if (*endptr != '\0') return -1;
-    }
+    entry->update_point = strtoul(token, &endptr, 0);
+    if (*endptr != '\0') return -1;
 
     // Second token: target (rX, [rX] or 0xADDRESS)
 	token = strtok(NULL, " \t");
@@ -611,20 +599,7 @@ void parse_rules_file(const char *filename) {
             break;
         }
 
-        unsigned long addr = 0;
-        if (strncmp(addr_str, "0x", 2) != 0) {
-            get_symbol_address(addr_str, &addr);
-            if (addr == 0) {
-                fprintf(stderr, "Unknown symbol: %s (line: '%s')\n", addr_str, line);
-                continue;
-            }
-            printf("Resolved symbol %s to address 0x%lx\n", addr_str, addr);
-            rules[rules_count].address = addr - 1; // Thumb mode adjustment
-        } else {
-            addr = strtoull(addr_str, NULL, 0);
-            rules[rules_count].address = addr;
-        }
-
+        rules[rules_count].address = strtoull(addr_str, NULL, 0);
         rules[rules_count].func = cb;
 
         if (n == 3) {
@@ -655,14 +630,6 @@ static int core_parse_arguments(int argc, char ** argv) {
             num_tuples = read_tuples_from_file(filename, address_tuples, MAX_TUPLES);
     }
 
-    filename = utils_get_arg("map", argc, argv);
-    if (filename) {
-        printf("Loading symbols from: %s\n", filename);
-        if (!populate_symbol_table(filename)) {
-            fprintf(stderr, "Failed to populate symbol table from map file: %s\n", filename);
-        }
-    }
-
     filename = utils_get_arg("modifier", argc, argv);
     if (filename) {
         load_update_entries(filename);
@@ -683,8 +650,6 @@ static int core_parse_arguments(int argc, char ** argv) {
     if (filename) {
         runtime = filename; // Lazy Init
     }
-
-    cleanup_bfd();
 
 	return 0;
 }

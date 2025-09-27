@@ -79,9 +79,9 @@ qemu_include = include_directories(
 local_include = include_directories('include')
 
 # Find BFD and libiberty
-bfd_dep = cc.find_library('bfd', required: true)
+# bfd_dep = cc.find_library('bfd', required: true)
 
-deps += bfd_dep
+# deps += bfd_dep
 # deps += iberty_dep
 
 # --- Collect all source files
@@ -90,7 +90,6 @@ srcs += files(
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
-  'libs/map_table.c',
   'libs/ring_buffer.c',
   'libs/mavlink_lib.c',
 )
