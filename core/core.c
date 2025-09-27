@@ -655,10 +655,12 @@ static int core_parse_arguments(int argc, char ** argv) {
             num_tuples = read_tuples_from_file(filename, address_tuples, MAX_TUPLES);
     }
 
-    filename = utils_get_arg("symbols", argc, argv);
+    filename = utils_get_arg("map", argc, argv);
     if (filename) {
         printf("Loading symbols from: %s\n", filename);
-        populate_symbol_table(filename);
+        if (!populate_symbol_table(filename)) {
+            fprintf(stderr, "Failed to populate symbol table from map file: %s\n", filename);
+        }
     }
 
     filename = utils_get_arg("modifier", argc, argv);

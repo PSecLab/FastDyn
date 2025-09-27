@@ -1,5 +1,5 @@
-#ifndef BFD_HASH_TABLE_H
-#define BFD_HASH_TABLE_H
+#ifndef MAP_TABLE_H
+#define MAP_TABLE_H
 
 #include <bfd.h>
 #include <stddef.h>
@@ -10,10 +10,10 @@
  * This function reads the symbol table from the specified ELF file
  * and populates a hash table mapping symbol names to their addresses.
  *
- * @param elf_name The path to the ELF file.
+ * @param map_filename The path to the map file.
  * @return int 0 on success, -1 on failure.
  */
-int populate_symbol_table(const char *elf_name);
+int populate_symbol_table(const char *map_filename);
 
 /**
  * @brief Clean up BFD resources.
@@ -35,4 +35,4 @@ void cleanup_bfd(void);
  */
 void get_symbol_address(const char *symbol_name, unsigned long *address);
 
-#endif // BFD_HASH_TABLE_H
+#endif // MAP_TABLE_H
