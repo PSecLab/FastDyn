@@ -25,7 +25,6 @@
 #include "ardupilot_virtuals.c"
 #if ENABLE_LIBGZ
     #include "gazebo_wrapper.h"
-    // #include "gazebo.c"
     #include "ardurover_virtuals.c"
 #endif
 
@@ -49,8 +48,6 @@ extern void qemu_set_register(uint32_t value, int reg);
  */
 cb_entry_t cb_registry[] = {
 	{ "printreg", printreg },
-    { "updatepc", updatepc },
-    { "updatereg", updatereg},
     { "updatemem", updatemem},
     { "randstate", randstate},
     { "raiseirq", raiseirq },
@@ -60,10 +57,10 @@ cb_entry_t cb_registry[] = {
     { "timer_start", timer_start},
     { "start_budgeting", start_budgeting},
     { "dyninst_lib", dyninst_lib},
+    { "debug_log", debug_log},
 #if ENABLE_LIBPY
     { "fastdyn_callback", fastdyn_callback},
 #endif
-	{ "debug_log", debug_log},
 #if ENABLE_LIBGZ
     // { "gz_service", gz_service},
     // { "compass_block_read", compass_block_read},
@@ -120,6 +117,14 @@ void updatemem(unsigned int cpu_index, void *udata) {
     if (parse_update_mem_arg(input, &mem) == 0) {
         if (mem.mode == 'r') {
             qemu_plugin_read_memory(mem.address, mem.buffer, mem.length);
+            printf("Read %u bytes from 0x%08x: ", mem.length, mem.address);
+            for (uint32_t i = 0; i < mem.length; i++) {
+                printf("0x%02x", mem.buffer[i]);
+                if (i < mem.length - 1) {
+                    printf(", ");
+                }
+            }
+            printf("\n");
         } else {
             qemu_plugin_write_memory(mem.address, mem.buffer, mem.length);
         }
@@ -206,28 +211,6 @@ void printreg(unsigned int cpu_index, void *udata) {
 	printf("Reg %lu:0x%08x\n", reg, qemu_get_register(reg));
 }
 
-void updatepc(unsigned int cpu_index, void *udata) {
-    const char *s = (const char *) udata;
-    if (s[0] != '*') {
-        printf("Wrong usage of CF affecting virtual function \n");
-        return;
-    }
-    unsigned long addr = strtoul((s + 1), NULL, 16);
-
-    qemu_plugin_set_register((uint8_t *) &addr, ARM_V7M_PC);
-}
-
-void updatereg(unsigned int cpu_index, void *udata) {
-    FloatConverter fc;
-    fc.f = 3.14;
-    qemu_set_register(fc.i, ARM_V7M_S0);
-    DoubleConverter dc;
-    dc.d = 3.14;
-    qemu_plugin_set_register((uint8_t *)&dc.i, ARM_V7M_D4);
-    fc.i = qemu_get_register(ARM_V7M_S0);
-    DEBUG_LOG("Hello %f \n", fc.f);
-}
-
 void timer_start(unsigned int cpu_index, void *udata) {
     const char *msg = "Hello from QEMU timer!";
 #if 00
@@ -265,7 +248,6 @@ void dumplogger(unsigned int cpu_index, void *udata) {
     dump_log_buffer_to_file(&addressLists[entry.idx], entry.file_name);
 }
 
-// Helper functions that need to be implemented or declared
 unsigned long long* parse_addresses(const char *input, size_t *count) {
     // Make a copy of input so we don't modify the original
     char *input_copy = strdup(input);

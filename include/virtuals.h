@@ -7,7 +7,22 @@
 #include "config.h"
 #include "ardupilot_virtuals.h"
 
-// Virtual instruction functions
+/**
+ * @brief Print the value of a CPU register.
+ *
+ * This virtual instruction prints the value of a specified CPU register
+ * to the standard output. The register number is provided as a hexadecimal
+ * string in the `udata` parameter.
+ *
+ * Example usage in virtuals.txt:
+ *
+ * - `0xDEADBEEF printreg 0x0      # Prints the value of register 0 (R0)`
+ *
+ * - `0xDEADBEEF printreg 0xF      # Prints the value of register 15 (PC)`
+ *
+ * @param cpu_index Index of the CPU invoking the plugin (unused here).
+ * @param udata     Pointer to a string containing the register number in hex.
+ */
 void printreg(unsigned int cpu_index, void *udata);
 
 /**
@@ -18,7 +33,8 @@ void printreg(unsigned int cpu_index, void *udata);
  * For example, interrupt number 28 should be raised using the number 44 (28 + 16 for ARM Cortex-M).
  *
  * Example usage in virtuals.txt:
- * 0xDEADBEEF raiseirq 44
+ *
+ * - `0xDEADBEEF raiseirq 44`
  */
 void raiseirq(unsigned int cpu_index, void *udata);
 
@@ -30,43 +46,162 @@ void raiseirq(unsigned int cpu_index, void *udata);
  * For example, interrupt number 28 should be pulsed using the number 44 (28 + 16 for ARM Cortex-M).
  *
  * Example usage in virtuals.txt:
- * 0xDEADBEEF pulseirq 44
+ *
+ * -  `0xDEADBEEF pulseirq 44`
  */
 void pulseirq(unsigned int cpu_index, void *udata);
 
-void updatepc(unsigned int cpu_index, void *udata);
-void updatereg(unsigned int cpu_index, void *udata);
+/**
+ * @brief Update or read emulated memory based on a string command.
+ *
+ * This function parses a memory access command string provided in @p udata
+ * and performs either a memory read or write through the QEMU plugin
+ * interface.
+ *
+ * The command string must follow the format:
+ * @code
+ * <address>:<mode>:<length>:<byte0>,<byte1>,...,<byteN>
+ * @endcode
+ *
+ * - <address> : Memory address in decimal or hex (e.g., 1024, 0x20000000).
+ *
+ * - <mode>    : Either 'r' (read) or 'w' (write).
+ *
+ * - <length>  : Number of bytes to read/write.
+ *
+ * - <byteX>   : Comma-separated list of byte values (decimal or hex).
+ *                  The number of values must match <length>.
+ *
+ * Example usages:
+ *
+ * - Write 4 bytes at address 0x20001000:
+ *   @code
+ *   0x20001000:w:4:0x12,0x34,0x56,0x78
+ *   @endcode
+ *
+ * - Read 3 bytes from address 0x20001000:
+ *   @code
+ *   0x20001000:r:3:0,0,0,0
+ *   @endcode
+ *   (dummy byte values are still required for read mode)
+ *
+ * @param cpu_index Index of the CPU invoking the plugin (unused here).
+ * @param udata     Pointer to a string containing the memory access command.
+ */
 void updatemem(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Randomize the state of registers and memory addresses.
+ *
+ * This function takes a comma-separated list of addresses from the input string
+ * provided in `udata`. It randomizes the values at these addresses, either in
+ * registers (if the address is less than 100) or in memory (if the address is 100 or greater).
+ * The program counter (PC) register (address 15) is excluded from randomization.
+ *
+ * Example usage:
+ *
+ * - Randomize registers R0, R1, and memory address 0x20001000:
+ *  `0xDEADBEEF randstate 0,1,0x20001000`
+ *
+ * @param cpu_index Index of the CPU invoking the plugin (unused here).
+ * @param udata     Pointer to a string containing comma-separated addresses.
+ */
 void randstate(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Dump the log buffer of a specified address list to a file.
+ *
+ * This function takes an input string in the format `<index>:<filename>`,
+ * where `<index>` is the index of the address list to dump, and `<filename>`
+ * is the name of the file to which the log buffer will be written.
+ *
+ * Example usage:
+ *
+ * - Dump the log buffer of address list 0 to "log_output.bin":
+ *   `0xDEADBEEF dumplogger 0:log_output.bin`
+ *
+ * @param cpu_index Index of the CPU invoking the plugin (unused here).
+ * @param udata     Pointer to a string containing the index and filename.
+ */
 void dumplogger(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Write a file's contents into emulated memory at a specified address.
+ *
+ * This function takes an input string in the format `<address>:<filename>`,
+ * reads the contents of the specified file, and writes it into the emulated
+ * memory at the given address.
+ *
+ * Example usage:
+ *
+ * - Write the contents of "input.bin" into memory starting at address 0x20001000:
+ *   `0xDEADBEEF dyninst 0x20001000:input.bin`
+ *
+ * @param cpu_index Index of the CPU invoking the plugin (unused here).
+ * @param udata     Pointer to a string containing the address and filename.
+ */
 void dyninst(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Load an ELF file into the emulated environment.
+ *
+ * This function uses the QEMU plugin interface to load an ELF file
+ * specified by the `udata` parameter into the emulated environment.
+ *
+ * Example usage:
+ *
+ * - Load the ELF file "module.elf":
+ *
+ *   `0xDEADBEEF dyninst_lib module.elf`
+ *
+ * @param cpu_index Index of the CPU invoking the plugin (unused here).
+ * @param udata     Pointer to a string containing the ELF filename.
+ */
 void dyninst_lib(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief TODO: Hammad please fill out how you use this
+ */
 void fastdyn_callback(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Example use of QEMU timer to call a function periodically.
+ *
+ * This function sets up a periodic timer that calls `my_timer_callback`
+ * every 1 millisecond (1e6 nanoseconds). The callback function prints the
+ * current value of the virtual timer.
+ *
+ * Example usage:
+ *
+ * - `0xDEADBEEF timer_start`
+ *
+ * You should not modify the PC in your callback function. Undefined behavior may occur.
+ *
+ * @param cpu_index Index of the CPU invoking the plugin (unused here).
+ * @param udata     Pointer to user data (unused here).
+ */
 void timer_start(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief TODO: Arslan
+ */
 void start_budgeting(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Log a debug message with a timestamp.
+ *
+ * This function logs a debug message along with the CPU index and a timestamp
+ * in seconds with microsecond precision. The message is provided in the
+ * `udata` parameter.
+ *
+ * Example usage:
+ *
+ * - `0xDEADBEEF debug_log "This is a debug message"`
+ *
+ * @param cpu_index Index of the CPU invoking the plugin.
+ * @param udata     Pointer to a string containing the debug message.
+ */
 void debug_log(unsigned int cpu_index, void *udata);
-
-/**
- * @brief Callbacks to communicate with gazebo
- */
-#if ENABLE_LIBGZ
-void gz_service(unsigned int cpu_index, void *udata);
-
-/**
- * @brief Wheel Encoder Copy state to Frontend function
- */
-void copy_state_to_frontend(unsigned int cpu_index, void *udata);
-
-/**
- * @brief Compass Block Read function
- */
-void compass_block_read(unsigned int cpu_index, void *udata);
-
-/**
- * @brief Send mavlink GPS to firmware
- */
-void send_mavlink_gps_data(unsigned int cpu_index, void *udata);
-#endif
 
 // Helper functions
 unsigned char get_random_byte(void);
