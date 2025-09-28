@@ -1,0 +1,7 @@
+cmsis-svd==0.6
+colorama==0.4.6
+lxml==6.0.1
+numpy==2.3.2
+scipy==1.16.1
+six==1.17.0
+tomli==2.2.1
