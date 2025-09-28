@@ -50,6 +50,10 @@ args = ["TIM1_BRK_TIM9"]
 at = "main+8"
 patch = "r15 <- r14"
 
+[[CPU.modifiers]]
+at = "main+12"
+patch = "r2 <- r3"
+
 
 # ==============================================================================
 #                              Device Configuration

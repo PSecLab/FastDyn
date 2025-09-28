@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 import tomli  # For Python < 3.11, install with: pip install tomli
 # For Python 3.11+, you can use: import tomllib
 import sys
@@ -8,6 +7,134 @@ from utils.svd_helper import *
 # Import colorama for highlighted output
 # If you don't have it, install with: pip install colorama
 from colorama import init, Fore, Style
+
+def parse_symbol(s: str):
+    """
+    Parse a string into (symbol, offset).
+    If string is just a symbol, offset is 0.
+    If string is 'symbol+<num>', offset is the integer value.
+    """
+    match = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]*)(?:\+(\d+))?', s.strip())
+    if not match:
+        raise ValueError(f"Invalid input: {s}")
+
+    symbol = match.group(1)
+    offset = int(match.group(2)) if match.group(2) else 0
+    return symbol, offset
+
+def is_number(value: str) -> str:
+    """
+    Check if the given value is an integer, hex, or not a number.
+
+    Returns:
+        "hex" if value is hexadecimal,
+        "int" if value is integer,
+        "none" otherwise.
+    """
+    # Check for hex (0x prefix and valid hex digits)
+    if re.fullmatch(r"0x[0-9A-Fa-f]+", value):
+        return "hex"
+    # Check for decimal integer
+    if re.fullmatch(r"\d+", value):
+        return "int"
+    return "none"
+
+
+def is_cortexm_register(value: str) -> bool:
+    """
+    Check if a string is a valid Cortex-M register.
+    Valid ranges:
+      - r0–r15
+      - s0–s31
+      - d0–d15
+    """
+    # Match r0–r15
+    if re.fullmatch(r"r([0-9]|1[0-5])", value):
+        return True
+    # Match s0–s31
+    if re.fullmatch(r"s([0-9]|[12][0-9]|3[01])", value):
+        return True
+    # Match d0–d15
+    if re.fullmatch(r"d([0-9]|1[0-5])", value):
+        return True
+    return False
+
+
+def load_symbol_addresses(filename: str) -> dict[str, int]:
+    """
+    Reads a file with lines of format: symbol:address
+    and returns a dictionary mapping symbol -> address.
+    """
+    symbols = {}
+    with open(filename, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            symbol, address = line.split(":", 1)  # split only once
+            address = int(address.strip(), 16)
+            # check if address is thumb (odd)
+            if address & 1:
+                address -= 1  # make even
+            symbols[symbol.strip()] = address
+    return symbols
+
+
+def convert_config_file(symbols_dict: dict[str, int], input_file: list[str], output: str) -> bool:
+    """
+    Convert the virtuals/modifiers file content.
+    """
+    with open(output, "w") as output_file:
+        for line in input_file:
+            line = line.strip()
+            if not line:
+                continue
+            tokens = line.split()
+
+            # first token could be a symbol
+            first_token = tokens[0]
+            if is_number(first_token) == "none":
+                symbol, offset = parse_symbol(first_token)
+                if symbol in symbols_dict:
+                    resolved_address = symbols_dict[symbol]
+                    if resolved_address & 1:  # if thumb, make even
+                        resolved_address -= 1
+                    first_token = hex(resolved_address + offset)
+                else:
+                    print(f"Warning: {first_token} not found in symbols dictionary")
+                    return False
+
+            # second token will be the name of the virtual instruction, register, or memory location
+            second_token = tokens[1]
+
+            # third token if it exists could be a symbol
+            third_token = None
+            if len(tokens) > 2:
+                third_token = tokens[2]
+                if "*" in third_token or "[" in third_token or "]" in third_token or is_cortexm_register(third_token):
+                    pass
+                elif is_number(third_token) == "none":
+                    if third_token in symbols_dict:
+                        third_token = hex(symbols_dict[third_token])
+                    else:
+                        print(f"Warning: {third_token} not found in symbols dictionary")
+                        return False
+
+            output_file.write(f"{first_token} {second_token} {third_token if third_token else ''}\n")
+
+    return True
+
+def extract_regs(expr: str):
+    """
+    Given a patch expression like 'r2 <- r3',
+    return the left and right operands as strings.
+    """
+    parts = expr.split("<-")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid expression: {expr}")
+    left = parts[0].strip()
+    right = parts[1].strip()
+    return left, right
 
 def load_config(config_path):
     """
@@ -136,7 +263,7 @@ def svd_irq_map(svd_device):
                 name_map[interrupt.name] = interrupt.value
     return name_map
 
-def generate_config_files(config, output_dir, irq_map):
+def generate_config_files(config, output_dir, irq_map, symbols_dict):
     """
     Generates the flat configuration files required by the QEMU plugin.
     """
@@ -153,50 +280,51 @@ def generate_config_files(config, output_dir, irq_map):
     virtuals = cpu_conf.get('virtuals', [])
     if virtuals:
         virtuals_path = os.path.join(output_dir, 'virtuals.txt')
-        with open(virtuals_path, 'w') as f:
-            for virt in virtuals:
-                args_str = " ".join(virt.get('args', []))
-                if (virt.get('instruction') == "raise_irq"):
-                    if args_str not in irq_map:
-                        print(Fore.RED + Style.BRIGHT + "❌ Error: Invalid Interrupt for IRQ")
-                        sys.exit()
-                    args_str = str(irq_map[args_str])
-                f.write(f"{virt.get('at')} {virt.get('instruction')} {args_str}\n")
+        virtuals_ir = []
+        for virt in virtuals:
+            args_str = " ".join(virt.get('args', []))
+            if (virt.get('instruction') == "raise_irq"):
+                if args_str not in irq_map:
+                    print(Fore.RED + Style.BRIGHT + "❌ Error: Invalid Interrupt for IRQ")
+                    sys.exit()
+                args_str = str(irq_map[args_str])
+            virtuals_ir.append(f"{virt.get('at')} {virt.get('instruction')} {args_str}\n")
+        convert_config_file(symbols_dict, virtuals_ir, virtuals_path)
         print(Fore.GREEN + f"  ✅ Wrote {len(virtuals)} instructions to {virtuals_path}")
 
     # --- Generate modifiers.txt ---
     modifiers = cpu_conf.get('modifiers', [])
     if modifiers:
         modifiers_path = os.path.join(output_dir, 'modifiers.txt')
-        with open(modifiers_path, 'w') as f:
-            for mod in modifiers:
-                # Note: This writes the TOML format directly.
-                # A translation step could be added here if the plugin needs a different format.
-                f.write(f"{mod.get('at')} {mod.get('patch')}\n")
+        modifiers_ir = []
+        for mod in modifiers:
+            lhs, rhs = extract_regs(mod.get('patch'))
+            modifiers_ir.append(f"{mod.get('at')} {lhs} {rhs}\n")
+        convert_config_file(symbols_dict, modifiers_ir, modifiers_path)
         print(Fore.GREEN + f"  ✅ Wrote {len(modifiers)} patches to {modifiers_path}")
 
     # --- Generate Elder Scroll INI file ---
     device_conf = config.get('Device', {})
     elder_model_conf = device_conf.get('Models', {}).get('elder', {})
     scroll_file_path = elder_model_conf.get('scroll_file')
-    
+
     if scroll_file_path:
         full_scroll_path = os.path.join(output_dir, os.path.basename(scroll_file_path))
         final_scroll_content = []
         for device_name, device_data in device_conf.items():
             if device_name == 'Models' or not isinstance(device_data, dict):
                 continue
-            
+
             # Check if this device has an enabled handler for the elder model
             is_elder_handled = any(h.get('model') == 'elder' and h.get('enabled') for h in device_data.get('handlers', []))
-            
+
             if is_elder_handled and 'scroll_config' in device_data:
                 # Calculate base and size from ranges
                 range_str = device_data.get('ranges', ["0x0-0x0"])[0]
                 start_str, end_str = range_str.split('-')
                 base_addr = int(start_str, 16)
                 size = int(end_str, 16) - base_addr + 1
-                
+
                 # Append base and size to the device's scroll config
                 scroll_snippet = device_data['scroll_config'].strip()
                 scroll_snippet += f"\nbase = {hex(base_addr)}\nsize = {hex(size)}\n"
@@ -215,16 +343,18 @@ if __name__ == "__main__":
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("config_path", help="Path to the TOML configuration file.")
+    parser.add_argument("map_file", help="Path to the symbol map file.")
     parser.add_argument(
         "-o", "--output",
         default='out',
         metavar="OUTPUT_DIR",
         help="Directory to place the generated files (default: './out')."
     )
-    
+
     args = parser.parse_args()
 
     config = load_config(sys.argv[1])
+    map_file = sys.argv[2]
     svd_file_map = discover_svd_files()
     parse_and_print_config(config)
     cpu_config = config.get('CPU', {})
@@ -238,7 +368,5 @@ if __name__ == "__main__":
     irqmap = svd_irq_map(svd_device)
     print(Fore.GREEN + "✅ SVD file loaded and parsed.\n")
 
-    generate_config_files(config, args.output, irqmap)
-
-
-
+    symbols_dict = load_symbol_addresses(map_file)
+    generate_config_files(config, args.output, irqmap, symbols_dict)
