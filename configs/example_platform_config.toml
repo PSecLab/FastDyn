@@ -41,7 +41,7 @@ logger_content = """
 # --- Virtual Instructions (Structured) ---
 # Each block defines a single virtual instruction to be registered.
 [[CPU.virtuals]]
-at = "main+1"
+at = "main+8"
 instruction = "raiseirq"
 args = ["TIM1_BRK_TIM9"]
 

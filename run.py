@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 from dotenv import load_dotenv
 
-DEBUG=True
+DEBUG=False
 
 
 def parse_symbol(s: str):
@@ -380,10 +380,13 @@ def generate_config_files(config, output_dir, irq_map, symbols_dict):
         for virt in virtuals:
             args_str = " ".join(virt.get('args', []))
             if (virt.get('instruction') == "raise_irq"):
-                if args_str not in irq_map:
-                    print(Fore.RED + Style.BRIGHT + "❌ Error: Invalid Interrupt for IRQ")
-                    sys.exit()
-                args_str = str(irq_map[args_str])
+                if args_str in irq_map:
+                    args_str = str(irq_map[args_str])
+                else:
+                    # check if it's already a number
+                    if not args_str.isdigit():
+                        print(Fore.RED + Style.BRIGHT + "❌ Error: Invalid Interrupt for IRQ") 
+                        sys.exit()
             virtuals_ir.append(f"{virt.get('at')} {virt.get('instruction')} {args_str}\n")
         convert_config_file(symbols_dict, virtuals_ir, virtuals_path)
         generated_files['virtuals'] = virtuals_path
