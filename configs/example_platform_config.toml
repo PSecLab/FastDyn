@@ -98,7 +98,7 @@ internal_model = "uart_model"
 
     [[Device.uart.handlers]]
         model   = "elder"
-        enabled = false
+        enabled = true
         scroll = "/home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so"
 
     [[Device.uart.handlers]]

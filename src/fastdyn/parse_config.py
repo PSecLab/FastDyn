@@ -52,7 +52,7 @@ class DevConfig:
 
         #add info for the backends
         for model, info in models_ranges.items():
-            info['backend'] = models_backend[model]
+            info['backend'] = models_backend[model].get('backend')
 
         self.devices_custom = models_ranges
 
@@ -74,6 +74,9 @@ class DevConfig:
                     if model != 'qemu':
                         if model not in model_ranges:
                             model_ranges[model] = {}
+                            model_ranges[model]["overall"] = []
+
+                        model_ranges[model]["overall"].extend(device_data.get('ranges', []))
                         if model == 'elder':
                             if handler.get('scroll') is not None:
                                 model_ranges[model][device_name] = {"range": device_data.get('ranges', []), "scroll": handler.get('scroll')}

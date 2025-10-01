@@ -3,21 +3,24 @@ Main file is responsible for kicking the qemu command.
 '''
 import logging
 import argparse
+import os, shutil
 
 from dotenv import load_dotenv
 
 
+from . import gen_config    #generate the files for the configs.
 from . import parse_config  #Parse the config
 from . import fastdyn_log
+
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
 
 
 #build qemu command
-def build_qemu_cmd(dev_config):
-    cmd = {
+def build_qemu_cmd(dev_config, dev_config_path):
 
+    cmd = {
 
     }
 
@@ -31,11 +34,24 @@ def build_qemu_cmd(dev_config):
 
 #This function is responsible for running the qemu command based on the inputs
 def run_qemu(config, out_path):
+    if out_path is not None:
+        if not os.path.isdir(out_path):
+            log.warn(f"The output directory: {out_path} passed by the user does not exist.")
+    else:
+        out_path = "tmp"
 
+    if os.path.exists(out_path):
+        log.info(f"The output directory already exists at Path {out_path}. Deleting it!")
+        shutil.rmtree(out_path)
 
+    log.info(f"Creating output directory at path: {os.path.abspath(out_path)}")
+    os.makedirs(out_path)
 
+    #create json file for the device config
+    dev_config_path = gen_config._gen_dev_config(config, out_path)
+    log.info(f"Custom Devices Configuration written to : {dev_config_path}")
 
-    return None
+    build_qemu_cmd(config, dev_config_path)
 
 
 
@@ -58,7 +74,6 @@ def main():
 
     parser.add_argument(
         "-o", "--output",
-        default='out',
         metavar="OUTPUT_DIR",
         help="Directory to place the generated files (default: './out')."
     )

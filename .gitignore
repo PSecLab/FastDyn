@@ -6,3 +6,4 @@ cscope*
 Doxyfile.bak
 *.log
 *.egg-info
+*tmp
