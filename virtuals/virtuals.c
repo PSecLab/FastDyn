@@ -22,7 +22,7 @@
 #include <python.h>
 #endif
 #include <virtuals.h>
-#include "ardupilot_virtuals.c"
+// #include "ardupilot_virtuals.c"
 #if ENABLE_LIBGZ
     #include "gazebo_wrapper.h"
     #include "ardurover_virtuals.c"
@@ -67,12 +67,6 @@ cb_entry_t cb_registry[] = {
     // { "send_mavlink_gps_data", send_mavlink_gps_data},
     // { "gz_advance_simulation", gz_advance_simulation},
 #endif
-    { "storage_read_block", storage_read_block},
-    { "storage_write_block", storage_write_block},
-    { "hrt_micros64", hrt_micros64},
-    { "ap_hal_micros32", ap_hal_micros32},
-    { "chDbgContextSwitching", chDbgContextSwitching},
-    { "debug_reached", debug_reached},
 };
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);
