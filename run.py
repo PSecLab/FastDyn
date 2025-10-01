@@ -294,7 +294,7 @@ def build_qemu_command(config, temp_files, model_ranges):
     """Builds the full qemu-system-arm command from the configuration."""
     cmd = [os.getenv("QEMU_PATH", "qemu-system-arm")]
     device_conf = config.get('Device', {})
-    
+
     # --- Memory Config ---
     mem_conf = config.get('Memory', {})
     ram0_path = os.path.join(mem_conf.get('shared_mem_path', '/dev/shm'), mem_conf.get('main_ram_file'))
@@ -305,11 +305,11 @@ def build_qemu_command(config, temp_files, model_ranges):
         '-object', f"memory-backend-file,id=ram0,mem-path={ram0_path},size={mem_conf.get('main_ram_size')},share=on",
         '-object', f"memory-backend-file,id=ram1,mem-path={ram1_path},size={mem_conf.get('shared_ram_size')},share=on",
         '-global', 'cortexm-soc.shram_backend=ram1',
-        '-global', 'cortexm-soc.ram_baseaddr=0x20000000', 
+        '-global', 'cortexm-soc.ram_baseaddr=0x20000000',
         '-global', 'cortexm-soc.shram_baseaddr=0x30000000',
         '-global', 'armv7m.init-nsvtor=0x08000000'
     ])
-    
+
     # --- CPU Config ---
     cpu_conf = config.get('CPU', {})
     # TODO: Ugly hardcoding needs to go away
@@ -317,28 +317,28 @@ def build_qemu_command(config, temp_files, model_ranges):
     cmd.extend(['-kernel', cpu_conf.get('binary')])
     if cpu_conf.get('enable_gdb'): cmd.append('-s')
     if cpu_conf.get('stop_on_start'): cmd.append('-S')
-    
+
     # --- Device Config (QEMU native) ---
     for device_name, device_data in device_conf.items():
         if device_name == 'Models' or not isinstance(device_data, dict): continue
-        
+
         for handler in device_data.get('handlers', []):
             if handler.get('model') == 'qemu' and handler.get('enabled'):
                 base_addr = device_data.get('ranges', ["0x0-0x0"])[0].split('-')[0]
                 cmd.extend(['-device', f"{handler['type']},id={device_name},addr={base_addr}"])
-    
+
     # --- Plugin Config ---
     plugin_args = []
     plugin_lib_path = config.get('plugin', {}).get('library_path', './build/libfastdyn.so')
     plugin_args.append(plugin_lib_path)
-    
+
     if 'virtuals' in temp_files: plugin_args.append(f"virtual={temp_files['virtuals']}")
     if 'modifiers' in temp_files: plugin_args.append(f"modifier={temp_files['modifiers']}")
     if 'scroll_file' in temp_files:
         elder_model_conf = device_conf.get('Models', {}).get('elder', {})
         backend = elder_model_conf.get('backend')
         plugin_args.append(f"elder_scroll_config={backend}@{temp_files['scroll_file']}")
-    
+
     # Use the pre-calculated model ranges to build the 'dev' string
     dev_strings = []
     for model, ranges in model_ranges.items():
@@ -347,15 +347,15 @@ def build_qemu_command(config, temp_files, model_ranges):
         arg_str = f"{backend}*" if backend else ""
         range_str = "~".join(ranges)
         dev_strings.append(f"{model}:{arg_str}{range_str}")
-        
+
     if dev_strings:
         plugin_args.append(f"dev={'|'.join(dev_strings)}")
-        
+
     cmd.extend(['-plugin', ",".join(plugin_args)])
-    
+
     # --- Other fixed args ---
     cmd.extend(['-nographic', '-monitor', 'tcp:127.0.0.1:4444,server,nowait'])
-    
+
     return cmd
 
 def generate_config_files(config, output_dir, irq_map, symbols_dict):
@@ -385,7 +385,7 @@ def generate_config_files(config, output_dir, irq_map, symbols_dict):
                 else:
                     # check if it's already a number
                     if not args_str.isdigit():
-                        print(Fore.RED + Style.BRIGHT + "❌ Error: Invalid Interrupt for IRQ") 
+                        print(Fore.RED + Style.BRIGHT + "❌ Error: Invalid Interrupt for IRQ")
                         sys.exit()
             virtuals_ir.append(f"{virt.get('at')} {virt.get('instruction')} {args_str}\n")
         convert_config_file(symbols_dict, virtuals_ir, virtuals_path)
@@ -445,7 +445,7 @@ def run_qemu(config, dry_run=False, launch_gdb = False):
     init(autoreset=True)
     temp_dir = tempfile.mkdtemp(prefix="fastdyn_")
     print(Fore.BLUE + f"Created temporary directory: {temp_dir}")
-    
+
     try:
         # 1. Calculate and print model ranges
         model_ranges = calculate_model_ranges(config)
@@ -461,10 +461,10 @@ def run_qemu(config, dry_run=False, launch_gdb = False):
 
         # 2. Generate config files in the temp directory
         temp_files = generate_config_files(config, temp_dir, irqmap, symbols_dict)
-        
+
         # 3. Build the full QEMU command, passing in the calculated ranges
         qemu_command = build_qemu_command(config, temp_files, model_ranges)
-        
+
         # 4. Print the command
         if DEBUG:
             print(Style.BRIGHT + Fore.CYAN + "\n--- Assembled QEMU Command ---")
@@ -474,7 +474,7 @@ def run_qemu(config, dry_run=False, launch_gdb = False):
             f.write(Style.BRIGHT + Fore.CYAN + "\n--- Assembled QEMU Command ---\n")
             f.write(" \\\n    ".join(shlex.quote(arg) for arg in qemu_command) + "\n")
             f.write(Style.BRIGHT + Fore.CYAN + "--------------------------------\n")
-        
+
         # 5. Execute or perform a dry run
         if dry_run:
             print(Fore.YELLOW + Style.BRIGHT + "Dry run successful. QEMU was not executed.")
@@ -501,21 +501,21 @@ def run_qemu(config, dry_run=False, launch_gdb = False):
             print(Fore.YELLOW + Style.BRIGHT + f"Run: gdb-multiarch {config.get('CPU', {}).get('binary')}")
 
         qemu_process.wait()
-            
+
     except Exception as e:
         print(Fore.RED + Style.BRIGHT + f"\n❌ An error occurred during the launch process: {e}")
-    finally:
-        # 6. Clean up the temporary directory
-        shutil.rmtree(temp_dir)
-        print(Fore.BLUE + f"\nCleaned up temporary directory: {temp_dir}")
+    # finally:
+    #     # 6. Clean up the temporary directory
+    #     shutil.rmtree(temp_dir)
+    #     print(Fore.BLUE + f"\nCleaned up temporary directory: {temp_dir}")
 
 ###########################
-######   ##     ## ##    ## 
-##   ##  ##     ## ###   ## 
-##   ##  ##     ## ####  ## 
-######   ##     ## ## ## ## 
-##   ##  ##     ## ##  #### 
-##   ##  ##     ## ##   ### 
+######   ##     ## ##    ##
+##   ##  ##     ## ###   ##
+##   ##  ##     ## ####  ##
+######   ##     ## ## ## ##
+##   ##  ##     ## ##  ####
+##   ##  ##     ## ##   ###
 ##   ##   #######  ##    ##
 ###########################
 if __name__ == "__main__":
@@ -525,8 +525,16 @@ if __name__ == "__main__":
         description="Parse, display, and generate configurations from a FastDyn TOML file.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("config_path", help="Path to the TOML configuration file.")
-    parser.add_argument("map_file", help="Path to the symbol map file.")
+    parser.add_argument(
+        "-c", "--config-path",
+        required=True,
+        help="Path to the TOML configuration file."
+    )
+    parser.add_argument(
+        "-m","--map-file",
+        required=False,
+        default=None,
+        help="Path to the symbol map file.")
     parser.add_argument(
         "-o", "--output",
         default='out',
@@ -536,8 +544,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    config = load_config(sys.argv[1])
-    map_file = sys.argv[2]
+    config = load_config(args.config_path)
+    if args.map_file is not None:
+        map_file = args.map_file
+        symbols_dict = load_symbol_addresses(map_file)
+
     svd_file_map = discover_svd_files()
     parse_and_print_config(config)
     cpu_config = config.get('CPU', {})
@@ -550,10 +561,8 @@ if __name__ == "__main__":
     svd_device = parser.get_device()
     irqmap = svd_irq_map(svd_device)
     print(Fore.GREEN + "✅ SVD file loaded and parsed.\n")
-
-    symbols_dict = load_symbol_addresses(map_file)
 #    generated_files = generate_config_files(config, args.output, irqmap, symbols_dict)
     run_qemu(config)
-    
 
-    
+
+

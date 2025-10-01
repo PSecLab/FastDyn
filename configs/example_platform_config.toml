@@ -65,8 +65,6 @@ patch = "r15 <- r14"
 
 [Device.Models.elder]
     # The libhw backend is a global argument for the elder model.
-    # The scroll content is now defined per-device below.
-    backend = "stlink"
 
 [Device.Models.passthrough]
     backend = "stlink"
@@ -96,25 +94,27 @@ internal_model = "uart_model"
         model   = "qemu"
         type    = "stm32f2xx-usart" # QEMU-specific type
         enabled = true
+        args = "device chardev"
 
     [[Device.uart.handlers]]
         model   = "elder"
-        enabled = true
+        enabled = false
+        scroll = "/home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so"
 
     [[Device.uart.handlers]]
         model   = "passthrough"
-        enabled = false # This handler is defined but will be skipped for this device.
+        enabled = true # This handler is defined but will be skipped for this device.
 
 [Device.gpio_g]
     ranges = ["0x40021800-0x40021BFF"]
     description = "GPIO Port G for general-purpose I/O."
     # The configuration for this specific device when handled by the elder model.
-    scroll = "/home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so"
     [[Device.gpio_g.handlers]]
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "elder"
         enabled = true
+        scroll = "/home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so"
 
 [Device.unhandled_space]
     ranges = ["0x40000000-0x40010FFF", "0xE0000000-0xEFFFFFFF"]

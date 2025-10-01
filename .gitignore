@@ -4,3 +4,5 @@ cmsis-svd-data
 *__pycache__*
 cscope*
 Doxyfile.bak
+*.log
+*.egg-info

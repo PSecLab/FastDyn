@@ -1,8 +1,8 @@
 .PHONY: all clean docs
 
 qemu_path ?= ../../qemu
-LIBGZ ?= true
-LIBHW ?= false
+LIBGZ ?= false
+LIBHW ?= true
 DEV ?= true
 DEBUG_PRINT ?= false
 LIBPY ?= false

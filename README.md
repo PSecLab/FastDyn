@@ -1,7 +1,16 @@
 # FastDyn Plugins
 ## How to run?
+Install `Fastdyn` as a package using:
+   ```bash
+   ./setup.sh
+   ```
+You can pass the arguments using -c for configuration.toml, -m for symbol map file and -o for output dir. Further use:
+   ```bash
+   fastdyn --help
+   ```
+to get more information about our great tool.
 
-1. Make sacrifice for debugging gods so your debugging and rehosting goes smoothly.  
+1. Make sacrifice for debugging gods so your debugging and rehosting goes smoothly.
 
 2. Run the following command and pass the `qemu` path along with it like:
 
