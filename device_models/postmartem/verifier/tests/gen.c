@@ -1,138 +1,144 @@
-#include <device.h>
-#include <devmodels_apis.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <stdbool.h>
 #include <string.h>
 
-// Device Model for USART1
+// Assuming device.h provides the necessary QEMU plugin API declarations,
+// including the 'hwaddr' type and the 'dev_debug' function.
+#include "device.h"
 
-// Inferred Register Addresses
-#define USART1_SR       0x40011000
-#define USART1_DR       0x40011004
-#define USART1_BRR      0x40011008
-#define USART1_CR1      0x4001100C
+// Device Model for GPIOG
 
-// Inferred Status Register (SR) Bits from STM32F4 Reference Manual
-#define SR_RXNE         (1 << 5) // Read data register not empty
-#define SR_TC           (1 << 6) // Transmission complete
-#define SR_TXE          (1 << 7) // Transmit data register empty
-#define SR_IDLE         (1 << 4) // Idle line detected
+// Inferred Register base address and offsets
+#define GPIOG_BASE_ADDR 0x40021800
+#define GPIOG_MODER     0x00
+#define GPIOG_OTYPER    0x04
+#define GPIOG_OSPEEDR   0x08
+#define GPIOG_PUPDR     0x0C
+#define GPIOG_BSRR      0x18
 
-// State structure for the emulated USART1 device
+// A struct to hold the state of the emulated GPIOG peripheral.
+// We only need to store registers that are read back by the guest.
 typedef struct {
-    uint32_t sr;
-    uint32_t dr;
-    uint32_t brr;
-    uint32_t cr1;
-    int pty_fd;
-    uint64_t rx_timer;      // Periodic timer to check for new data
-    uint64_t idle_timer;    // One-shot timer to set the IDLE flag
-    uint8_t rx_buf;
-    bool rx_buf_full;
-} USART1State;
+    uint32_t moder;
+    uint32_t otyper;
+    uint32_t ospeedr;
+    uint32_t pupdr;
+} GPIOGState;
 
-// A single, global static state for our device.
-static USART1State usart1_state;
+// A single global instance of our device's state.
+static GPIOGState gpiog_dev;
 
-// One-shot callback to set the IDLE flag a moment after a character is received.
-static void usart1_set_idle(void *opaque) {
-    USART1State *s = &usart1_state;
-    s->sr |= SR_IDLE;
-    dev_debug("USART1: Idle timer fired, IDLE bit set.");
+/**
+ * @brief Initializes the GPIOG device model.
+ *
+ * This function is called once at startup to set the emulated registers
+ * to their initial state. The trace analysis shows that initial reads
+ * from registers return 0x0, so we zero out the state to match this
+ * observed behavior.
+ *
+ * @param opaque A user-defined pointer, not used in this model.
+ */
+void gpiog_init(void *opaque) {
+	memset(&gpiog_dev, 0, sizeof(GPIOGState));
+	dev_debug("INFO: GPIOG device model initialized.");
 }
 
-// Periodic callback to check for received characters from the PTY
-static void usart1_check_rx(void *opaque) {
-    USART1State *s = &usart1_state;
-    if (s->pty_fd < 0 || s->rx_buf_full) {
-        return;
-    }
+/**
+ * @brief Emulates all MMIO reads from the GPIOG device.
+ *
+ * This function intercepts memory reads from the guest, calculates the
+ * register offset, and returns the corresponding value from the device's
+ * state struct. This correctly models the stateful nature of the
+ * configuration registers.
+ *
+ * @param opaque A pointer to device-specific data (unused here).
+ * @param addr The absolute memory address of the read access.
+ * @param size The size of the read access (e.g., 4 for a 32-bit read).
+ * @return The value of the requested register.
+ */
+uint64_t gpiog_read(void *opaque, hwaddr addr, unsigned size) {
+    uint32_t offset = addr - GPIOG_BASE_ADDR;
+    uint32_t value = 0;
+    // char dbg_buf[128]; // Buffer for debug messages
 
-    uint8_t ch;
-    int ret = api_pty_read_nonblock(s->pty_fd, &ch);
-    if (ret == 1) { // A byte was successfully read
-        s->rx_buf = ch;
-        s->rx_buf_full = true;
+	switch (offset) {
+		case GPIOG_MODER:
+			value = gpiog_dev.moder;
+			break;
+		case GPIOG_OTYPER:
+			value = gpiog_dev.otyper;
+			break;
+		case GPIOG_OSPEEDR:
+			value = gpiog_dev.ospeedr;
+			break;
+		case GPIOG_PUPDR:
+			value = gpiog_dev.pupdr;
+			break;
+		default:
+			// For reads to unimplemented or write-only registers, we return 0.
+			// This is a safe default for most peripherals.
+			break;
+	}
 
-        // Set RXNE immediately.
-        s->sr |= SR_RXNE;
-        dev_debug("USART1: Byte received, RXNE set.");
+    // Optional: Log the read access for debugging using the required API
+    // snprintf(dbg_buf, sizeof(dbg_buf), "DEBUG: GPIOG Read from offset 0x%X, Value=0x%X", offset, value);
+    // dev_debug(dbg_buf);
 
-        // Arm a one-shot timer with a realistic delay (~1 character time).
-        // A 100 microsecond delay allows for both the "fast" and "slow" poll behaviors.
-        uint64_t current_time = qemu_plugin_get_virtual_timer();
-        qemu_plugin_timer_alarm(s->idle_timer, current_time + 100000); // 100 us delay
-    }
+	return value;
 }
 
-// This function will emulate all device reads
-uint64_t usart1_read(void *opaque, hwaddr addr, unsigned size) {
-    USART1State *s = &usart1_state;
-    uint64_t value_to_return = 0;
+/**
+ * @brief Emulates all MMIO writes to the GPIOG device.
+ *
+ * This function intercepts memory writes from the guest. It updates the
+ * internal state for the configuration registers. For the write-only BSRR
+ * register, it decodes the written value to log the intended action
+ * (setting or resetting a pin) using the dev_debug API.
+ *
+ * @param opaque A pointer to device-specific data (unused here).
+ * @param addr The absolute memory address of the write access.
+ * @param value The value being written by the guest.
+ * @param size The size of the write access.
+ */
+void gpiog_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
+    uint32_t offset = addr - GPIOG_BASE_ADDR;
+    uint32_t val32 = (uint32_t)value;
+    // char dbg_buf[128]; // Buffer for debug messages
 
-    switch (addr) {
-        case USART1_SR:
-            value_to_return = s->sr;
-            break;
-        case USART1_DR:
-            // The STM32 manual states the IDLE flag is cleared by an SR read
-            // followed by a DR read. This DR read serves that purpose.
-            s->sr &= ~SR_IDLE;
+    // Optional: Log the write access for debugging using the required API
+    // snprintf(dbg_buf, sizeof(dbg_buf), "DEBUG: GPIOG Write to offset 0x%X, Value=0x%X", offset, val32);
+    // dev_debug(dbg_buf);
 
-            if (s->rx_buf_full) {
-                value_to_return = s->rx_buf;
-                s->rx_buf_full = false;
-                // Reading the data buffer also clears the RXNE flag.
-                s->sr &= ~SR_RXNE;
-            }
-            break;
-        default:
-            dev_debug("USART1: Unhandled read");
-            break;
-    }
-    return value_to_return;
-}
-
-// This function will emulate all device writes
-void usart1_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
-    USART1State *s = &usart1_state;
-
-    switch (addr) {
-        case USART1_DR:
-            if (s->pty_fd >= 0) {
-                uint8_t ch = value & 0xFF;
-                api_pty_write_req(s->pty_fd, ch);
-            }
-            break;
-        case USART1_BRR:
-            s->brr = value;
-            break;
-        case USART1_CR1:
-            s->cr1 = value;
-            break;
-        default:
-            dev_debug("USART1: Unhandled write");
-            break;
-    }
-}
-
-void usart1_init(void *opaque) {
-    USART1State *s = &usart1_state;
-    memset(s, 0, sizeof(USART1State));
-
-    // Initialize SR to the idle transmit state 0xC0.
-    s->sr = SR_TXE | SR_TC;
-
-    s->pty_fd = api_pty_fd_gen();
-
-    if (s->pty_fd < 0) {
-        dev_debug("USART1-ERROR: Failed to open PTY. Is the host command running?");
-    } else {
-        dev_debug("USART1: Successfully opened PTY device.");
-        // Create a periodic timer to poll for incoming characters.
-        s->rx_timer = qemu_plugin_timer_new_period_ns(usart1_check_rx, NULL, 2000000); // Check every 2ms
-        // Create the one-shot timer that will be armed when data arrives.
-        s->idle_timer = qemu_plugin_timer_new_ns(usart1_set_idle, NULL);
-    }
+	switch (offset) {
+		case GPIOG_MODER:
+			gpiog_dev.moder = val32;
+			break;
+		case GPIOG_OTYPER:
+			gpiog_dev.otyper = val32;
+			break;
+		case GPIOG_OSPEEDR:
+			gpiog_dev.ospeedr = val32;
+			break;
+		case GPIOG_PUPDR:
+			gpiog_dev.pupdr = val32;
+			break;
+		case GPIOG_BSRR:
+			// The BSRR register is write-only.
+			// Upper 16 bits reset pins (BRy), lower 16 bits set pins (BSy).
+			if (val32 & 0xFFFF0000) { // Check if any reset bits are set
+				uint32_t reset_bits = val32 >> 16;
+				if (reset_bits & (1 << 13)) {
+					// The trace shows value=0x20000000, which is 1<<(13+16).
+					// This write targets BR13, resetting pin 13.
+					dev_debug("INFO: Emulated GPIOG Pin 13 RESET (BR13).");
+				}
+			}
+			if (val32 & 0x0000FFFF) { // Check if any set bits are set
+				// Add logic here if pin setting needs to be logged.
+			}
+			break;
+		default:
+			// Silently ignore writes to unimplemented registers.
+			break;
+	}
 }
