@@ -12,7 +12,7 @@ typedef struct {
     uint64_t size;
 } device_config_t;
 
-int parse_config(const char *filename, device_config_t *devices, int max_devices);
+int device_parse_config(const char *filename, device_config_t *devices, int max_devices);
 
 #endif
 

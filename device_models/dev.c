@@ -9,11 +9,17 @@
 // Global current device model
 static FILE * io_logger;
 
-static struct timespec start_ts;
-static DeviceModel *device_lut[NUM_SLOTS];
-static DeviceModel *system_lut[SYSTEM_NUM_SLOTS];
+typedef struct DeviceNode {
+    DeviceModel *dev;
+    struct DeviceNode *next;
+} DeviceNode;
+static const char* read_priority_device_name = "elder";
 
-static inline DeviceModel **dev_select_lut(hwaddr addr) {
+static struct timespec start_ts;
+static DeviceNode *device_lut[NUM_SLOTS] = {0};
+static DeviceNode *system_lut[SYSTEM_NUM_SLOTS] = {0};
+
+static inline DeviceNode **dev_select_lut(hwaddr addr) {
     switch (addr >> 28) { // top 4 bits
         case 0x4:
 		case 0x5:
@@ -48,63 +54,113 @@ static inline void dev_get_timestamp(time_t *sec, long *usec) {
 
 static int dev_write(char * handler, long unsigned int address, uint64_t value, long unsigned int size) {
 #ifdef DEV_LOGGER
-	uint64_t pc = core_get_pc();
-	time_t sec;
-	long usec;
-	dev_get_timestamp(&sec, &usec);
+    uint64_t pc = core_get_pc();
+    time_t sec;
+    long usec;
+    dev_get_timestamp(&sec, &usec);
 #endif
-	DeviceModel **lut = dev_select_lut(address);
-    hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
-	unsigned idx = dev_addr_to_slot(address, region_base);
+    DeviceNode **lut = dev_select_lut(address);
+    if (!lut) {
+#ifdef DEV_LOGGER
+        utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled (Unknown Region): \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+                        sec, usec, address, size, size * 2, value, pc);
+#endif
+        return 1; // Continue internal operation
+    }
 
-	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
-	if (dev) {
-			dev->write(dev->opaque, address, value, size);
+    hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
+    unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
+    unsigned idx = dev_addr_to_slot(address, region_base);
+
+    DeviceNode *node = (idx < max_slots) ? lut[idx] : NULL;
+    bool handled = false;
+
+    // Iterate through all devices registered at this address
+    while (node) {
+        DeviceModel *dev = node->dev;
+        if (dev) {
+            dev->write(dev->opaque, address, value, size);
+            handled = true;
 #ifdef DEV_LOGGER
-                utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-                        sec, usec, dev->name, address, size, size * 2, value, pc);
+            utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+                    sec, usec, dev->name, address, size, size * 2, value, pc);
 #endif
-	} else {
+        }
+        node = node->next;
+    }
+
+    if (!handled) {
 #ifdef DEV_LOGGER
-                utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+        utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
                         sec, usec, address, size, size * 2, value, pc);
 #endif
         dev_debug("IO Access not handled");
     }
 
-	if (handler && (handler[0] == 'g')) {
+    if (handler && (handler[0] == 'g')) {
            return 0;
     }
 
-	// Continue internal operation
-	return 1;
+    // Continue internal operation
+    return 1;
 }
 
+// TODO: Change the hardcoded priorty variable.
 static int dev_read(char * handler, long unsigned int address, uint64_t *buf, long unsigned int size) {
 #ifdef DEV_LOGGER
-	uint64_t pc = core_get_pc();
-	time_t sec;
+    uint64_t pc = core_get_pc();
+    time_t sec;
     long usec;
-	dev_get_timestamp(&sec, &usec);
+    dev_get_timestamp(&sec, &usec);
 #endif
-	uint64_t value;
-	DeviceModel **lut = dev_select_lut(address);
-	hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
-	unsigned idx = dev_addr_to_slot(address, region_base);
+    uint64_t value = 0; // Default value
+    DeviceNode **lut = dev_select_lut(address);
 
-
-
-	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
-    if (dev) {
-        value = dev->read(dev->opaque, address, size);
+    if (!lut) {
 #ifdef DEV_LOGGER
-		utils_log_to_file(io_logger, "[%5ld.%06ld] [%s] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-              sec, usec, dev->name, address, size, size * 2, value, pc);
+        utils_log_to_file(io_logger,
+            "[%5ld.%06ld] IO Read Access NOT Handled (Unknown Region): \t address=0x%08" PRIx64 ", size=%u bytes, pc=0x%08" PRIx64 "\n",
+            sec, usec, (uint64_t)address, size, (uint64_t)pc);
 #endif
+        return 1;
+    }
 
-		*buf = value;
-	}
-	else {
+    hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
+    unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
+    unsigned idx = dev_addr_to_slot(address, region_base);
+
+    DeviceNode *node = (idx < max_slots) ? lut[idx] : NULL;
+    DeviceModel *dev_to_use = NULL;
+
+    if (node) { // Check if at least one device exists
+        if (node->next == NULL) {
+            // Case 1: Only one device registered. Use it without checking priority.
+            dev_to_use = node->dev;
+        } else {
+            // Case 2: Multiple devices registered. Now, find the one with priority.
+            DeviceNode *current = node;
+            while (current) {
+                if (current->dev && current->dev->name && strcmp(current->dev->name, read_priority_device_name) == 0) {
+                    dev_to_use = current->dev;
+                    break; // Found the priority device
+                }
+                current = current->next;
+            }
+        }
+    }
+
+    if (dev_to_use) {
+        // A device was selected (either the single one, or the priority one from a list)
+        value = dev_to_use->read(dev_to_use->opaque, address, size);
+        *buf = value;
+#ifdef DEV_LOGGER
+        utils_log_to_file(io_logger, "[%5ld.%06ld] [%s] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+              sec, usec, dev_to_use->name, address, size, size * 2, value, pc);
+#endif
+    } else {
+        // This block is reached if:
+        // 1. No devices were registered at all (node was NULL).
+        // 2. Multiple devices were registered, but none matched the priority name.
 #ifdef DEV_LOGGER
         utils_log_to_file(io_logger,
             "[%5ld.%06ld] IO Read Access NOT Handled: \t address=0x%08" PRIx64 ", size=%u bytes, pc=0x%08" PRIx64 "\n",
@@ -113,13 +169,12 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
         dev_debug("IO Access not handled");
     }
 
-	if (handler && (handler[0] == 'g')) {
-		return 0;
-	}
+    if (handler && (handler[0] == 'g')) {
+        return 0;
+    }
 
-	// Continue internal operation
-	return 1;
-
+    // Continue internal operation
+    return 1;
 }
 
 // Base hardware reader and writer
@@ -172,15 +227,27 @@ void dev_irqret_hook(int number) {
 }
 
 void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev) {
-	DeviceModel **lut = dev_select_lut(start);
-	hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
+    DeviceNode **lut = dev_select_lut(start);
+    if (!lut) return; // Address range not supported
+
+    hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
     unsigned idx_start = dev_addr_to_slot(start, region_base);
     unsigned idx_end   = dev_addr_to_slot(end, region_base);
 
-    if (idx_end >= NUM_SLOTS) idx_end = NUM_SLOTS - 1;
+    unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
+    if (idx_end >= max_slots) idx_end = max_slots - 1;
 
     for (unsigned i = idx_start; i <= idx_end; i++) {
-        lut[i] = dev;
+        // Create a new node for the linked list
+        DeviceNode *newNode = (DeviceNode *)malloc(sizeof(DeviceNode));
+        if (!newNode) {
+            utils_die("Failed to allocate memory for device node");
+        }
+        newNode->dev = dev;
+
+        // Prepend the new node to the list at this slot
+        newNode->next = lut[i];
+        lut[i] = newNode;
     }
 }
 
@@ -331,7 +398,7 @@ void dev_print_config(const AppConfig* config) {
         printf("\nSection: [%s] (Backend: %s)\n", s->name, s->backend ? s->backend : "null");
         printf("All ranges:\n");
         for (int k=0; k<s->overall_range_count; k++){
-            printf("    %s:\n", s->overall_ranges[i]);
+            printf("    %s\n", s->overall_ranges[k]);
         }
         for (int j = 0; j < s->device_count; j++) {
             DeviceModels* d = &s->devices[j];

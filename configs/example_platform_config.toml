@@ -18,7 +18,7 @@ init_nsvtor = "0x08000000"
 # --- Core Emulation & Plugin Settings ---
 arch = "arm"
 machine = "cortexm"
-cpu = "cortex-m7"
+cpu = "cortex-m4"
 plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 platform = "STM32F469"

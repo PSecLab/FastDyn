@@ -120,7 +120,7 @@ internal_model = "uart_model"
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "elder"
-        enabled = false
+        enabled = true
         scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
 
     [[Device.gpiog.handlers]]

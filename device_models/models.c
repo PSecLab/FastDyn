@@ -6,7 +6,7 @@
 extern DeviceModel classic_model_def;
 #if ENABLE_LIBPY
 extern DeviceModel halucinator_model_def;
-#endif 
+#endif
 
 // The global, statically-defined array of device models.
 static DeviceModel *all_devices[] = {
