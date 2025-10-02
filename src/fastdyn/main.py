@@ -67,7 +67,7 @@ def build_qemu_cmd(config, dev_config_path):
     plugin_lib_path = cpu.get('plugin_library', './build/libfastdyn.so')
 
     plugin_configs = [
-        '-plugin', f"{plugin_lib_path},dev={dev_config_path}",
+        '--plugin', f"{plugin_lib_path},dev={dev_config_path}",
     ]
 
     cmd.extend(plugin_configs)
