@@ -41,29 +41,16 @@ int utils_init(int argc, char** argv) {
 	return 0;
 }
 
-int utils_parse_ranges(const char *s, Range *ranges, int max_ranges) {
-    int count = 0;
+void utils_parse_ranges(int range_count, char **overall_ranges, Range *ranges) {
     char buffer[256];
-    strncpy(buffer, s, sizeof(buffer));
-    buffer[sizeof(buffer)-1] = '\0';
-
-    char *token = strtok(buffer, "~");
-    while (token && count < max_ranges) {
-        // Remove leading spaces
-        while (*token == ' ') token++;
-
-        char *dash = strchr(token, '-');
-        if (dash) {
-            *dash = '\0';
-            ranges[count].start = strtoul(token, NULL, 0); // auto-detect hex with 0x
-            ranges[count].end   = strtoul(dash + 1, NULL, 0);
-            count++;
+    for (int i=0; i<range_count; i++) {
+        strncpy(buffer, overall_ranges[i], sizeof(buffer));
+        char *dash = strchr(buffer, '-');
+        if (dash){
+            ranges[i].start = strtoul(buffer, NULL, 0); // auto-detect hex with 0x
+            ranges[i].end   = strtoul(dash+1, NULL, 0);
         }
-
-        token = strtok(NULL, ",");
     }
-
-    return count;
 }
 
 int* utils_parse_interrupt_ranges(const char *s, int *int_nums){

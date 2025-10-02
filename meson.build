@@ -3,7 +3,8 @@ cc = meson.get_compiler('c')
 
 #glib support
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
-deps = [glib]
+cjson_dep = dependency('libcjson', required: true)
+deps = [glib, cjson_dep]
 srcs = []
 
 #debugging FLAGS

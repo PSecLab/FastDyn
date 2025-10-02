@@ -13,6 +13,31 @@
 /* Required for Elder model */
 #define DEV_LOGGER
 
+// Represents a single device model (e.g., "uart", "gpio_g")
+typedef struct {
+    char* name;
+    char* scroll_path;
+    char** ranges;
+    int range_count;
+    char* irq;
+} DeviceModels;
+
+// Represents a top-level section (e.g., "elder", "passthrough")
+typedef struct {
+    char* name;
+    char* backend;
+    char** overall_ranges;
+    int overall_range_count;
+
+    DeviceModels* devices; // Dynamic array of device models
+    int device_count;
+} ConfigSection;
+
+// The root structure holding the entire configuration
+typedef struct {
+    ConfigSection* sections; // Dynamic array of sections
+    int section_count;
+} AppConfig;
 
 
 typedef unsigned long hwaddr;
@@ -27,7 +52,7 @@ typedef void (*DeviceWriteFunc)(void *opaque, hwaddr offset, uint64_t value, uns
  */
 typedef uint64_t (*DeviceReadFunc)(void *opaque, hwaddr offset, unsigned size);
 
-typedef int (*DeviceInit)(char * args);
+typedef int (*DeviceInit)(ConfigSection* args);
 
 typedef int (*DeviceIRQFunc)(int);
 
@@ -46,7 +71,7 @@ typedef struct DeviceModel {
 
 typedef struct {
     char model[64];
-    char args[512];
+    ConfigSection* args;
 } ModelEntry;
 
 
@@ -74,4 +99,5 @@ typedef struct unimp_exporter {
 int dev_init(int argc, char ** argv);
 void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev);
 void dev_register_interrupt_device_model(int irq_num, DeviceModel *dev);
+
 #endif // DEVICE_H

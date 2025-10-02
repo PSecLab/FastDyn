@@ -33,6 +33,6 @@ char *utils_get_arg(const char *key, int argc, char **argv);
 
 int utils_init(int argc, char ** argv);
 
-int utils_parse_ranges(const char *s, Range *ranges, int max_ranges);
+void utils_parse_ranges(int range_count, char **overall_ranges, Range *ranges);
 int* utils_parse_interrupt_ranges(const char *s, int *int_nums);
 #endif // UTILS_H

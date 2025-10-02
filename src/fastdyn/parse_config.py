@@ -75,15 +75,14 @@ class DevConfig:
                         if model not in model_ranges:
                             model_ranges[model] = {}
                             model_ranges[model]["overall"] = []
-
                         model_ranges[model]["overall"].extend(device_data.get('ranges', []))
                         if model == 'elder':
                             if handler.get('scroll') is not None:
-                                model_ranges[model][device_name] = {"range": device_data.get('ranges', []), "scroll": handler.get('scroll')}
+                                model_ranges[model][device_name] = {"range": device_data.get('ranges', []), "scroll": handler.get('scroll'), "irq":device_data.get('irq',"")}
                             else:
                                 fastdyn_log.error(f"No scroll/shared library passed for device {device_name} in model {model}")
                         else:
-                            model_ranges[model][device_name] = {"range": device_data.get('ranges', [])}
+                            model_ranges[model][device_name] = {"range": device_data.get('ranges', []), "irq":device_data.get('irq',"")}
                     else:
                         dev = handler.get('type')
                         if dev not in builtin_model:

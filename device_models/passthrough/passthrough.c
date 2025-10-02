@@ -20,6 +20,7 @@ static uint64_t passthrough_read(void *opaque, hwaddr address, unsigned size) {
     }
 
     int status = hw_read32(hw, address, &value_read);
+
     pthread_mutex_unlock(&hw_mutex);
 
     if (status != 0) {
@@ -98,7 +99,7 @@ static int passthrough_interrupt(int line) {
 		return 0;
 }
 
-static int passthrough_init(char *argument);
+static int passthrough_init(ConfigSection* model_info);
 // The public definition of the passthrough device model
 DeviceModel passthrough_model_def = {
     .name = "passthrough",
@@ -109,47 +110,45 @@ DeviceModel passthrough_model_def = {
     .interrupt = passthrough_interrupt,
 };
 
-static int passthrough_init(char *argument) {
-	char * tok = strtok(argument, "*");
-	hw = hw_connect(tok, NULL, 0);
+static int passthrough_init(ConfigSection* model_info) {
+    //Find the overall ranges for all the devices registered as passthrough
+    Range ranges[10];
+    utils_parse_ranges(model_info->overall_range_count,model_info->overall_ranges, ranges);
+
+    //need a backend for the passthrough
+    hw = hw_connect(model_info->backend, NULL, 0);
 	if (!hw) {
         utils_die("HW connection failed.");
         return 1;
     }
-
-    //Register the device models for the addresses
-    tok = strtok(NULL, "*");
-    char *irq_str = strchr(tok, '^');   //search for user-registered interrupts
-    if (irq_str) {
-        *irq_str = '\0'; // terminate ranges part
-        irq_str++;       // move past '^' to interrupts
-    }
-
-	Range ranges[10];
-    int n = utils_parse_ranges(tok, ranges, 10);
 
     if (pthread_create(&dev_thread, NULL, dev_thread_fn, NULL) != 0) {
         perror("Failed to create thread");
         return 1;
     }
 
-	for (int i = 0; i < n; i++) {
+	for (int i = 0; i < model_info->overall_range_count; i++) {
         dev_register_device_model(ranges[i].start, ranges[i].end, &passthrough_model_def);
     }
 
-
+    //Issue?:Right now, we register the IRQ for the complete device model instead of the specific device
     //Register the device models for the interrupts registered by the user.
-    if (irq_str) {
-    int int_nums;   //number of interrupts registered by the user
+    //Find if any of the device wants to register an IRQ
+    //Just register for the first occuring irq numbers by any device
+    for (int i=0; i< model_info->device_count; i++) {
+        DeviceModels* d = &model_info->devices[i];
+        if (d->irq[0]) {
+        int int_nums;   //number of interrupts registered by the user
 
-    //0-10:20-25 -> 0 to 10 and 20 to 25 interrupts supported
-    int *int_lst = utils_parse_interrupt_ranges(irq_str, &int_nums);
+        //0-10:20-25 -> 0 to 10 and 20 to 25 interrupts supported
+        int *int_lst = utils_parse_interrupt_ranges(d->irq, &int_nums);
 
-    for (int i =0; i < int_nums; i++) {
-        dev_register_interrupt_device_model(int_lst[i], &passthrough_model_def);
+        for (int i =0; i < int_nums; i++) {
+            dev_register_interrupt_device_model(int_lst[i], &passthrough_model_def);
+            }
         }
+        break;
     }
-
     return 0;
 }
 
