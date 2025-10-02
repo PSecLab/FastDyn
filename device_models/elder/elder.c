@@ -7,9 +7,8 @@
 #include <string.h>
 
 // Global hardware handle, if we use hardware.
-static hw_t * hw;
 typedef struct {
-    device_config_t * config;  // Embed original config struct
+    DeviceModels* config;  // Embed original config struct
 
     void *handle;           // dlopen handle
 
@@ -18,45 +17,42 @@ typedef struct {
 } device_model_t;
 
 device_model_t devices[MAX_DEVICES];
-device_config_t configs[MAX_DEVICES];
+DeviceModels configs[MAX_DEVICES];
 
 static int device_count = 0;
 
 static uint64_t elder_read(void *opaque, hwaddr address, unsigned size) {
-	uint64_t return_val;
-	uint32_t value_read;
-
 	for (int i = 0; i < device_count; i++) {
-        if (address >= devices[i].config->base && address < devices[i].config->base + devices[i].config->size) {
-			// Good case, my scroll worked
-            return devices[i].model.read(NULL, address, size);
-        }
+		Range ranges[10];
+		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
+		for (int j=0; j<devices[i].config->range_count; j++) {
+			// printf("my God!\n");
+			if (address >= ranges[j].start && address < ranges[j].end) {
+				// Good case, my scroll worked
+				return devices[i].model.read(NULL, address, size);
+			}
+		}
     }
+	utils_die("Unable to map any address to any address of elder read function");
+	return 0; // never reached, but silences compiler
 
-	int status = hw_read32(hw, address, &value_read);
-	if (status != 0) {
-			utils_die("HW Read Failed");
-	}
-	return_val = value_read;
-	return return_val;
 }
 
 static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned size) {
 	for (int i = 0; i < device_count; i++) {
-        if (address >= devices[i].config->base && address < devices[i].config->base + devices[i].config->size) {
-			//Good case, my scroll worked
-            devices[i].model.write(NULL, address, value, size);
-            return;
-        }
+		Range ranges[10];
+		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
+		for (int j=0; j<devices[i].config->range_count; j++) {
+			if (address >= ranges[j].start && address < ranges[j].end) {
+				// Good case, my scroll worked
+				devices[i].model.write(NULL, address, value, size);
+				return;
+			}
+		}
     }
-
-	int status = hw_write32(hw, address, (uint32_t)value);
-	if (status != 0) {
-			utils_die("HW Write Failed");
-	}
 }
 
-static int elder_init(char * argument);
+static int elder_init(ConfigSection* model_info);
 // The public definition of the elder device model
 DeviceModel elder_model_def = {
     .name = "elder",
@@ -65,70 +61,40 @@ DeviceModel elder_model_def = {
     .init = elder_init,
 };
 
-static int elder_init(char * argument) {
-	char *sep = strchr(argument, '@');
-    if (!sep) {
-        printf("No '&' found in input\n");
-        return 1;
-    }
+static int elder_init(ConfigSection* model_info) {
+    //Find the overall ranges for all the devices registered as passthrough
+    Range ranges[10];
+	device_count = model_info->device_count;
+    utils_parse_ranges(model_info->overall_range_count,model_info->overall_ranges, ranges);
 
-    // Replace '&' with '\0' to split string in-place
-    *sep = '\0';
-
-    char *hw_arg = argument;
-	char *scroll_arg = strtok(sep+1, "*");
-
-	char *tok = strtok(NULL, "*");
-	Range ranges[10];
-    int n = utils_parse_ranges(tok, ranges, 10);
-
-
-
-    printf("Will use Backend: %s\n", hw_arg);
-    printf("and the scroll: %s\n", scroll_arg);
-	for (int i = 0; i < n; i++) {
+	for (int i = 0; i < model_info->overall_range_count; i++) {
         dev_register_device_model(ranges[i].start, ranges[i].end, &elder_model_def);
     }
 
-	device_count = parse_config(scroll_arg, configs, MAX_DEVICES);
-    if (device_count < 0) {
-        fprintf(stderr, "Failed to parse config file: %s\n", argument);
-        utils_die("Config file parsing failed.");
-        return -1; // Just in case utils_die doesn't exit immediately
-    }
+	for (int i=0; i < model_info->device_count; i++) {
+		devices[i].config = &model_info->devices[i];
+		printf("Loading device [%s] from %s\n", devices[i].config->name, devices[i].config->scroll_path);
 
-	for (int i = 0; i < device_count; i++) {
-	    devices[i].config = &configs[i];
-		printf("Loading device [%s] from %s\n", devices[i].config->section, devices[i].config->libpath);
-
-	    devices[i].handle = dlopen(devices[i].config->libpath, RTLD_NOW);
+	    devices[i].handle = dlopen(devices[i].config->scroll_path, RTLD_NOW);
 	    if (!devices[i].handle) {
 	        fprintf(stderr, "dlopen failed: %s\n", dlerror());
 	        utils_die("dlopen error");
 	    }
 
 	    char symbol[256];
-	    snprintf(symbol, sizeof(symbol), "%s_read", devices[i].config->section);
+	    snprintf(symbol, sizeof(symbol), "%s_read", devices[i].config->name);
 	    devices[i].model.read = (DeviceReadFunc)dlsym(devices[i].handle, symbol);
 	    if (!devices[i].model.read) utils_die("Missing read");
 
-	    snprintf(symbol, sizeof(symbol), "%s_write", devices[i].config->section);
+	    snprintf(symbol, sizeof(symbol), "%s_write", devices[i].config->name);
 	    devices[i].model.write = (DeviceWriteFunc)dlsym(devices[i].handle, symbol);
 	    if (!devices[i].model.write) utils_die("Missing write");
 
-	    snprintf(symbol, sizeof(symbol), "%s_init", devices[i].config->section);
+	    snprintf(symbol, sizeof(symbol), "%s_init", devices[i].config->name);
 	    devices[i].model.init = (DeviceInit)dlsym(devices[i].handle, symbol);
 	    if (!devices[i].model.init) utils_die("Missing init");
 
-	    devices[i].model.init(scroll_arg);
+		devices[i].model.init(model_info);
 	}
-
-	// Connect to hardware for what we don't know 
-	hw = hw_connect(hw_arg, NULL, 0);
-
-	if (!hw) {
-			utils_die("HW connection failed.");
-	}
-
 	return 0;
 }

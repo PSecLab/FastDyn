@@ -110,16 +110,16 @@ internal_model = "uart_model"
         model   = "passthrough"
         enabled = false # This handler is defined but will be skipped for this device.
 
-[Device.gpio_g]
+[Device.gpiog]
     ranges = ["0x40021800-0x40021BFF"]
     description = "GPIO Port G for general-purpose I/O."
     # The configuration for this specific device when handled by the elder model.
-    [[Device.gpio_g.handlers]]
+    [[Device.gpiog.handlers]]
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
-        model   = "passthrough"
+        model   = "elder"
         enabled = true
-        scroll = "/home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so"
+        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
 
 [Device.unhandled_space]
     ranges = ["0x40000000-0x40010FFF", "0xE0000000-0xEFFFFFFF", "0x40000000-0xE00FFFFF"]
@@ -127,4 +127,4 @@ internal_model = "uart_model"
 
     [[Device.unhandled_space.handlers]]
         model = "passthrough"
-        enabled = true
+        enabled = false
