@@ -26,7 +26,6 @@ static uint64_t elder_read(void *opaque, hwaddr address, unsigned size) {
 		Range ranges[10];
 		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
 		for (int j=0; j<devices[i].config->range_count; j++) {
-			// printf("my God!\n");
 			if (address >= ranges[j].start && address < ranges[j].end) {
 				// Good case, my scroll worked
 				return devices[i].model.read(NULL, address, size);
