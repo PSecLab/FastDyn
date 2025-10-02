@@ -35,7 +35,7 @@ static int handler(void *user, const char *section, const char *name, const char
     return 1;
 }
 
-int parse_config(const char *filename, device_config_t *devices, int max_devices) {
+int device_parse_config(const char *filename, device_config_t *devices, int max_devices) {
     parse_ctx_t ctx = {
         .devices = devices,
         .max = max_devices,

@@ -57,15 +57,20 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
     hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
 	unsigned idx = dev_addr_to_slot(address, region_base);
 
-#ifdef DEV_LOGGER
-	utils_log_to_file(io_logger,"[%5ld.%06ld] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-              sec, usec, address, size, size * 2, value, pc);
-#endif
-
 	DeviceModel *dev = (idx < NUM_SLOTS) ? lut[idx] : NULL;
 	if (dev) {
 			dev->write(dev->opaque, address, value, size);
-	}
+#ifdef DEV_LOGGER
+                utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+                        sec, usec, dev->name, address, size, size * 2, value, pc);
+#endif
+	} else {
+#ifdef DEV_LOGGER
+                utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+                        sec, usec, address, size, size * 2, value, pc);
+#endif
+        dev_debug("IO Access not handled");
+    }
 
 	if (handler && (handler[0] == 'g')) {
            return 0;
@@ -93,15 +98,20 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
     if (dev) {
         value = dev->read(dev->opaque, address, size);
 #ifdef DEV_LOGGER
-		utils_log_to_file(io_logger, "[%5ld.%06ld] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-              sec, usec, address, size, size * 2, value, pc);
+		utils_log_to_file(io_logger, "[%5ld.%06ld] [%s] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+              sec, usec, dev->name, address, size, size * 2, value, pc);
 #endif
 
 		*buf = value;
 	}
 	else {
-		dev_debug("IO Access not handled");
-	}
+#ifdef DEV_LOGGER
+        utils_log_to_file(io_logger,
+            "[%5ld.%06ld] IO Read Access NOT Handled: \t address=0x%08" PRIx64 ", size=%u bytes, pc=0x%08" PRIx64 "\n",
+            sec, usec, (uint64_t)address, size, (uint64_t)pc);
+#endif
+        dev_debug("IO Access not handled");
+    }
 
 	if (handler && (handler[0] == 'g')) {
 		return 0;
