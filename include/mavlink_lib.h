@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <netinet/in.h>
+#include "ring_buffer.h"
 
 /** MAVLink v2 magic byte */
 #define MAVLINK_STX 0xFD
@@ -39,5 +40,28 @@ int mav_finalize_message_chan_send(int sockfd,
                                    uint8_t length,
                                    uint8_t crc_extra,
                                    uint8_t *sequence);
+
+/**
+ * @brief Start the GCS listener thread if not already running.
+ *
+ * @param rb Pointer to ring buffer for incoming data.
+ */
+void start_gcs_listener(void *rb);
+
+/**
+ * @brief Check how many bytes are available in the ring buffer.
+ *
+ * @param rb Pointer to ring buffer.
+ * @return Number of bytes available to read.
+ */
+size_t bytes_available(RingBuffer *rb);
+
+/**
+ * @brief Read a byte from the ring buffer.
+ *
+ * @param rb Pointer to ring buffer.
+ * @param byte Pointer to store the read byte.
+ */
+void read_byte(RingBuffer *rb, unsigned char *byte);
 
 #endif /* MAVLINK_SEND_H */

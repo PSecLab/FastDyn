@@ -1,7 +1,20 @@
-0x8108fe0 storage_read_block *
-0x8109010 storage_write_block *
-0x81793ec hrt_micros64 *
-0x08176c1a ap_hal_micros32 
-0x8020efc chDbgContextSwitching 
-0x817b618 raiseirq 44
-0x80e12fc debug_reached 
+0x80e6f14 storage_read_block *
+0x80e6fb4 storage_write_block *
+0x814edd4 hrt_micros64 *
+0x81354b8 adc_voltage *
+0x81354c0 adc_voltage *
+0x8137f08 write_channel 
+0x80cc1a0 init_wheel_encoder 
+0x80cc6a0 copy_wheel_encoder_state_to_frontend 
+0x08032bce gps_get_type_mavlink 
+0x81195b8 ins_block_read *
+0x802ddc8 compass_calibrate *
+0x802dc0c compass_read_block *
+0x81508f4 chibiOS_tick_handler *
+0x80896dc create_gcs_mavlink_backend 
+0x80840a0 gcs_send_text 
+0x808bcc8 gcs_send_banner_once *
+0x8040254 gcs_read *
+0x8040274 gcs_bytes_available *
+0x80853a8 gcs_send_mavlink_message *
+0x81509e8 raiseirq 66

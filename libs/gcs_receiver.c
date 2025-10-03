@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <signal.h>
@@ -13,22 +15,26 @@
 #define UDP_PORT 14552
 #define MAX_PACKET_SIZE 1024
 
-// Signal handler for graceful shutdown
-void handle_sigterm(int sig) {
-    printf("Received signal %d, exiting...\n", sig);
+static pthread_t gcs_listener_tid;
+static bool gcs_listener_running = false;
+
+void sigint_handler(int sig) {
+    printf("\n[Main] Caught SIGINT (Ctrl-C). Killing GCS listener thread...\n");
+    // Send cancellation request to GCS listener thread
+    pthread_cancel(gcs_listener_tid);
+    pthread_join(gcs_listener_tid, NULL);
+    gcs_listener_running = false;
+    printf("[Main] GCS listener thread terminated. Exiting.\n");
     exit(0);
 }
 
 // UDP listener process
-void* gcs_listener(void *rb) {
+static void* gcs_listener(void *rb) {
     RingBuffer * ring_buffer = (RingBuffer *)rb;
 
     int sockfd;
     struct sockaddr_in servaddr, cliaddr;
     unsigned char buffer[MAX_PACKET_SIZE];
-
-    signal(SIGTERM, handle_sigterm);
-    signal(SIGINT, handle_sigterm);
 
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("socket creation failed");
@@ -52,7 +58,7 @@ void* gcs_listener(void *rb) {
         socklen_t len = sizeof(cliaddr);
         ssize_t n = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
                              (struct sockaddr *)&cliaddr, &len);
-        printf("GCSReceiver: Received %zd bytes\n", n);
+        // printf("GCSReceiver: Received %zd bytes\n", n);
         if (n < 0) {
             perror("recvfrom failed");
             continue;
@@ -65,19 +71,17 @@ void* gcs_listener(void *rb) {
         }
 
         // Put received bytes into the ring buffer
-        size_t count = ring_buffer_count(rb);
+        size_t count = ring_buffer_count(ring_buffer);
         if (count + n > RING_BUFFER_SIZE)
         {
             // Buffer overflow, drop incoming packet
-            printf("GCSReceiver: Buffer overflow, dropping packet\n");
+            // printf("GCSReceiver: Buffer overflow, dropping packet\n");
         }
         else
         {
             for (ssize_t i = 0; i < n; i++) {
-                if (!ring_buffer_put(rb, buffer[i])) {
+                if (!ring_buffer_put(ring_buffer, buffer[i])) {
                     printf("GCSReceiver: Failed to put byte into buffer\n");
-                    // Buffer full, drop byte
-                    // printf("GCSReceiver: Buffer full, dropping byte\n");
                     continue;
                 }
             }
@@ -87,41 +91,68 @@ void* gcs_listener(void *rb) {
     close(sockfd);
 }
 
+void start_gcs_listener(RingBuffer *rb) {
+    struct sigaction sa;
+    sa.sa_handler = sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    // Install SIGINT handler (Ctrl-C)
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("sigaction");
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_create(&gcs_listener_tid, NULL, gcs_listener, (void *)rb);
+
+    gcs_listener_running = true;
+}
+
 // Example function to read a byte
-int read_byte(RingBuffer *rb, unsigned char *byte) {
+void read_byte(RingBuffer *rb, unsigned char *byte) {
+    if (!gcs_listener_running)
+    {
+        start_gcs_listener(rb);
+        usleep(1000);
+    }
     if (!ring_buffer_get(rb, byte)) {
         *byte = 0; // Return null byte if empty
-        return -1;
     }
-    return 0;
+    return;
 }
 
 // Example function to check bytes available
 size_t bytes_available(RingBuffer *rb) {
+    if (!gcs_listener_running)
+    {
+        start_gcs_listener(rb);
+        usleep(1000);
+    }
     return ring_buffer_count(rb);
 }
 
-int main() {
-    RingBuffer rb;
-    if (ring_buffer_init(&rb, RING_BUFFER_SIZE) != 0) {
-        fprintf(stderr, "Failed to initialize ring buffer\n");
-        return EXIT_FAILURE;
-    }
 
-    pthread_t tid;
-    pthread_create(&tid, NULL, gcs_listener, &rb);
+// int main() {
+//     RingBuffer rb;
+//     if (!ring_buffer_init(&rb, RING_BUFFER_SIZE)) {
+//         fprintf(stderr, "Failed to initialize ring buffer\n");
+//         return EXIT_FAILURE;
+//     }
 
-    while (1) {
-        unsigned char b;
-        if (read_byte(&rb, &b) == 0) {
-            printf("Received byte: 0x%02x\n", b);
-        } else {
-            // No data, sleep a bit
-            usleep(1000);
-        }
-    }
+//     start_gcs_listener(&rb);
 
-    pthread_join(tid, NULL);
+//     while (1) {
+//         unsigned char b;
+//         read_byte(&rb, &b);
+//         if (b != 0x00) {
+//             printf("Received byte: 0x%02x\n", b);
+//         } else {
+//             // No data, sleep a bit
+//             usleep(1000);
+//         }
+//     }
 
-    return 0;
-}
+//     pthread_join(gcs_listener_tid, NULL);
+
+//     return 0;
+// }

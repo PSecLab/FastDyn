@@ -10,6 +10,7 @@
 #include "virtuals.h"
 #include "gazebo_wrapper.h"
 #include <math.h>
+#include "mavlink_lib.h"
 
 // Storage
 static volatile char * storage_memory = NULL;
@@ -197,6 +198,7 @@ void write_channel(unsigned int cpu_index, void *udata)
     {
         printf("Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
+    // MAYBE: check if returning helps?
 }
 
 // Wheel Encoder
@@ -570,7 +572,7 @@ void chibiOS_tick_handler(unsigned int cpu_index, void *udata) {
     qemu_set_register(lr, ARM_V7M_PC);
 }
 
-uint32_t gcs_uarts[8] = {0};
+static uint32_t gcs_uarts[8] = {0};
 
 /**
  * @brief Record UART used by GCS
@@ -628,12 +630,178 @@ void gcs_send_text(unsigned int cpu_index, void *udata) {
  */
 void gcs_send_banner_once(unsigned int cpu_index, void *udata) {
     static int banner_sent = 0;
-    if (!banner_sent) {
+    if (banner_sent) {
         return;
     }
 
     // Set banner_sent to true
     banner_sent = 1;
+
+    // return from function and return 0
+    qemu_set_register(0, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+static RingBuffer ring_buffer;
+static bool ring_buffer_initialized = false;
+
+#define RING_BUFFER_SIZE 512
+
+/**
+ * @brief Read a byte from a UART used by GCS
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> gcs_read *
+ */
+void gcs_read(unsigned int cpu_index, void *udata) {
+    if (!ring_buffer_initialized) {
+        if (!ring_buffer_init(&ring_buffer, RING_BUFFER_SIZE)) {
+            fprintf(stderr, "Failed to initialize GCS ring buffer\n");
+            return;
+        }
+        ring_buffer_initialized = true;
+    }
+
+    uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    int found = 0;
+
+    for (int i = 0; i < 8; i++) {
+        if (gcs_uarts[i] == uart_num) {
+            found = 1;
+            break;
+        }
+    }
+
+    if (!found) {
+        // fall through without returning
+        return;
+    }
+
+    unsigned char byte = 0x00;
+    read_byte(&ring_buffer, &byte);
+
+    qemu_set_register((uint32_t)byte, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+/**
+ * @brief Return the number of bytes available in the GCS ring buffer
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> gcs_bytes_available *
+ */
+void gcs_bytes_available(unsigned int cpu_index, void *udata) {
+    if (!ring_buffer_initialized) {
+        if (!ring_buffer_init(&ring_buffer, RING_BUFFER_SIZE)) {
+            fprintf(stderr, "Failed to initialize GCS ring buffer\n");
+            return;
+        }
+        ring_buffer_initialized = true;
+    }
+
+    uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    int found = 0;
+
+    for (int i = 0; i < 8; i++) {
+        if (gcs_uarts[i] == uart_num) {
+            found = 1;
+            break;
+        }
+    }
+
+    if (!found) {
+        // fall through without returning
+        return;
+    }
+
+    size_t available = bytes_available(&ring_buffer);
+
+    qemu_set_register((uint32_t)available, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+static uint8_t sequence_number = 0;
+static struct sockaddr_in gcs_addr;
+static int gcs_sockfd = -1;
+static int gcs_addr_initialized = 0;
+
+int create_udp_client(int *out_sockfd, struct sockaddr_in *out_addr) {
+    if (!out_sockfd || !out_addr) return -1;
+
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("socket creation failed");
+        return -1;
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY; // bind to all local interfaces
+    addr.sin_port = htons(14552);
+
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind failed");
+        close(sockfd);
+        return -1;
+    }
+
+    // Return values via output parameters
+    *out_sockfd = sockfd;
+    *out_addr = addr;
+
+    return 0; // success
+}
+
+/**
+ * @brief Send Mavlink Message to GCS
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> gcs_send_mavlink_message *
+ */
+void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
+    if (!gcs_addr_initialized) {
+        if (create_udp_client(&gcs_sockfd, &gcs_addr) != 0) {
+            fprintf(stderr, "Failed to create UDP client for GCS\n");
+            return;
+        }
+        gcs_addr_initialized = 1;
+    }
+    uint32_t message_id = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    uint32_t payload_ptr = (uint32_t)qemu_get_register(ARM_V7M_R2);
+    uint8_t length;
+    qemu_plugin_read_memory(qemu_get_register(ARM_V7M_SP), &length, 1);
+    uint8_t crc_extra;
+    qemu_plugin_read_memory(qemu_get_register(ARM_V7M_SP) + 4, &crc_extra, 1);
+    uint8_t *payload = malloc(sizeof(uint8_t) * length);
+    if (!payload) {
+        fprintf(stderr, "Failed to allocate memory for mavlink payload\n");
+        return;
+    }
+    qemu_plugin_read_memory(payload_ptr, payload, length);
+
+    // send using mavlink_lib implementation of mav_finalize...
+    int success = mav_finalize_message_chan_send(
+        gcs_sockfd,
+        &gcs_addr,
+        message_id,
+        payload,
+        length,
+        crc_extra,
+        &sequence_number
+    );
+
+    if (success != 0) {
+        fprintf(stderr, "Failed to send mavlink message to GCS\n");
+    }
+
+    free(payload);
 
     // return from function and return 0
     qemu_set_register(0, ARM_V7M_R0);

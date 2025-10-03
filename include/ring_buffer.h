@@ -29,7 +29,7 @@ typedef struct {
  * @param rb Pointer to the RingBuffer structure.
  * @param size Size of the buffer in bytes.
  */
-int ring_buffer_init(RingBuffer *rb, size_t size);
+bool ring_buffer_init(RingBuffer *rb, size_t size);
 
 /**
  * @brief Add a byte to the buffer.

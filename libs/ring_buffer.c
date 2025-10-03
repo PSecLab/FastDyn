@@ -8,21 +8,21 @@
 #include <string.h>
 #include <stdio.h>
 
-int ring_buffer_init(RingBuffer *rb, size_t size) {
+bool ring_buffer_init(RingBuffer *rb, size_t size) {
     rb->buffer = malloc(size);
     if (!rb->buffer) {
         // Handle memory allocation failure
         perror("Failed to allocate ring buffer");
-        return -1;
+        return false;
     }
     rb->size = size;
     rb->head = 0;
     rb->tail = 0;
     if (pthread_mutex_init(&rb->lock, NULL) != 0) {
         free(rb->buffer);
-        return -1;
+        return false;
     }
-    return 0;
+    return true;
 }
 
 void ring_buffer_destroy(RingBuffer *rb) {

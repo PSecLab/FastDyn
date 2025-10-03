@@ -62,10 +62,34 @@ cb_entry_t cb_registry[] = {
     { "fastdyn_callback", fastdyn_callback},
 #endif
 #if ENABLE_LIBGZ
-    // { "gz_service", gz_service},
-    // { "compass_block_read", compass_block_read},
-    // { "send_mavlink_gps_data", send_mavlink_gps_data},
-    // { "gz_advance_simulation", gz_advance_simulation},
+    // storage
+    { "storage_read_block", storage_read_block},
+    { "storage_write_block", storage_write_block},
+    // voltage
+    { "adc_voltage", adc_voltage},
+    // ins
+    { "ins_block_read", ins_block_read},
+    // compass
+    { "compass_calibrate", compass_calibrate},
+    { "compass_read_block", compass_read_block},
+    // Timer
+    { "hrt_micros64", hrt_micros64},
+    { "chibiOS_tick_handler", chibiOS_tick_handler},
+    // wheel encoder
+    { "init_wheel_encoder", init_wheel_encoder},
+    { "copy_wheel_encoder_state_to_frontend", copy_wheel_encoder_state_to_frontend},
+    // RC Channel
+    { "write_channel", write_channel},
+    // GCS
+    { "create_gcs_mavlink_backend", create_gcs_mavlink_backend},
+    { "gcs_send_mavlink_message", gcs_send_mavlink_message},
+    { "gcs_send_text", gcs_send_text},
+    { "gcs_send_banner_once", gcs_send_banner_once},
+    { "gcs_read", gcs_read},
+    { "gcs_bytes_available", gcs_bytes_available},
+    // GPS
+    { "gps_get_type_mavlink", gps_get_type_mavlink},
+
 #endif
 };
 
