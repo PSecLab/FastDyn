@@ -93,6 +93,7 @@ srcs += files(
   'virtuals/virtuals.c',
   'libs/ring_buffer.c',
   'libs/mavlink_lib.c',
+  'libs/gcs_receiver.c',
 )
 
 if ENABLE_LIBDEV

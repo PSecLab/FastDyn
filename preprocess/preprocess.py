@@ -15,7 +15,7 @@ def is_number(value: str) -> str:
     if re.fullmatch(r"0x[0-9A-Fa-f]+", value):
         return "hex"
     # Check for decimal integer
-    if re.fullmatch(r"\d+", value):
+    if re.fullmatch(r"[+-]?\d+", value):
         return "int"
     return "none"
 
@@ -136,15 +136,15 @@ def preprocess(symbols_dict: dict[str, int], modifier_file: str, modifier_out: s
     print(f"Output would be written to: {virtuals_out}")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 6:
-        print("Usage: python preprocess.py <map_file> <modifier_file> <modifier_out> <virtuals_file> <virtuals_out>")
+    if len(sys.argv) != 4:
+        print("Usage: python preprocess.py <map_file> <modifier_file> <virtuals_file>")
         sys.exit(1)
 
     map_file = sys.argv[1]
     modifier_file = sys.argv[2]
-    modifier_out = sys.argv[3]
-    virtuals_file = sys.argv[4]
-    virtuals_out = sys.argv[5]
+    modifier_out = "modifiers.txt"
+    virtuals_file = sys.argv[3]
+    virtuals_out = "virtuals.txt"
 
     symbols_dict = load_symbol_addresses(map_file)
 
