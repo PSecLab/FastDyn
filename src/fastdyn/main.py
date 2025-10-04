@@ -2,7 +2,7 @@
 Main file is responsible for kicking the qemu command.
 '''
 import logging
-import argparse
+import click
 import os, shutil
 import subprocess
 
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from . import gen_config    #generate the files for the configs.
 from . import parse_config  #Parse the config
 from . import fastdyn_log
-
+from fastdyn.__init__ import __version__
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
@@ -146,42 +146,163 @@ def kill_qemu_process():
         kill_pids(pids)
 
 
-def main():
+@click.group()
+@click.version_option(prog_name="Fastdyn Framework",version=__version__)
+def cli():
     # Load variables from .env
     load_dotenv()
-    parser = argparse.ArgumentParser(
-        description="Parse, display, and generate configurations from a FastDyn TOML file.",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    parser.add_argument(
-        "-c", "--config-path",
-        required=True,
-        help="Path to the TOML configuration file."
-    )
-    parser.add_argument(
-        "-m","--map-file",
-        default=None,
-        help="Path to the symbol map file.")
+    log.info('****** Fastdyn Framework {0} *******'.format(__version__ ))
 
-    parser.add_argument(
-        "-o", "--output",
-        metavar="OUTPUT_DIR",
-        help="Directory to place the generated files (default: './out')."
-    )
 
-    args = parser.parse_args()
+@cli.command('run',help= 'Runs the firmware on QEMU using the passed config file.')
+@click.option('-c','--config',required = True, type= click.Path(resolve_path=True,exists=True),
+                        help='The Path to the config file.',
+                        metavar= 'PATH')
+@click.option('-o','--work-dir',default="./fastdyn_work",metavar='PATH',
+        show_default=True,
+        type=click.Path(resolve_path=True,writable=True),
+        help='Path to the work directory.')
+def run(config, work_dir):
+    config_obj = parse_config.Fastdyn_Config()  #generate the object for the config
 
-    config = parse_config.Fastdyn_Config()  #generate the object for the config
-
-    log.info(f"Parsing Config file: {args.config_path}")
-    config.add_device_config(args.config_path)
-
+    log.info(f"Parsing Config file: {config}")
+    config_obj.add_device_config(config)
 
     run_qemu(
-        config=config,
-        out_path=args.output
+        config=config_obj,
+        out_path=work_dir
     )
 
+@cli.command(
+    'generate',
+    help='Generates the LLM Prompt using the hardware log passed by the user. '
+         '[Disclaimer: Use this when generating a model for the first time]'
+)
+@click.option(
+    '-hw', '--hardware-log',
+    required=True,
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the log file generated when running the firmware on hardware.',
+    metavar='PATH'
+)
+@click.option(
+    '-b', '--board',
+    type=str,
+    required=True,
+    help='Name of the platform on which the firmware is running.'
+)
+@click.option(
+    '-p', '--peripheral',
+    type=str,
+    required=True,
+    help='Name of the peripheral targeted for verification.'
+)
+@click.option(
+    '--method',
+    default='ngram',
+    show_default=True,
+    type=click.Choice(['ngram', 'window', 'other'], case_sensitive=False),
+    help='Context minimization method.'
+)
+@click.option(
+    '--n',
+    type=int,
+    default=2,
+    show_default=True,
+    help='Value of n for n-gram method.'
+)
+@click.option(
+    '--isr-window',
+    type=int,
+    default=10000000,
+    show_default=True,
+    help='ISR window size.'
+)
+@click.option(
+    '-o', '--work-dir',
+    default="./fastdyn_work",
+    show_default=True,
+    metavar='PATH',
+    type=click.Path(resolve_path=True, writable=True),
+    help='Path to the work directory.'
+)
+def generate(hardware_log, board, peripheral, method, n, isr_window, work_dir):
+    """Generates the LLM Prompt using the hardware log passed by the user."""
+    log.info("Running generator")
+
+@cli.command(
+    'verifier',
+    help=(
+        'Verifies the model passed by the user for a given peripheral. '
+        'Generates a prompt in case of failure. '
+        '[Disclaimer: Use this when iterating a generated model for correction]'
+    )
+)
+@click.option(
+    '-hw', '--hardware-log',
+    required=True,
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the log file generated when running the firmware on hardware.',
+    metavar='PATH'
+)
+@click.option(
+    '-em', '--emulation-log',
+    required=True,
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the log file generated when running the firmware on the elder model using emulation.',
+    metavar='PATH'
+)
+@click.option(
+    '-mp', '--model-path',
+    required=True,
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the generated model file to be verified.',
+    metavar='PATH'
+)
+@click.option(
+    '-b', '--board',
+    type=str,
+    required=True,
+    help='Name of the platform on which the firmware is running.'
+)
+@click.option(
+    '-p', '--peripheral',
+    type=str,
+    required=True,
+    help='Name of the peripheral targeted for verification.'
+)
+@click.option(
+    '--method',
+    default='ngram',
+    show_default=True,
+    type=click.Choice(['ngram', 'window', 'other'], case_sensitive=False),
+    help='Context minimization method.'
+)
+@click.option(
+    '--n',
+    type=int,
+    default=2,
+    show_default=True,
+    help='Value of n for n-gram method.'
+)
+@click.option(
+    '--isr-window',
+    type=int,
+    default=10000000,
+    show_default=True,
+    help='ISR window size.'
+)
+@click.option(
+    '-o', '--work-dir',
+    default="./fastdyn_work",
+    show_default=True,
+    metavar='PATH',
+    type=click.Path(resolve_path=True, writable=True),
+    help='Path to the work directory.'
+)
+def verifier(hardware_log, emulation_log, model_path, board, peripheral, method, n, isr_window, work_dir):
+    """Verifies the model against hardware and emulation logs."""
+    log.info("Running Verifier")
 
 if __name__ == "__main__":
-    main()
+    cli()

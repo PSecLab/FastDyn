@@ -7,3 +7,4 @@ Doxyfile.bak
 *.log
 *.egg-info
 *tmp
+*fastdyn_work

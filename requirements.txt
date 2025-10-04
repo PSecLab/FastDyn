@@ -6,3 +6,4 @@ numpy==2.3.2
 scipy==1.16.1
 six==1.17.0
 tomli==2.2.1
+click==8.0.3

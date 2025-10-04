@@ -26,7 +26,7 @@ setup(
     packages=get_packages('fastdyn'),
     entry_points={
         'console_scripts': [
-            'fastdyn = fastdyn.main:main',
+            'fastdyn = fastdyn.main:cli',
             # you can add more CLI tools here
         ]
     },
