@@ -13,6 +13,9 @@ from . import gen_config    #generate the files for the configs.
 from . import parse_config  #Parse the config
 from . import fastdyn_log
 from fastdyn.__init__ import __version__
+from .verifier import verifier                  #contains the verification framework
+from .verifier import prompt_gen as pg           #Generates the prompt
+from .verifier import context_minimizer as cm   #Minimizes the context
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
@@ -82,19 +85,6 @@ def build_qemu_cmd(config, dev_config_path):
 
 #This function is responsible for running the qemu command based on the inputs
 def run_qemu(config, out_path):
-    if out_path is not None:
-        if not os.path.isdir(out_path):
-            log.warn(f"The output directory: {out_path} passed by the user does not exist.")
-    else:
-        out_path = "tmp"
-
-    if os.path.exists(out_path):
-        log.info(f"The output directory already exists at Path {os.path.abspath(out_path)}. Deleting it!")
-        shutil.rmtree(out_path)
-
-    log.info(f"Creating output directory at path: {os.path.abspath(out_path)}")
-    os.makedirs(out_path)
-
     #create json file for the device config
     dev_config_path = gen_config._gen_dev_config(config, out_path)
     log.info(f"Custom Devices Configuration written to : {dev_config_path}")
@@ -163,6 +153,19 @@ def cli():
         type=click.Path(resolve_path=True,writable=True),
         help='Path to the work directory.')
 def run(config, work_dir):
+    if work_dir is not None:
+        if not os.path.isdir(work_dir):
+            log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+    else:
+        work_dir = "fastdyn_work"
+
+    if os.path.exists(work_dir):
+        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
+        shutil.rmtree(work_dir)
+
+    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
+    os.makedirs(work_dir)
+
     config_obj = parse_config.Fastdyn_Config()  #generate the object for the config
 
     log.info(f"Parsing Config file: {config}")
@@ -228,7 +231,37 @@ def run(config, work_dir):
 )
 def generate(hardware_log, board, peripheral, method, n, isr_window, work_dir):
     """Generates the LLM Prompt using the hardware log passed by the user."""
-    log.info("Running generator")
+    if work_dir is not None:
+        if not os.path.isdir(work_dir):
+            log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+    else:
+        work_dir = "fastdyn_work"
+
+    if os.path.exists(work_dir):
+        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
+        shutil.rmtree(work_dir)
+
+    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
+    os.makedirs(work_dir)
+
+    #minimize the context
+    cm_path = cm.minimize_context(
+        out_dir=work_dir,
+        log_file=hardware_log,
+        platform=board,
+        method=method,
+        peripheral=peripheral,
+        n=n,
+        isr_window=isr_window
+        )
+
+
+    #generate the prompt
+    pg_path = pg.initial_prompt_gen(
+        analysis_dir=cm_path,
+        peripheral=peripheral,
+        out_dir=work_dir
+    )
 
 @cli.command(
     'verifier',

@@ -1,4 +1,4 @@
-# See LICENSE.incore for details
+# See LICENSE.fastdyn for details
 
 """Top-level package for Fastdyn Framework."""
 
