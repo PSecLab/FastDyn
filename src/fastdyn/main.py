@@ -446,7 +446,7 @@ def verifier(hardware_log, emulation_log, dev_model, board, peripheral, method, 
     not_match, diff_obj = verify.verify_automata(automata1=cm_path_hardware, automata2=cm_path_emulation, peripheral=peripheral)
 
     #generate a prompt or tell the user, everything worked perfectly
-    if not not_match:
+    if not_match:
         log.warn("Log mismatch! Generating prompt")
         #generate the prompt
         #use the difference from the
