@@ -5,6 +5,7 @@ import logging
 import click
 import os, shutil
 import subprocess
+import signal
 
 from dotenv import load_dotenv
 
@@ -16,13 +17,14 @@ from fastdyn.__init__ import __version__
 from .verifier import verifier as verify             #contains the verification framework
 from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
+from .utils import svd_parser
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
 
 
 #build qemu command
-def build_qemu_cmd(config, dev_config_path):
+def build_qemu_cmd(config, dev_config_path, out_path):
     """Builds the full qemu-system-arm command from the configuration."""
     #----------------------------------------QEMU & CPU configurations---------------------------------------
     cpu = config.dev_config.cpu  #short-hand
@@ -49,6 +51,20 @@ def build_qemu_cmd(config, dev_config_path):
             "--semihosting-config",cpu.get('semihosting_config', "enable=on,target=native")
         ])
     cmd.extend(cpu_configs)
+
+    #----------------------------------------Virtual & Modifier Instructions------------------------------------------
+    virtuals_dir = os.path.join(out_path, 'virtuals')
+    os.makedirs(virtuals_dir)
+    virtuals_path = os.path.join(virtuals_dir, 'virtuals.txt')
+    modifiers_path = os.path.join(virtuals_dir, 'modifiers.txt')
+
+    log.info(f"Virtual Instructions available at {virtuals_path}")
+    with open(virtuals_path, 'w') as file:
+        file.writelines(config.virtual_instr)
+
+    log.info(f"Modifier Instructions available at {modifiers_path}")
+    with open(modifiers_path, 'w') as file:
+        file.writelines(config.modifier_instr)
 
     #----------------------------------------Memory Configurations------------------------------------------
     memory = config.dev_config.memory   #short-hand
@@ -77,17 +93,41 @@ def build_qemu_cmd(config, dev_config_path):
 
     return cmd
 
+#Get the gdb command based on the user request
+def get_gdb_cmd(config, out_path):
+    launch_gdb = False
+    cpu = config.dev_config.cpu  #short-hand
+    gdb_script_path = os.path.join(out_path, 'gdb_init.txt')
+    with open(gdb_script_path, 'w') as f:
+        f.write("target remote localhost:1234\n")
+    binary = cpu['binary']
+    gdb_cmd = None
+    if cpu['enable_gdb']:
+        launch_gdb = True
+        if cpu['launch_gdb']:
+            gdb_cmd = [
+                'xterm',
+                '-e',
+                f"gdb-multiarch -x {gdb_script_path} {binary}"
+            ]
+        else:
+            gdb_cmd = None
+
+    return launch_gdb, gdb_cmd, binary
+
 #This function is responsible for running the qemu command based on the inputs
 def run_qemu(config, out_path):
     #create json file for the device config
     dev_config_path = gen_config._gen_dev_config(config, out_path)
     log.info(f"Custom Devices Configuration written to : {dev_config_path}")
 
-    cmd = build_qemu_cmd(config, dev_config_path)
+    cmd = build_qemu_cmd(config, dev_config_path, out_path)
 
-    _start_execution(cmd)
+    launch_gdb, gdb_cmd, binary = get_gdb_cmd(config, out_path)
 
-def _start_execution(qemu_cmd):
+    _start_execution(cmd, launch_gdb, gdb_cmd, binary)
+
+def _start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
     """
     Starts the actual execution of qemu,
     peripheral server with handlers to enable clean
@@ -98,6 +138,12 @@ def _start_execution(qemu_cmd):
     kill_qemu_process()
     qemu_proc = subprocess.Popen(qemu_cmd)
     log.info("Letting QEMU Run")
+
+    if launch_gdb:
+        if gdb_cmd is not None:
+            subprocess.Popen(gdb_cmd)
+        else:
+            log.info(f'Connect by running: gdb-multiarch {binary}')
 
     try:
         qemu_proc.wait()
@@ -142,11 +188,18 @@ def cli():
 @click.option('-c','--config',required = True, type= click.Path(resolve_path=True,exists=True),
                         help='The Path to the config file.',
                         metavar= 'PATH')
+@click.option(
+    '-m', '--map-file',
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the symbol map file.',
+    default=None,
+    metavar='PATH'
+)
 @click.option('-o','--work-dir',default="./fastdyn_work",metavar='PATH',
         show_default=True,
         type=click.Path(resolve_path=True,writable=True),
         help='Path to the work directory.')
-def run(config, work_dir):
+def run(config, map_file, work_dir):
     if work_dir is not None:
         if not os.path.isdir(work_dir):
             log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
@@ -160,10 +213,23 @@ def run(config, work_dir):
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
 
+    log.info("Parsing CMSIS-SVD")
+    svd_file_map = svd_parser.discover_svd_files()
+
     config_obj = parse_config.Fastdyn_Config()  #generate the object for the config
 
     log.info(f"Parsing Config file: {config}")
-    config_obj.add_device_config(config)
+
+    if map_file is not None:
+        log.info(f"Parsing Config file: {map_file}")
+
+    config_obj.add_device_config(config, map_file, svd_file_map)
+
+    #Initial Verification before running
+    Platform = config_obj.dev_config.cpu['platform']
+    if Platform not in svd_file_map:
+        log.error(f'{Platform} not found in the SVD File Map')
+        sys.exit(1)
 
     run_qemu(
         config=config_obj,
