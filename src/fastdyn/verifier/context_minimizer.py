@@ -20,7 +20,7 @@ fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window, cm_dir_name):
     fastdyn_log.info("Minimizing the context")
-    svd_file_map = discover_svd_files()
+    svd_file_map = svd_parser.discover_svd_files()
 
     if platform not in svd_file_map:
         fastdyn_log.error(f"Platform '{platform}' not found in the discovered platforms from the cmsis-svd-data."); sys.exit(1)

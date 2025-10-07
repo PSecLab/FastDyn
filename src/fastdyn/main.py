@@ -86,9 +86,15 @@ def build_qemu_cmd(config, dev_config_path, out_path):
     plugin_lib_path = cpu.get('plugin_library', './build/libfastdyn.so')
 
     plugin_configs = [
-        '--plugin', f"{plugin_lib_path},dev={dev_config_path}",
+        '--plugin',
+    ]
+    plugin_files = [
+        f"{plugin_lib_path},dev={dev_config_path}",
+        f'virtual={virtuals_path}',
+        f'modifier={modifiers_path}'
     ]
 
+    plugin_configs.extend([",".join(plugin_files)])
     cmd.extend(plugin_configs)
 
     return cmd
@@ -440,7 +446,7 @@ def verifier(hardware_log, emulation_log, dev_model, board, peripheral, method, 
     not_match, diff_obj = verify.verify_automata(automata1=cm_path_hardware, automata2=cm_path_emulation, peripheral=peripheral)
 
     #generate a prompt or tell the user, everything worked perfectly
-    if not_match:
+    if not not_match:
         log.warn("Log mismatch! Generating prompt")
         #generate the prompt
         #use the difference from the
