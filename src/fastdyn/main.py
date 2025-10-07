@@ -13,7 +13,7 @@ from . import gen_config    #generate the files for the configs.
 from . import parse_config  #Parse the config
 from . import fastdyn_log
 from fastdyn.__init__ import __version__
-from .verifier import verifier                  #contains the verification framework
+from .verifier import verifier as verify             #contains the verification framework
 from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 
@@ -76,12 +76,6 @@ def build_qemu_cmd(config, dev_config_path):
     cmd.extend(plugin_configs)
 
     return cmd
-
-
-
-
-
-
 
 #This function is responsible for running the qemu command based on the inputs
 def run_qemu(config, out_path):
@@ -252,7 +246,8 @@ def generate(hardware_log, board, peripheral, method, n, isr_window, work_dir):
         method=method,
         peripheral=peripheral,
         n=n,
-        isr_window=isr_window
+        isr_window=isr_window,
+        cm_dir_name="out_cm"
         )
 
 
@@ -286,10 +281,10 @@ def generate(hardware_log, board, peripheral, method, n, isr_window, work_dir):
     metavar='PATH'
 )
 @click.option(
-    '-mp', '--model-path',
+    '-d', '--dev-model',
     required=True,
     type=click.Path(resolve_path=True, exists=True),
-    help='Path to the generated model file to be verified.',
+    help='Path to the generated model file to be verified',
     metavar='PATH'
 )
 @click.option(
@@ -333,9 +328,64 @@ def generate(hardware_log, board, peripheral, method, n, isr_window, work_dir):
     type=click.Path(resolve_path=True, writable=True),
     help='Path to the work directory.'
 )
-def verifier(hardware_log, emulation_log, model_path, board, peripheral, method, n, isr_window, work_dir):
+def verifier(hardware_log, emulation_log, dev_model, board, peripheral, method, n, isr_window, work_dir):
     """Verifies the model against hardware and emulation logs."""
     log.info("Running Verifier")
+    #minimize the context for hardware log
+    if work_dir is not None:
+        if not os.path.isdir(work_dir):
+            log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+    else:
+        work_dir = "fastdyn_work"
+
+    if os.path.exists(work_dir):
+        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
+        shutil.rmtree(work_dir)
+
+    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
+    os.makedirs(work_dir)
+
+    #minimize the context--hardware
+    cm_path_hardware = cm.minimize_context(
+        out_dir=work_dir,
+        log_file=hardware_log,
+        platform=board,
+        method=method,
+        peripheral=peripheral,
+        n=n,
+        isr_window=isr_window,
+        cm_dir_name="hardware"
+        )
+
+    #minimize the context--emulation
+    cm_path_emulation = cm.minimize_context(
+        out_dir=work_dir,
+        log_file=emulation_log,
+        platform=board,
+        method=method,
+        peripheral=peripheral,
+        n=n,
+        isr_window=isr_window,
+        cm_dir_name="emulation"
+        )
+
+    #compare the automatas
+    #diff_obj-> the difference object which contains the information about the differences in the automatas
+    not_match, diff_obj = verify.verify_automata(automata1=cm_path_hardware, automata2=cm_path_emulation, peripheral=peripheral)
+
+    #generate a prompt or tell the user, everything worked perfectly
+    if not_match:
+        log.warn("Log mismatch! Generating prompt")
+        #generate the prompt
+        #use the difference from the
+        pg_path = pg.iteration_prompt_gen(
+            diff_obj=diff_obj,
+            device_model_path=dev_model,
+            peripheral=peripheral,
+            out_dir=work_dir,
+        )
+    else:
+        log.info("Both hardware log and emulation log matched!")
 
 if __name__ == "__main__":
     cli()

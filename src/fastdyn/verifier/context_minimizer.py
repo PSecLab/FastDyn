@@ -17,7 +17,7 @@ from .. import fastdyn_log as fastdyn_log_conf
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
-def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window):
+def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window, cm_dir_name):
     fastdyn_log.info("Minimizing the context")
     svd_file_map = discover_svd_files()
 
@@ -28,7 +28,7 @@ def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_win
     analyzer = MMIOAnalyzer(svd_path=svd_file_path)
     all_accesses = analyzer.load_and_correlate_log(log_file)
 
-    output_dir = os.path.join(out_dir, "out_min_ctxt")
+    output_dir = os.path.join(out_dir, cm_dir_name)
     os.makedirs(output_dir, exist_ok=True)
     fastdyn_log.info(f"Analysis starting. Output will be saved in the '{output_dir}' directory.")
 
