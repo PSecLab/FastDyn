@@ -28,6 +28,7 @@ binary = "/scratch/Fastdyn/FastDyn/device_models/server_firmwares/stm32f4/build/
 qemu_path = "qemu-system-arm"
 enable_gdb = false
 stop_on_start = false
+launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
 log_file = "qemu.log"
@@ -127,7 +128,7 @@ internal_model = "uart_model"
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "passthrough"
-        enabled = true
+        enabled = false
 
 [Device.RCC]
     ranges = ["0x40023800-0x40023BFF"]
@@ -135,7 +136,7 @@ internal_model = "uart_model"
 
     [[Device.RCC.handlers]]
         model = "passthrough"
-        enabled = true
+        enabled = false
 
 
 [Device.unhandled_space]
