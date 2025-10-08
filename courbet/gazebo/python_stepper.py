@@ -26,12 +26,33 @@ def call_step():
     else:
         print("Service call failed or timed out")
 
+def call_get_navsat():
+    node = Node()
+    service_name = "/get_navsat_reading" # get_trace
+    request = Empty()
+    timeout = 5000  # ms
+
+    result, response = node.request(
+        service_name,
+        request,
+        Empty,
+        NavSat, # stringmsg (JSON)
+        timeout
+    )
+
+    if result:
+        print(f"Result to string: {response}")
+        # print(f"Latitude: {response.latitude}, Longitude: {response.longitude}, Altitude: {response.altitude}")
+    else:
+        print("Service call failed or timed out")
+
 def main():
-    try:
-        while True:
-            call_step()
-    except KeyboardInterrupt:
-        print("\nTest Stepper Exiting...")
+    # try:
+    #     while True:
+    #         call_step()
+    # except KeyboardInterrupt:
+    #     print("\nTest Stepper Exiting...")
+    call_get_navsat()
 
 if __name__ == "__main__":
     main()

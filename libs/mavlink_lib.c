@@ -82,8 +82,14 @@ int mav_finalize_message_chan_send(int sockfd,
     ssize_t sent = sendto(sockfd, packet, packet_len, 0,
                           (const struct sockaddr *)gcs_addr, sizeof(*gcs_addr));
 
-    free(packet);
+    if (sent == -1) {
+        perror("sendto failed");
+        free(packet);
+        return -1;
+    }
 
+    free(packet);
+    // printf("Size of sent packet: %zd bytes\n", sent);
     if (sent != (ssize_t)packet_len) {
         return -1;
     }

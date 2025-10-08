@@ -18,6 +18,23 @@
 #include <memory>
 
 /**
+ * @brief Get a large set of different readings from multiple
+ * sensors in Gazebo. and return them as a JSON string.
+ *
+ * @tparam Tuple of msg types to request
+ * {
+ *    heading: ....
+ *    imu: {accel:..., gyro:..., mag:...}
+ *    gps: {lat:..., lon:..., alt:...}
+ *    baro: {pressure:..., altitude:...}
+ *    rng: [rng0, rng1, ...]
+ *    airspeed: ...
+ *    pose: {position:..., orientation:...}
+ *    velocity: {linear:..., angular:...}
+ * }
+ */
+
+/**
  * @brief Generic service template for any sensor message type
  *
  * This template class can be instantiated for any Gazebo message type.

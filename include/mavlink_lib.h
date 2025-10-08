@@ -19,6 +19,24 @@
 #define COMP_ID 1
 
 /**
+ * @brief Wrapper around mav_finalize_message_chan_send to send MAVLink messages over UDP.
+ *
+ * This function supplies the sockfd and gcs_addr parameters to mav_finalize_message_chan_send.
+ *
+ * @param message_id MAVLink message ID (24-bit).
+ * @param payload Pointer to payload data buffer.
+ * @param length Length of payload in bytes.
+ * @param crc_extra CRC extra byte specific to this message ID.
+ * @param sequence Pointer to sequence counter (increments after send).
+ * @return 0 on success, -1 on failure.
+ */
+int send_mavlink_payload(uint32_t message_id,
+                         const uint8_t *payload,
+                         uint8_t length,
+                         uint8_t crc_extra,
+                         uint8_t *sequence);
+
+/**
  * @brief Send a MAVLink v2 message over UDP.
  *
  * This function constructs a MAVLink v2 packet (header + payload + CRC)
@@ -46,7 +64,7 @@ int mav_finalize_message_chan_send(int sockfd,
  *
  * @param rb Pointer to ring buffer for incoming data.
  */
-void start_gcs_listener(void *rb);
+void start_gcs_listener(RingBuffer *rb);
 
 /**
  * @brief Check how many bytes are available in the ring buffer.

@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <errno.h>
 #include "../include/ring_buffer.h"
+#include "../include/mavlink_lib.h"
 
 #define RING_BUFFER_SIZE 512
 #define UDP_PORT 14552
@@ -17,6 +18,11 @@
 
 static pthread_t gcs_listener_tid;
 static bool gcs_listener_running = false;
+
+static struct sockaddr_in gcs_addr;
+// static socklen_t gcs_addr_len = sizeof(gcs_addr);
+static int send_sockfd = -1;
+static bool send_sockfd_initialized = false;
 
 void sigint_handler(int sig) {
     printf("\n[Main] Caught SIGINT (Ctrl-C). Killing GCS listener thread...\n");
@@ -52,7 +58,24 @@ static void* gcs_listener(void *rb) {
         exit(EXIT_FAILURE);
     }
 
-    printf("GCSReceiver: Listening for incoming data on UDP port %d...\n", UDP_PORT);
+    printf("[GCSReceiver]: Listening for incoming data on UDP port %d...\n", UDP_PORT);
+
+    // Initialize send socket and GCS address on first packet received
+    send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (send_sockfd < 0) {
+        perror("send socket creation failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    memset(&gcs_addr, 0, sizeof(gcs_addr));
+    gcs_addr.sin_family = AF_INET;
+    gcs_addr.sin_port = htons(14551); // GCS port
+    gcs_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // Assuming GCS is on localhost
+    send_sockfd_initialized = true;
+
+    printf("[GCSReceiver]: Initialized send socket to GCS at %s:14551\n",
+            inet_ntoa(gcs_addr.sin_addr));
 
     while (1) {
         socklen_t len = sizeof(cliaddr);
@@ -129,6 +152,19 @@ size_t bytes_available(RingBuffer *rb) {
         usleep(1000);
     }
     return ring_buffer_count(rb);
+}
+
+int send_mavlink_payload(uint32_t message_id,
+                         const uint8_t *payload,
+                         uint8_t length,
+                         uint8_t crc_extra,
+                         uint8_t *sequence) {
+    if (!send_sockfd_initialized) {
+        fprintf(stderr, "Send socket not initialized. Cannot send MAVLink message.\n");
+        return -1;
+    }
+    return mav_finalize_message_chan_send(send_sockfd, &gcs_addr, message_id, payload, length, crc_extra, sequence);
+
 }
 
 

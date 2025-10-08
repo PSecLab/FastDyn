@@ -71,6 +71,7 @@ cb_entry_t cb_registry[] = {
     { "ins_block_read", ins_block_read},
     // compass
     { "compass_calibrate", compass_calibrate},
+    { "compass_configure", compass_configure},
     { "compass_read_block", compass_read_block},
     // Timer
     { "hrt_micros64", hrt_micros64},

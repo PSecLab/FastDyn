@@ -11,6 +11,7 @@
 #include "gazebo_wrapper.h"
 #include <math.h>
 #include "mavlink_lib.h"
+#include <arpa/inet.h>
 
 // Storage
 static volatile char * storage_memory = NULL;
@@ -57,7 +58,7 @@ void storage_read_block(unsigned int cpu_index, void *udata) {
         goto end;
     }
 
-    printf("storage_read_block: offset=0x%08x, address=0x%08x, size=%lu\n", loc, dst, size);
+    // printf("storage_read_block: offset=0x%08x, address=0x%08x, size=%lu\n", loc, dst, size);
 
     memcpy(temp_buffer, (void*)(storage_memory + loc), size);
 
@@ -151,6 +152,7 @@ void hrt_micros64(unsigned int cpu_index, void *udata) {
     uint64_t micros = nanos / 1000;
     uint32_t micros_upper_32 = (uint32_t)(micros >> 32);
     uint32_t micros_lower_32 = (uint32_t)(micros & 0xFFFFFFFF);
+    // printf("hrt_micros64: %llu microseconds\n", (unsigned long long)micros);
 
     qemu_set_register(micros_upper_32, ARM_V7M_R0);
     qemu_set_register(micros_lower_32, ARM_V7M_R1);
@@ -196,7 +198,7 @@ void write_channel(unsigned int cpu_index, void *udata)
     uint16_t pwm = (uint16_t)qemu_get_register(ARM_V7M_R2);
     if (!set_servo_pwm(chan, pwm))
     {
-        printf("Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
+        fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
     // MAYBE: check if returning helps?
 }
@@ -237,27 +239,33 @@ void init_wheel_encoder(unsigned int cpu_index, void *udata)
  */
 void copy_wheel_encoder_state_to_frontend(unsigned int cpu_index, void *udata)
 {
-    uint32_t instance_number_offset = (uint32_t)qemu_get_register(ARM_V7M_R0) + 0x8;
-    uint32_t instance_number = 0;
-    qemu_plugin_read_memory(instance_number_offset, (uint8_t *)&instance_number, sizeof(uint32_t));
+
+    uint32_t driver_address = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    uint32_t frontend_address = 0;
+    qemu_plugin_read_memory(driver_address + 0x4, (uint8_t *)&frontend_address, sizeof(uint32_t));
+    uint32_t driver1_address = 0;
+    uint32_t driver2_address = 0;
+    qemu_plugin_read_memory(frontend_address + 0x6c, (uint8_t *)&driver1_address, sizeof(uint32_t));
+    qemu_plugin_read_memory(frontend_address + 0x70, (uint8_t *)&driver2_address, sizeof(uint32_t));
 
     double motor0_pos = 0.0;
     double motor2_pos = 0.0;
     if (!get_joint_state(&motor0_pos, &motor2_pos)) {
-        printf("Failed to get joint state from Gazebo\n");
+        fprintf(stderr, "Failed to get joint state from Gazebo\n");
         return;
     }
 
     int64_t current_nanos = qemu_plugin_get_virtual_timer();
     uint32_t current_millis = (uint32_t)(current_nanos / 1000000);
 
+    // TODO: Take out hard coding of addresses
     int32_t distance_count = 0;
-    if (instance_number == 0) {
+    if (driver_address == driver1_address) { // 0 index
         distance_count = (int32_t)(motor0_pos * encoder_counts_per_rev / (2.0 * M_PI));
-    } else if (instance_number == 1) {
+    } else if (driver_address == driver2_address) { // 1 index
         distance_count = (int32_t)(motor2_pos * encoder_counts_per_rev / (2.0 * M_PI));
     } else {
-        printf("Unknown wheel encoder instance number: %u\n", instance_number);
+        fprintf(stderr, "Unknown wheel encoder driver: %x\n", driver_address);
         return;
     }
 
@@ -288,6 +296,7 @@ void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
 {
     uint8_t gps_type = 6; // Default to GPS_TYPE_MAVLINK
     qemu_set_register(gps_type, ARM_V7M_R6);
+    // printf("GPS type set to MAVLink (6)\n");
 }
 
 /**
@@ -411,6 +420,10 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         qemu_plugin_write_memory(buf, imu_data_bytes, 14);
         qemu_set_register(1, ARM_V7M_R0); // success
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
+        // printf("INS block read: Accel(m/s²) [%.3f, %.3f, %.3f], Gyro(deg/s) [%.3f, %.3f, %.3f], Temp(C) %.2f\n",
+        //        accel_x, accel_y, accel_z,
+        //        gyro_x * RAD_TO_DEG, gyro_y * RAD_TO_DEG, gyro_z * RAD_TO_DEG,
+        //        temp_celsius);
     } else {
         printf("INS block read unknown register: 0x%X\n", reg);
         qemu_set_register(0, ARM_V7M_R0); // failure
@@ -485,9 +498,9 @@ typedef struct {
 } magnetometer_calibration_t;
 
 magnetometer_calibration_t mag_cal = {
+    .offset = {-0.0012279493f, 1.3877788e-17f, 0.47694647f},
     .diagonals = {1.0f, 1.0f, 1.0f},
     .offdiagonals = {0.0f, 0.0f, 0.0f},
-    .offset = {-0.0012279493f, 1.3877788e-17f, 0.47694647f}
 };
 
 /**
@@ -554,6 +567,23 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
 }
 
 /**
+ * @brief Ensuring accurate offsets for our compass backend
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> compass_configure *
+ */
+void compass_configure(unsigned int cpu_index, void *udata) {
+    uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    uint32_t offset = this_pointer + 0x48;
+    qemu_plugin_write_memory(offset, (uint8_t *)&mag_cal, sizeof(magnetometer_calibration_t));
+
+    // return with 0x01 (success)
+    qemu_set_register(1, ARM_V7M_R0);
+    qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
+}
+
+/**
  * @brief Advancing the time in the tick handler
  *
  * Called like this from virtuals.txt:
@@ -565,7 +595,7 @@ void chibiOS_tick_handler(unsigned int cpu_index, void *udata) {
 
     int64_t current_nanos = qemu_plugin_get_virtual_timer();
     uint32_t current_millis = (uint32_t)(current_nanos / 1000000);
-
+    // printf("Current millis: %u\n", current_millis);
     uint32_t system_ticks = current_millis * tick_frequency / 1000;
     qemu_set_register(system_ticks, ARM_V7M_R0);
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
@@ -726,37 +756,51 @@ void gcs_bytes_available(unsigned int cpu_index, void *udata) {
 }
 
 static uint8_t sequence_number = 0;
-static struct sockaddr_in gcs_addr;
-static int gcs_sockfd = -1;
-static int gcs_addr_initialized = 0;
+// static struct sockaddr_in gcs_addr;
+// static const char *gcs_ip = "127.0.0.1";
+// static int gcs_sockfd = -1;
+// static int gcs_addr_initialized = 0;
 
-int create_udp_client(int *out_sockfd, struct sockaddr_in *out_addr) {
-    if (!out_sockfd || !out_addr) return -1;
+// int create_udp_client(int *out_sockfd,
+//                       struct sockaddr_in *out_remote,
+//                       const char *remote_ip) {
+//     if (!out_sockfd || !out_remote || !remote_ip) return -1;
 
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("socket creation failed");
-        return -1;
-    }
+//     // 1. Create UDP socket
+//     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+//     if (sockfd < 0) {
+//         perror("socket creation failed");
+//         return -1;
+//     }
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY; // bind to all local interfaces
-    addr.sin_port = htons(14552);
+//     // 2. Bind to local port 14552 so we have a fixed source port
+//     struct sockaddr_in local_addr;
+//     memset(&local_addr, 0, sizeof(local_addr));
+//     local_addr.sin_family = AF_INET;
+//     local_addr.sin_addr.s_addr = INADDR_ANY;
+//     local_addr.sin_port = htons(14552);
 
-    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("bind failed");
-        close(sockfd);
-        return -1;
-    }
+//     if (bind(sockfd, (struct sockaddr*)&local_addr, sizeof(local_addr)) < 0) {
+//         perror("bind failed");
+//         close(sockfd);
+//         return -1;
+//     }
 
-    // Return values via output parameters
-    *out_sockfd = sockfd;
-    *out_addr = addr;
+//     // 3. Set up remote address (GCS) at 14550
+//     struct sockaddr_in remote_addr;
+//     memset(&remote_addr, 0, sizeof(remote_addr));
+//     remote_addr.sin_family = AF_INET;
+//     remote_addr.sin_port = htons(14550);
+//     if (inet_pton(AF_INET, remote_ip, &remote_addr.sin_addr) <= 0) {
+//         perror("invalid remote IP");
+//         close(sockfd);
+//         return -1;
+//     }
 
-    return 0; // success
-}
+//     *out_sockfd = sockfd;
+//     *out_remote = remote_addr;
+//     return 0;  // success
+// }
 
 /**
  * @brief Send Mavlink Message to GCS
@@ -766,13 +810,13 @@ int create_udp_client(int *out_sockfd, struct sockaddr_in *out_addr) {
  * <address/symbol> gcs_send_mavlink_message *
  */
 void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
-    if (!gcs_addr_initialized) {
-        if (create_udp_client(&gcs_sockfd, &gcs_addr) != 0) {
-            fprintf(stderr, "Failed to create UDP client for GCS\n");
-            return;
-        }
-        gcs_addr_initialized = 1;
-    }
+    // if (!gcs_addr_initialized) {
+    //     if (create_udp_client(&gcs_sockfd, &gcs_addr, gcs_ip) != 0) {
+    //         fprintf(stderr, "Failed to create UDP client for GCS\n");
+    //         return;
+    //     }
+    //     gcs_addr_initialized = 1;
+    // }
     uint32_t message_id = (uint32_t)qemu_get_register(ARM_V7M_R1);
     uint32_t payload_ptr = (uint32_t)qemu_get_register(ARM_V7M_R2);
     uint8_t length;
@@ -787,9 +831,7 @@ void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
     qemu_plugin_read_memory(payload_ptr, payload, length);
 
     // send using mavlink_lib implementation of mav_finalize...
-    int success = mav_finalize_message_chan_send(
-        gcs_sockfd,
-        &gcs_addr,
+    int success = send_mavlink_payload(
         message_id,
         payload,
         length,
@@ -808,3 +850,22 @@ void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
     qemu_set_register(lr, ARM_V7M_PC);
 }
+
+static void send_gps_mavlink_message(void *opaque) {
+    // TODO: Get real GPS data from Gazebo using "/get_navsat_reading" service
+    printf("%s\n", (const char *)opaque);
+}
+
+/**
+ * @brief Start periodic GPS Mavlink messages
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> sim_start *
+ */
+void sim_start(unsigned int cpu_index, void *udata) {
+    const char *msg = "Sent Mavlink Message!";
+    qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8); // every 0.1 seconds
+}
+
+// TODO: Add GPS out of band updates once we have the thing working. 
