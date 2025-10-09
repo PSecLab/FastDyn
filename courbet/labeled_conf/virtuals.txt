@@ -17,4 +17,4 @@ _ZN11GCS_MAVLINK11send_bannerEv gcs_send_banner_once *
 _ZN6AP_HAL10UARTDriver4readEv gcs_read *
 _ZN6AP_HAL10UARTDriver9availableEv gcs_bytes_available *
 _mav_finalize_message_chan_send gcs_send_mavlink_message *
-__idle_thread raiseirq 66
+0x8150a02 raise_periodic_irq 66

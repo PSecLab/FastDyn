@@ -52,6 +52,19 @@ void raiseirq(unsigned int cpu_index, void *udata);
 void pulseirq(unsigned int cpu_index, void *udata);
 
 /**
+ * @brief Raise a periodic IRQ at 1ms intervals.
+ *
+ * This virtual instruction sets up a periodic timer to raise an interrupt request (IRQ)
+ * of a specific number every 1 millisecond. The IRQ number is 0 indexed, so raising IRQ 0 will
+ * trigger the first interrupt in the vector table. For example, interrupt number 28 should be raised using the number 44 (28 + 16 for ARM Cortex
+ *
+ * Example usage in virtuals.txt:
+ *
+ * - `0xDEADBEEF raise_periodic_irq 44`
+ */
+void raise_periodic_irq(unsigned int cpu_index, void *udata);
+
+/**
  * @brief Update or read emulated memory based on a string command.
  *
  * This function parses a memory access command string provided in @p udata

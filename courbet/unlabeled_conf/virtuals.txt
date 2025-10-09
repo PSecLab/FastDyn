@@ -17,4 +17,4 @@
 0x8040254 gcs_read *
 0x8040274 gcs_bytes_available *
 0x80853a8 gcs_send_mavlink_message *
-0x81509e8 raiseirq 66
+0x8150a02 raise_periodic_irq 66

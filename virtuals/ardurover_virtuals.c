@@ -868,4 +868,5 @@ void sim_start(unsigned int cpu_index, void *udata) {
     qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8); // every 0.1 seconds
 }
 
-// TODO: Add GPS out of band updates once we have the thing working. 
+// TODO: Add GPS out of band updates once we have the thing working.
+// TODO

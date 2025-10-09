@@ -58,6 +58,7 @@ cb_entry_t cb_registry[] = {
     { "start_budgeting", start_budgeting},
     { "dyninst_lib", dyninst_lib},
     { "debug_log", debug_log},
+    { "raise_periodic_irq", raise_periodic_irq},
 #if ENABLE_LIBPY
     { "fastdyn_callback", fastdyn_callback},
 #endif
@@ -90,7 +91,7 @@ cb_entry_t cb_registry[] = {
     { "gcs_bytes_available", gcs_bytes_available},
     // GPS
     { "gps_get_type_mavlink", gps_get_type_mavlink},
-
+    { "sim_start", sim_start},
 #endif
 };
 
@@ -118,6 +119,24 @@ void raiseirq(unsigned int cpu_index, void *udata) {
     // Convert string to integer (auto-detect base: 0x = hex, 0 = octal, else decimal)
     unsigned long num = strtoul(str, NULL, 0);
     qemu_plugin_raise_irq(num);
+}
+
+void kick_irq(void *opaque) {
+    int irq_num = *((int *)opaque);
+    qemu_plugin_raise_irq(irq_num);
+}
+
+void raise_periodic_irq(unsigned int cpu_index, void *udata) {
+    // Interpret udata as a string
+    const char *str = (const char *)udata;
+
+    // Convert string to integer (auto-detect base: 0x = hex, 0 = octal, else decimal)
+    unsigned long num = strtoul(str, NULL, 0);
+    static uint32_t irq_num = 0;
+    if (num != 0) {
+        irq_num = num;
+    }
+    qemu_plugin_timer_new_period_ns(kick_irq, (void *)&irq_num, 1e6); // every 1 ms
 }
 
 void pulseirq(unsigned int cpu_index, void *udata) {
