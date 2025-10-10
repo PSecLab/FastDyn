@@ -82,4 +82,19 @@ size_t bytes_available(RingBuffer *rb);
  */
 void read_byte(RingBuffer *rb, unsigned char *byte);
 
-#endif /* MAVLINK_SEND_H */
+typedef struct {
+    double latitude_deg;
+    double longitude_deg;
+    double altitude_m;       // meters
+    float velocity_n;        // north velocity (m/s)
+    float velocity_e;        // east velocity (m/s)
+    float velocity_d;        // down velocity (m/s, NED frame)
+    uint32_t timestamp_sec;  // seconds
+    uint32_t timestamp_nsec; // nanoseconds
+    uint8_t fix_type;        // 0=no fix, 3=3D fix
+    uint8_t satellites_visible;
+} gps_input_t;
+
+void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_input_t *gps);
+
+#endif /* MAVLINK_LIB_H */

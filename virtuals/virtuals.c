@@ -59,6 +59,8 @@ cb_entry_t cb_registry[] = {
     { "dyninst_lib", dyninst_lib},
     { "debug_log", debug_log},
     { "raise_periodic_irq", raise_periodic_irq},
+    // ChibiOS specific
+    { "chDbgContextSwitching", chDbgContextSwitching},
 #if ENABLE_LIBPY
     { "fastdyn_callback", fastdyn_callback},
 #endif
@@ -91,7 +93,6 @@ cb_entry_t cb_registry[] = {
     { "gcs_bytes_available", gcs_bytes_available},
     // GPS
     { "gps_get_type_mavlink", gps_get_type_mavlink},
-    { "sim_start", sim_start},
 #endif
 };
 

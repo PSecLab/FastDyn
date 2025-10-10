@@ -1,3 +1,6 @@
 [submodule "device_models/elder/inih"]
 	path = device_models/elder/inih
 	url = https://github.com/benhoyt/inih.git
+[submodule "submodules/mavlink_headers"]
+	path = submodules/mavlink_headers
+	url = https://github.com/mavlink/c_library_v2.git

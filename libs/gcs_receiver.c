@@ -11,6 +11,7 @@
 #include <errno.h>
 #include "../include/ring_buffer.h"
 #include "../include/mavlink_lib.h"
+#include "mavlink.h"
 
 #define RING_BUFFER_SIZE 512
 #define UDP_PORT 14552
@@ -165,6 +166,61 @@ int send_mavlink_payload(uint32_t message_id,
     }
     return mav_finalize_message_chan_send(send_sockfd, &gcs_addr, message_id, payload, length, crc_extra, sequence);
 
+}
+
+void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_input_t *gps) {
+    if (!gps || send_sockfd < 0) {
+        return;
+    }
+
+    mavlink_message_t msg;
+
+    // Convert latitude and longitude to int32 (degrees * 1E7)
+    int32_t lat = (int32_t)llround(gps->latitude_deg * 1e7);
+    int32_t lon = (int32_t)llround(gps->longitude_deg * 1e7);
+
+    // GPS time-of-week in ms
+    uint32_t gps_tow_ms = gps->timestamp_sec * 1000 + gps->timestamp_nsec / 1000000;
+    uint64_t time_usec = (uint64_t)gps_tow_ms * 1000ULL;
+
+    // Hardcoded GPS week (replace with real computation if desired)
+    uint16_t gps_week = 15;
+
+    // Pack the MAVLink GPS_INPUT message (21 arguments)
+    mavlink_msg_gps_input_pack(
+        system_id,
+        component_id,
+        &msg,
+        time_usec,                        // time_usec
+        0,                                // gps_id
+        0,                                // ignore_flags
+        gps_tow_ms,                        // time_week_ms
+        gps_week,                           // time_week
+        gps->fix_type,                     // fix_type
+        lat,                               // lat
+        lon,                               // lon
+        (float)(gps->altitude_m * 1000.0f), // alt in mm
+        0.0f,                              // hdop
+        0.0f,                              // vdop
+        gps->velocity_n,                   // vn
+        gps->velocity_e,                   // ve
+        gps->velocity_d,                   // vd
+        0.0f,                              // speed_accuracy
+        0.0f,                              // horiz_accuracy
+        0.0f,                              // vert_accuracy
+        gps->satellites_visible,           // satellites_visible
+        36000                              // yaw (in cdeg, 36000 = 360.00 degrees)
+    );
+
+    // Serialize the message into a buffer
+    uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
+    uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
+
+    // Send over the global UDP socket
+    ssize_t sent = sendto(send_sockfd, buffer, len, 0, (struct sockaddr*)&gcs_addr, sizeof(gcs_addr));
+    if (sent < 0) {
+        perror("sendto");
+    }
 }
 
 

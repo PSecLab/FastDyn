@@ -152,10 +152,12 @@ void hrt_micros64(unsigned int cpu_index, void *udata) {
     uint64_t micros = nanos / 1000;
     uint32_t micros_upper_32 = (uint32_t)(micros >> 32);
     uint32_t micros_lower_32 = (uint32_t)(micros & 0xFFFFFFFF);
+    // int seconds = (int)(micros / 1000000);
     // printf("hrt_micros64: %llu microseconds\n", (unsigned long long)micros);
+    // printf("  (approx %d seconds)\n", seconds);
 
-    qemu_set_register(micros_upper_32, ARM_V7M_R0);
-    qemu_set_register(micros_lower_32, ARM_V7M_R1);
+    qemu_set_register(micros_upper_32, ARM_V7M_R1);
+    qemu_set_register(micros_lower_32, ARM_V7M_R0);
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
     qemu_set_register(lr, ARM_V7M_PC);
 }
@@ -286,6 +288,21 @@ void copy_wheel_encoder_state_to_frontend(unsigned int cpu_index, void *udata)
 
 // GPS
 /**
+ * @brief Send GPS MAVLink message periodically
+ *
+ * This function is called periodically to send a GPS MAVLink message
+ * with simulated GPS data.
+ *
+ * @param opaque message not used
+ */
+static void send_gps_mavlink_message(void *opaque)
+{
+    (void) opaque;
+    printf("Sending GPS MAVLink message\n");
+}
+
+
+/**
  * Set GPS type to MAVLink
  *
  * Called like this from virtuals.txt:
@@ -294,9 +311,10 @@ void copy_wheel_encoder_state_to_frontend(unsigned int cpu_index, void *udata)
  */
 void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
 {
+    const char *msg = "Hello from GPS MAVLink!";
     uint8_t gps_type = 6; // Default to GPS_TYPE_MAVLINK
     qemu_set_register(gps_type, ARM_V7M_R6);
-    // printf("GPS type set to MAVLink (6)\n");
+    qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
 }
 
 /**
@@ -591,7 +609,8 @@ void compass_configure(unsigned int cpu_index, void *udata) {
  * <address/symbol> advance_time_in_tick_handler *
  */
 void chibiOS_tick_handler(unsigned int cpu_index, void *udata) {
-    uint32_t tick_frequency = 1000; // 1 kHz
+    // uint32_t tick_frequency = 1000; // 1 kHz
+    uint32_t tick_frequency = 10000; // 1 MHz
 
     int64_t current_nanos = qemu_plugin_get_virtual_timer();
     uint32_t current_millis = (uint32_t)(current_nanos / 1000000);
@@ -851,22 +870,49 @@ void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
     qemu_set_register(lr, ARM_V7M_PC);
 }
 
-static void send_gps_mavlink_message(void *opaque) {
-    // TODO: Get real GPS data from Gazebo using "/get_navsat_reading" service
-    printf("%s\n", (const char *)opaque);
-}
+void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
+    uint32_t thread1 = qemu_get_register(ARM_V7M_R0);
+    uint32_t thread2 = qemu_get_register(ARM_V7M_R1);
 
-/**
- * @brief Start periodic GPS Mavlink messages
- *
- * Called like this from virtuals.txt:
- *
- * <address/symbol> sim_start *
- */
-void sim_start(unsigned int cpu_index, void *udata) {
-    const char *msg = "Sent Mavlink Message!";
-    qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8); // every 0.1 seconds
+    uint32_t thread1_name_offset = thread1 + 0x1c;
+    uint32_t thread2_name_offset = thread2 + 0x1c;
+
+    uint32_t thread1_name_ptr = 0;
+    uint32_t thread2_name_ptr = 0;
+
+    qemu_plugin_read_memory(thread1_name_offset, (uint8_t*)&thread1_name_ptr, sizeof(uint32_t));
+    qemu_plugin_read_memory(thread2_name_offset, (uint8_t*)&thread2_name_ptr, sizeof(uint32_t));
+
+    char thread1_name[17] = {0};
+    char thread2_name[17] = {0};
+
+    qemu_plugin_read_memory(thread1_name_ptr, (uint8_t*)thread1_name, sizeof(thread1_name));
+    qemu_plugin_read_memory(thread2_name_ptr, (uint8_t*)thread2_name, sizeof(thread2_name));
+
+    printf("Switching context: %s -> %s\n", thread2_name, thread1_name);
+
+    printf("\nRegisters before switch:\n");
+
+    // uint32_t thread1_ctx_offset = thread1 + 0xc;
+    // uint32_t thread2_ctx_offset = thread2 + 0xc;
+
+    // port_context_t ctx1;
+    // port_context_t ctx2;
+
+    // qemu_plugin_read_memory(thread1_ctx_offset, (uint8_t*)&ctx1.intctx, sizeof(port_intctx_t));
+    // qemu_plugin_read_memory(thread2_ctx_offset, (uint8_t*)&ctx2.intctx, sizeof(port_intctx_t));
+
+    // printf("R4: 0x%08x -> 0x%08x\n", ctx2.intctx.r4, ctx1.intctx.r4);
+    // printf("R5: 0x%08x -> 0x%08x\n", ctx2.intctx.r5, ctx1.intctx.r5);
+    // printf("R6: 0x%08x -> 0x%08x\n", ctx2.intctx.r6, ctx1.intctx.r6);
+    // printf("R7: 0x%08x -> 0x%08x\n", ctx2.intctx.r7, ctx1.intctx.r7);
+    // printf("R8: 0x%08x -> 0x%08x\n", ctx2.intctx.r8, ctx1.intctx.r8);
+    // printf("R9: 0x%08x -> 0x%08x\n", ctx2.intctx.r9, ctx1.intctx.r9);
+    // printf("R10: 0x%08x -> 0x%08x\n", ctx2.intctx.r10, ctx1.intctx.r10);
+    // printf("R11: 0x%08x -> 0x%08x\n", ctx2.intctx.r11, ctx1.intctx.r11);
+    // printf("LR: 0x%08x -> 0x%08x\n", ctx2.intctx.lr, ctx1.intctx.lr);
+
+    printf("\n");
 }
 
 // TODO: Add GPS out of band updates once we have the thing working.
-// TODO

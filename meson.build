@@ -1,6 +1,9 @@
 project('fastdyn', 'c')
 cc = meson.get_compiler('c')
 
+# suppress MAVLink packed warnings
+add_project_arguments('-Wno-address-of-packed-member', language : 'c')
+
 #glib support
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
 cjson_dep = dependency('libcjson', required: true)
@@ -116,6 +119,10 @@ endif
   device_models_inc = include_directories('device_models/elder/inih/')
   local_include = [local_include, device_models_inc]
 endif
+
+mavlink_include = include_directories('submodules/mavlink_headers/ardupilotmega')
+
+local_include = [local_include, mavlink_include]
 
 
 fastdyn_target = shared_module(
