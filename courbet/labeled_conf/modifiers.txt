@@ -80,5 +80,4 @@ _ZN6LP55624initEv r0 1
 _ZN6LP55624initEv r6 14
 _ZN3GCS11setup_uartsEv r15 r14
 _ZN3GCS11setup_uartsEv r0 0
-0x8032bce r6 14
 0x802a204 r0 -1

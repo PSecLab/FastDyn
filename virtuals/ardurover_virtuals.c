@@ -298,7 +298,7 @@ void copy_wheel_encoder_state_to_frontend(unsigned int cpu_index, void *udata)
 static void send_gps_mavlink_message(void *opaque)
 {
     (void) opaque;
-    printf("Sending GPS MAVLink message\n");
+    // TODO: Pull and send actual GPS data from Gazebo
 }
 
 
@@ -314,6 +314,7 @@ void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
     const char *msg = "Hello from GPS MAVLink!";
     uint8_t gps_type = 6; // Default to GPS_TYPE_MAVLINK
     qemu_set_register(gps_type, ARM_V7M_R6);
+    printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
     qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
 }
 
