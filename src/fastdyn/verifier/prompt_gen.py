@@ -28,6 +28,7 @@ qemu_api_list = """
 - `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for the pseudo-terminal device /tmp/usart1_pty
 - `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
 - `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
+- `I2CBus api_i2c_init_bus(ConfigSection* model_info)`;: Parses attached slaves to I2C information to create and return a fully initialized I2CBus structure.
 """
 
 def initial_prompt_gen(analysis_dir, peripheral, out_dir):

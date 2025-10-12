@@ -72,6 +72,7 @@ static int elder_init(ConfigSection* model_info) {
 
 	for (int i=0; i < model_info->device_count; i++) {
 		devices[i].config = &model_info->devices[i];
+		devices[i].model.name = devices[i].config->name;
 		printf("Loading device [%s] from %s\n", devices[i].config->name, devices[i].config->scroll_path);
 
 	    devices[i].handle = dlopen(devices[i].config->scroll_path, RTLD_NOW);
@@ -93,7 +94,8 @@ static int elder_init(ConfigSection* model_info) {
 	    devices[i].model.init = (DeviceInit)dlsym(devices[i].handle, symbol);
 	    if (!devices[i].model.init) utils_die("Missing init");
 
-		devices[i].model.init(model_info);
+		//pass the information related to the model for initialization
+		devices[i].model.init(model_info);	//send the details of complete elder model
 	}
 	return 0;
 }

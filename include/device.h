@@ -13,6 +13,21 @@
 /* Required for Elder model */
 #define DEV_LOGGER
 
+// I2C Model related info start
+typedef struct {
+    int address;      //address of current slave device
+    char* slave_name;   //name of current slave device
+    char* scroll_path;   //scroll of current slave device
+    bool _is_scroll;    //whether it's a share lib or built in qemu model
+} I2CDevice;
+
+typedef struct {
+    int device_count;
+    I2CDevice* i2cdevice;   //Dynamic array of all the attached slave devices
+} I2CDevices;
+
+//I2C Model related info end
+
 // Represents a single device model (e.g., "uart", "gpio_g")
 typedef struct {
     char* name;
@@ -20,6 +35,7 @@ typedef struct {
     char** ranges;
     int range_count;
     char* irq;
+    I2CDevices I2Cdevices;
 } DeviceModels;
 
 // Represents a top-level section (e.g., "elder", "passthrough")

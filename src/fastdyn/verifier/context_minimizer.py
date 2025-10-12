@@ -197,11 +197,12 @@ class MMIOAnalyzer:
                     interrupt_match = interrupt_pattern.match(line.strip())
                     if interrupt_match:
                         data = interrupt_match.groupdict()
-                        vector = int(data['vector'], 16) - 16
+                        vector = int(data['vector'], 16)
                         p_name = self.interrupt_map.get(vector)
                         if p_name is None:
-                            fastdyn_log.info(f"On log line {line_num}: Failed to map interrupt vector {vector} (0x{vector:X}) to any SVD peripheral.")
-                            sys.exit(1)
+                            fastdyn_log.warn(f"On log line {line_num}: Failed to map interrupt vector {vector} (0x{vector:X}) to any SVD peripheral.")
+                            # sys.exit(1)
+                            continue
                         access = MMIOAccess(
                             timestamp_ns=int(float(data['timestamp']) * 1e9),
                             access_type='interrupt',
@@ -214,8 +215,9 @@ class MMIOAnalyzer:
                     address = int(data['address'], 16)
                     p_name, r_name, d_name = self._find_register_for_address(address)
                     if p_name is None:
-                        fastdyn_log.error(f"On log line {line_num}: Failed to map address 0x{address:08X} to any SVD peripheral.")
-                        sys.exit(1)
+                        fastdyn_log.warn(f"On log line {line_num}: Failed to map address 0x{address:08X} to any SVD peripheral.")
+                        # sys.exit(1)
+                        continue
                     access = MMIOAccess(
                         timestamp_ns=int(float(data['timestamp']) * 1e9), access_type=data['type'].lower(),
                         address=address, value=int(data['value'], 16), pc=int(data['pc'], 16),

@@ -16,7 +16,7 @@ fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 class Fastdyn_Config:
     def __init__(self):
         self.dev_config     = None                 # If multiple dev config files, update this to a dict else this contains the pointer to info.
-        self.symbol_dict    = None
+        self.symbols_dict    = None
         self.svd_file_map   = None
         self.virtual_instr  = []
         self.modifier_instr = []
@@ -42,7 +42,8 @@ class Fastdyn_Config:
         '''
         Parse the map file
         '''
-        self.symbols_dict = self.load_symbol_addresses(map_file)
+        if map_file is not None:
+            self.symbols_dict = self.load_symbol_addresses(map_file)
 
         '''
         Create IRQ map using the SVD File Map
@@ -145,7 +146,7 @@ class Fastdyn_Config:
             first_token = tokens[0]
             if is_number(first_token) == "none":
                 symbol, offset = parse_symbol(first_token)
-                if symbol in self.symbols_dict:
+                if self.symbols_dict is not None and symbol in self.symbols_dict:
                     resolved_address = self.symbols_dict[symbol]
                     if resolved_address & 1:  # if thumb address, make it even
                         resolved_address -= 1
@@ -166,7 +167,7 @@ class Fastdyn_Config:
                     pass
                 elif is_number(third_token) == "none":
                     symbol, offset = parse_symbol(third_token) # parse symbol and offset
-                    if symbol in self.symbols_dict:
+                    if self.symbols_dict is not None and symbol in self.symbols_dict:
                         # Here we assume offset is 0 for the third token if it's just a symbol
                         if offset != 0:
                              fastdyn_log.warn(f"Offset for third token '{third_token}' is not supported. Treating as symbol only.")
