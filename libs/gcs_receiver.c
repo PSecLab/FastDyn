@@ -209,7 +209,7 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
         0.0f,                              // horiz_accuracy
         0.0f,                              // vert_accuracy
         gps->satellites_visible,           // satellites_visible
-        36000                              // yaw (in cdeg, 36000 = 360.00 degrees)
+        36000                              // yaw (in cdeg, 36000 = 360.00 degrees) TODO: make accurate
     );
 
     // Serialize the message into a buffer

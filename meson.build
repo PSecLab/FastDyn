@@ -99,7 +99,7 @@ srcs += files(
 )
 
 if ENABLE_LIBGZ
-src += files(
+srcs += files(
   'libs/gcs_receiver.c',
 
 )

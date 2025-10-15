@@ -299,6 +299,27 @@ static void send_gps_mavlink_message(void *opaque)
 {
     (void) opaque;
     // TODO: Pull and send actual GPS data from Gazebo
+    gps_data_t gps_data;
+    if (!get_navsat_reading(&gps_data)) {
+        fprintf(stderr, "Failed to get GPS reading from Gazebo\n");
+        return;
+    }
+
+    gps_input_t gps_message = {
+        .latitude_deg = gps_data.lat,
+        .longitude_deg = gps_data.lon,
+        .altitude_m = gps_data.alt,
+        .velocity_n = (float)gps_data.vel_n,
+        .velocity_e = (float)gps_data.vel_e,
+        .velocity_d = (float)gps_data.vel_d,
+        .timestamp_sec = (uint32_t)gps_data.sec,
+        .timestamp_nsec = gps_data.nsec,
+        .fix_type = 3, // 3D fix
+        .satellites_visible = 10 // Arbitrary number of satellites
+    };
+
+    // 220 https://mavlink.io/en/messages/common.html#MAV_COMP_ID_GPS
+    send_mavlink_gps_input(1, 220, &gps_message);
 }
 
 
@@ -311,11 +332,16 @@ static void send_gps_mavlink_message(void *opaque)
  */
 void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
 {
+    static bool requested_timer = false;
     const char *msg = "Hello from GPS MAVLink!";
-    uint8_t gps_type = 6; // Default to GPS_TYPE_MAVLINK
+    uint8_t gps_type = 14; // Default to GPS_TYPE_MAVLINK
     qemu_set_register(gps_type, ARM_V7M_R6);
     printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
-    qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
+    if (!requested_timer) {
+        requested_timer = true;
+        // Request periodic timer every 100ms
+        qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
+    }
 }
 
 /**
