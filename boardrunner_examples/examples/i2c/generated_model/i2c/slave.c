@@ -88,11 +88,11 @@ int STM32F4_event(enum i2c_event event) {
     // send it back from the beginning.
     // Optional: print a human-readable name
     switch (event) {
-        case I2C_START_RECV: fprintf("Event: I2C_START_RECV\n"); break;
-        case I2C_START_SEND: fprintf("Event: I2C_START_SEND\n"); break;
-        case I2C_FINISH:     fprintf("Event: I2C_FINISH\n"); break;
-        case I2C_NACK:       fprintf("Event: I2C_NACK\n"); break;
-        default:             fprintf("Unknown event\n"); break;
+        case I2C_START_RECV: printf("Event: I2C_START_RECV\n"); break;
+        case I2C_START_SEND: printf("Event: I2C_START_SEND\n"); break;
+        case I2C_FINISH:     printf("Event: I2C_FINISH\n"); break;
+        case I2C_NACK:       printf("Event: I2C_NACK\n"); break;
+        default:             printf("Unknown event\n"); break;
     }
     slave_rx_idx = 0;
     slave_tx_idx = 0;
