@@ -153,7 +153,6 @@ internal_model = "uart_model"
         model   = "elder"
         enabled = true
         scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
-        device = "tempsensor"
 
     [[Device.i2c1.handlers]]
         # This device is now handled by the elder model, directly linking it
@@ -162,20 +161,23 @@ internal_model = "uart_model"
         enabled = false
 
     [[Device.i2c1.slaves]]
-        device = "tmp_sensor"
-        address = "0x50"
-        model_scroll = "sensor_model.so"
+        model = ["elder"]       #attach this device to elder model only
+        device = "STM32F4"
+        address = "0x30F"
+        device_scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/slave_gen.so"
 
-    [[Device.i2c1.slaves]]
-        device = "tmp_401_sensor"
-        address = "0x48"
-        model_scroll = "sensor_model1.so"
+    # [[Device.i2c1.slaves]]
+    #     model = ["elder"]       #attach this device to elder model only
+    #     device = "tmp_401_sensor"
+    #     address = "0x48"
+    #     device_scroll = "sensor_model1.so"
 
 
-
+# # 0x40005414
 [Device.unhandled_space]
     irq = "0-15:20-25:41"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
-    ranges = [ "0x40000000-0x400053FF","0x00000000-0x000000FF", "0xE0000000-0xEFFFFFFF","0x40005800-0x40023BFF"]
+    # ranges = ["0x00000000-0x000000FF", "0x40000000-0x400057FF" , "0x40005800-0xE00FFFFF" , "0xE0000000-0xEFFFFFFF"]
+    ranges = ["0x00000000-0x000000FF", "0x40000000-0x400053FF", "0x40005800-0xE00FFFFF" , "0xE0000000-0xEFFFFFFF"]
     description = "Memory regions that are explicitly not handled by any model."
 
     [[Device.unhandled_space.handlers]]

@@ -28,7 +28,34 @@ qemu_api_list = """
 - `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for the pseudo-terminal device /tmp/usart1_pty
 - `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
 - `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
-- `I2CBus api_i2c_init_bus(ConfigSection* model_info)`;: Parses attached slaves to I2C information to create and return a fully initialized I2CBus structure.
+- `I2CBus api_i2c_init_bus(ConfigSection* model_info)`: Initializes an I2C bus from a configuration section.
+- `int api_i2c_start_transfer(I2CBus* bus, uint8_t address, bool is_recv)`: Starts an I2C transaction with a slave device.
+- `int api_i2c_start_transfer_10bit(I2CBus* bus, uint16_t address, bool is_recv)`: Starts an I2C transaction with a slave device.
+- `void api_i2c_end_transfer(I2CBus* bus)`: Ends the current I2C transaction.
+- `int api_i2c_send(I2CBus *bus, uint8_t data)`: Sends a byte to the active I2C slave device.
+- `uint8_t api_i2c_recv(I2CBus *bus)`: Receives a byte from the active I2C slave device.
+
+// --- I2C Bus struct definitions here ---
+typedef struct {
+    char* name; //Name of the slave
+    int address;    //address for which the slave will be registered
+    SlaveSendFunc send; //Call this function when you want to send data and get ack from the slave device.
+    SlaveRecvFunc recv; //Call this function when you want to receive data from the slave device.
+    SlaveEventFunc event; //Call this function when you want to start transmission
+} SlaveDetails;
+
+typedef struct {
+    int num_slaves;
+    SlaveDetails* slave; //Dynamic array of slaves
+} SlaveList;
+
+typedef struct {
+    SlaveList Slaves;  //Constant once registered on i2c_init_bus
+    SlaveDetails* current_dev;//Current devices show the current devices being used for the transaction
+    uint8_t saved_address; //saved_address is the address initiated for the transaction by the master.
+} I2CBus;
+// --- End of struct definitions ---
+
 """
 
 def initial_prompt_gen(analysis_dir, peripheral, out_dir):
@@ -61,7 +88,7 @@ def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path):
     final_prompt = f'''
 Take this prompt independent from previous prompt history.
 
-You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for STM32F429 with special familiarity with usart1 peripheral.
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for STM32F429 with special familiarity with {peripheral_name} peripheral.
 Your task is to analyze the following summary of MMIO trace data and generate a complete working C device model.
 
 #Backward-pass/Correction:
@@ -75,6 +102,14 @@ You **must** use the following APIs to construct the device model. Pay close att
 
 ### NOTE
 If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
+
+If you need more info about the firmware, stop here and ask the user to give you the firmware code, dont generate the device model.
+
+If you believe the issue is not in the model but the device (slave) attached to it, stop and ask the user for the slave model and observe the slave model first and correct the slave model as well if it has issues, don't generate the master model!
+The slave model will just have three supporting functions and not any more registeration functions which **MUST NOT** be changed
+- STM32F4_event
+- STM32F4_send
+- STM32F4_receive
 
 ## Commands:
 After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
@@ -304,7 +339,7 @@ void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, 
         // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
 }}}}
 
-void {peripheral_name.lower()}_init(void *opaque) {{{{
+void {peripheral_name.lower()}_init(ConfigSection* model_info) {{{{
 		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
 }}}}
 ```

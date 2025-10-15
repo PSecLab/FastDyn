@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <utils.h>
-#include "i2c_bus.c"
+#include <devmodels_apis.h>
 
 //Returns the pseudo terminal handler
 int api_pty_fd_gen(void) {
@@ -87,6 +87,11 @@ int api_i2c_start_transfer(I2CBus* bus, uint8_t address, bool is_recv) {
                                                ? I2C_START_RECV
                                                : I2C_START_SEND);
 }
+int api_i2c_start_transfer_10bit(I2CBus* bus, uint16_t address, bool is_recv) {
+    return i2c_do_start_transfer_10bit(bus, address, is_recv
+                                               ? I2C_START_RECV
+                                               : I2C_START_SEND);
+}
 /**
  * @brief Ends the current I2C transaction and resets the bus's active device.
  *
@@ -98,7 +103,7 @@ int api_i2c_start_transfer(I2CBus* bus, uint8_t address, bool is_recv) {
  */
 void api_i2c_end_transfer(I2CBus* bus) {
     if (bus->current_dev) {
-        (void)bus->current_dev->event(NULL, I2C_FINISH);
+        (void)bus->current_dev->event(I2C_FINISH);
         bus->current_dev = NULL;
     }
 }
@@ -118,7 +123,7 @@ int api_i2c_send(I2CBus *bus, uint8_t data)
 
     // 2. Call the slave's send function using the correct syntax ('->').
     //    Pass the ADDRESS of the data to match the uint8_t* signature.
-    int ret = bus->current_dev->send(NULL, &data);
+    int ret = bus->current_dev->send(data);
 
     // 3. Return 0 for success (if ret is 0), or -1 for failure (if ret is non-zero).
     return (ret == 0) ? 0 : -1;
@@ -135,7 +140,7 @@ uint8_t api_i2c_recv(I2CBus *bus)
     // Check if a transaction is active.
     if (bus->current_dev) {
         // Call the slave's recv function and return the byte.
-        return bus->current_dev->recv(NULL);
+        return bus->current_dev->recv();
     }
 
     // If no device is active, return a default "bus high" value.

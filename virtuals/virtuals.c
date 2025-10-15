@@ -60,11 +60,11 @@ cb_entry_t cb_registry[] = {
     { "debug_log", debug_log},
     { "raise_periodic_irq", raise_periodic_irq},
     // ChibiOS specific
-    { "chDbgContextSwitching", chDbgContextSwitching},
 #if ENABLE_LIBPY
     { "fastdyn_callback", fastdyn_callback},
 #endif
 #if ENABLE_LIBGZ
+    { "chDbgContextSwitching", chDbgContextSwitching},
     // storage
     { "storage_read_block", storage_read_block},
     { "storage_write_block", storage_write_block},

@@ -96,8 +96,14 @@ srcs += files(
   'virtuals/virtuals.c',
   'libs/ring_buffer.c',
   'libs/mavlink_lib.c',
-  'libs/gcs_receiver.c',
 )
+
+if ENABLE_LIBGZ
+src += files(
+  'libs/gcs_receiver.c',
+
+)
+endif
 
 if ENABLE_LIBDEV
   libdl_dep = cc.find_library('dl', required: true)
@@ -120,10 +126,11 @@ endif
   local_include = [local_include, device_models_inc]
 endif
 
+if ENABLE_LIBGZ
 mavlink_include = include_directories('submodules/mavlink_headers/ardupilotmega')
 
 local_include = [local_include, mavlink_include]
-
+endif
 
 fastdyn_target = shared_module(
   'fastdyn',

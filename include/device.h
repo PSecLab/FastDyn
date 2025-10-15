@@ -97,7 +97,7 @@ typedef struct unimp_exporter {
 } DEV_XPORTER;
 
 //4KB regions for now.
-#define SLOT_SIZE   0x1000
+#define SLOT_SIZE   0x100
 
 #define DEVICE_BASE 0x40000000ULL
 #define DEVICE_SIZE 0x20000000ULL  // 0x40000000 -> 0x5FFFFFFF, ~512 MB

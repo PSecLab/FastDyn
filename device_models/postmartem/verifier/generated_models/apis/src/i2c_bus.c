@@ -5,40 +5,8 @@
 #include <stdbool.h>
 #include <dlfcn.h>
 #include <inttypes.h> // For uint8_t
-
-enum i2c_event {
-    I2C_START_RECV,
-    I2C_START_SEND,
-    I2C_FINISH,
-    I2C_NACK /* Masker NACKed a receive byte.  */
-};
-
-// Typedefs for the slave device functions
-typedef int (*SlaveSendFunc)(void* opaque, uint8_t* data);
-typedef uint8_t (*SlaveRecvFunc)(void* opaque);
-typedef int (*SlaveEventFunc)(void* opaque, enum i2c_event event);
-
-// --- I2C Bus struct definitions here ---
-typedef struct {
-    char* name; //Name of the slave
-    int address;    //address for which the slave will be registered
-    SlaveSendFunc send; //Call this function when you want to send data and get ack from the slave device.
-    SlaveRecvFunc recv; //Call this function when you want to receive data from the slave device.
-    SlaveEventFunc event; //Call this function when you want to start transmission
-} SlaveDetails;
-
-typedef struct {
-    int num_slaves;
-    SlaveDetails* slave; //Dynamic array of slaves
-} SlaveList;
-
-typedef struct {
-    SlaveList Slaves;  //Constant once registered on i2c_init_bus
-    SlaveDetails* current_dev;//Current devices show the current devices being used for the transaction
-    uint8_t saved_address; //saved_address is the address initiated for the transaction by the master.
-} I2CBus;
-// --- End of struct definitions ---
-
+#include "devmodels_apis.h"
+#include "utils.h"
 // Helper functions
 /**
  * @brief Scans the bus for a slave with the given address.
@@ -71,7 +39,27 @@ bool i2c_scan_bus(I2CBus *bus, uint8_t address, SlaveDetails **found_dev) {
  * @param event The event to send (I2C_START_SEND or I2C_START_RECV).
  * @return 0 on success (ACK), non-zero on failure (NACK).
  */
-static int i2c_do_start_transfer(I2CBus *bus, uint8_t address, enum i2c_event event) {
+int i2c_do_start_transfer(I2CBus *bus, uint8_t address, enum i2c_event event) {
+    // If no device is currently active, scan for the requested one.
+
+    if (!bus->current_dev) {
+        bool found = i2c_scan_bus(bus, address, &bus->current_dev);
+        if (!found) {
+            return 1; // Device not found on bus, return NACK/failure
+        }
+    }
+
+    // After scanning, if current_dev is still NULL, something is wrong.
+    if (!bus->current_dev) {
+        return 1;
+    }
+
+    int event_status = bus->current_dev->event(event);
+
+    return event_status;
+}
+
+int i2c_do_start_transfer_10bit(I2CBus *bus, uint16_t address, enum i2c_event event) {
     // If no device is currently active, scan for the requested one.
     if (!bus->current_dev) {
         bool found = i2c_scan_bus(bus, address, &bus->current_dev);
@@ -85,11 +73,10 @@ static int i2c_do_start_transfer(I2CBus *bus, uint8_t address, enum i2c_event ev
         return 1;
     }
 
-    int event_status = bus->current_dev->event(NULL, event);
+    int event_status = bus->current_dev->event(event);
 
     return event_status;
 }
-
 /**
  * @brief This function parses the device models to configure I2C slave devices.
  * It is called once when initializing the model.
@@ -107,9 +94,8 @@ bool i2c_slave_device_parse(I2CBus* bus, ConfigSection* model_info) {
     for (int i = 0; i < model_info->device_count; i++) {
         DeviceModels* current_dev = &model_info->devices[i];
 
-        // Stop when we find the device with the exact name "i2c"
-        // Using strcmp for an exact match is safer than strstr.
-        if (strcmp(current_dev->name, "i2c") == 0) {
+        // Stop when we find the device with the name "i2c" in it.
+        if (strstr(current_dev->name, "i2c") != NULL) {
             // Allocate memory for the SlaveList on the heap
             SlaveList* slavelist = calloc(1, sizeof(SlaveList));
             if (!slavelist) {

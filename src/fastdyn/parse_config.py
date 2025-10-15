@@ -4,6 +4,7 @@ This file is responsible for parsing the config file to generate a python object
 import logging
 import tomli
 import copy
+import os
 
 from cmsis_svd.parser import SVDParser
 from .utils.helper import *
@@ -239,6 +240,28 @@ class DevConfig:
                             builtin_model[dev] = {}
                             builtin_model[dev] = {"args": handler.get('args')}
 
+            #parse the slave devices attached to that device (for instance i2c1 has slave devices attached to it.)
+            #attach the slaves to all the device models (passthrough, elder or any other)
+            slave_dict = {}
+            for slave in device_data.get('slaves', []):
+                model_attach  = slave.get('model', [])
+                # curr_slave = {k: v for k,v in slave.items() if k!='model' or k!='device'}
+                for model in model_attach:  #may be a single slave wants to attach to [elder, passthrough]
+                    if model in model_ranges and device_name in model_ranges[model]:    #check if model (elder) is registered above as a handler
+                        #add all the parameters except the model in the dict
+                        slave_dict[slave.get('device')] = {
+                            "address": slave.get('address'),
+                        }
+                        if slave.get('device_scroll') is not None and os.path.exists(slave.get('device_scroll')):  #we are going to check offline if the scroll is a path or not for efficiency
+                            slave_dict[slave.get('device')].update({
+                                "scroll_path": slave.get('device_scroll'),
+                                "is_scroll_path": True
+                            })
+                        else:
+                            slave_dict[slave.get('device')].update({
+                                "is_scroll_path": False
+                            })
 
+                model_ranges[model][device_name]['slaves'] = slave_dict
 
         return model_ranges, models_info, builtin_model

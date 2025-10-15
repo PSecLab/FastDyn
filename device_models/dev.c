@@ -137,12 +137,14 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
             // Case 1: Only one device registered. Use it without checking priority.
             dev_to_use = node->dev;
         } else {
-            // Case 2: Multiple devices registered. Now, find the one with priority.
+            // Case 2: Multiple devices registered. Find priority, or default to first.
             DeviceNode *current = node;
+            dev_to_use = node->dev; // Default to the first device found
+
             while (current) {
                 if (current->dev && current->dev->name && strcmp(current->dev->name, read_priority_device_name) == 0) {
-                    dev_to_use = current->dev;
-                    break; // Found the priority device
+                    dev_to_use = current->dev; // Found the priority device, override default
+                    break;
                 }
                 current = current->next;
             }
@@ -382,6 +384,42 @@ AppConfig* dev_parse_json_configs(const char* json_string) {
                     current_device->irq = strdup(irq->valuestring);
                 }
 
+                // >>> I2C SLAVE PARSING START <<<
+                cJSON* slaves_obj = cJSON_GetObjectItemCaseSensitive(item, "slaves");
+                if (cJSON_IsObject(slaves_obj)) {
+                    cJSON* slave_item = NULL;
+                    cJSON_ArrayForEach(slave_item, slaves_obj) {
+                        // Grow the slave devices array
+                        current_device->I2Cdevices.device_count++;
+                        current_device->I2Cdevices.i2cdevice = realloc(current_device->I2Cdevices.i2cdevice,
+                                                                       current_device->I2Cdevices.device_count * sizeof(I2CDevice));
+                        I2CDevice* current_slave = &current_device->I2Cdevices.i2cdevice[current_device->I2Cdevices.device_count - 1];
+
+                        // Initialize and populate the new slave device
+                        memset(current_slave, 0, sizeof(I2CDevice));
+                        current_slave->slave_name = strdup(slave_item->string);
+
+                        // Parse slave address
+                        cJSON* addr = cJSON_GetObjectItemCaseSensitive(slave_item, "address");
+                        if (cJSON_IsString(addr)) {
+                            // strtol with base 0 automatically handles "0x" for hex
+                            current_slave->address = (int)strtol(addr->valuestring, NULL, 0);
+                        }
+
+                        // Parse slave scroll path
+                        cJSON* slave_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "scroll_path");
+                        if (cJSON_IsString(slave_scroll)) {
+                            current_slave->scroll_path = strdup(slave_scroll->valuestring);
+                        }
+
+                        // Parse slave is_scroll boolean
+                        cJSON* is_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "is_scroll_path");
+                        if (cJSON_IsBool(is_scroll)) {
+                           current_slave->_is_scroll = cJSON_IsTrue(is_scroll);
+                        }
+                    }
+                }
+                // >>> I2C SLAVE PARSING END <<<
             }
         }
     }
@@ -406,6 +444,13 @@ void dev_print_config(const AppConfig* config) {
             printf("    -> Scroll: %s\n", d->scroll_path ? d->scroll_path : "N/A");
             printf("    -> Ranges: %d\n", d->range_count);
             printf("    -> IRQ: %s\n", d->irq[0] ? d->irq : "N/A");
+            I2CDevices* I2C = &d->I2Cdevices;
+            for (int l=0; l < I2C->device_count; l++) {
+                I2CDevice* curr_i2c = &I2C->i2cdevice[l];
+                printf(" - I2C Slave Name: %s\n", curr_i2c->slave_name);
+                printf("    -> Address for the slave: %d\n", curr_i2c->address);
+                printf("    -> Path to the scroll: %s\n", curr_i2c->_is_scroll ? curr_i2c->scroll_path: "N/A");
+            }
         }
     }
     printf("---------------------------\n");
