@@ -45,13 +45,26 @@ int isdigit(int c);
 #endif
 
 #include <virtuals.h>  // For lookup_callback function
+#include <fake_afl.h>  // For coverage tracking
 
 static const char * runtime;
 
 AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
 
-
+/**
+ * @brief Callback version of fake AFL coverage logging for QEMU plugin registration.
+ *
+ * This function is registered as a callback and logs coverage when
+ * a basic block is executed. It calls the coverage module's logging function.
+ *
+ * @param vcpu_index The VCPU index
+ * @param userdata Pointer to the basic block address
+ */
+static void fake_afl_log_callback(unsigned int vcpu_index, void *userdata) {
+    uint64_t addr = (uint64_t)(uintptr_t)userdata;
+    fake_afl_maybe_log(addr);
+}
 
 /**
  * @brief Parses a token string into a logger entry.
@@ -459,6 +472,18 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
 	DEBUG_LOG("->Virtual Clock: %llu \n", (unsigned long long)qemu_plugin_get_virtual_timer());
 
+    // Fake AFL coverage: Track first instruction of each translation block
+    fake_afl_state_t *coverage_state = fake_afl_get_state();
+    if (coverage_state->fake_afl_enabled && n > 0) {
+        struct qemu_plugin_insn *first_insn = qemu_plugin_tb_get_insn(tb, 0);
+        uint64_t tb_addr = qemu_plugin_insn_vaddr(first_insn);
+        // Register callback to log fake AFL coverage for this TB
+        qemu_plugin_register_vcpu_insn_exec_cb(
+            first_insn, fake_afl_log_callback, 
+            QEMU_PLUGIN_CB_NO_REGS, 
+            (void *)(uintptr_t)tb_addr);
+    }
+
     for (i = 0; i < n; i++) {
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
 
@@ -548,6 +573,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
+    // Cleanup fake AFL coverage tracking
+    fake_afl_cleanup();
 }
 
 // lookup_callback function moved to virtuals.c
@@ -666,6 +693,11 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 	if (core_parse_arguments(argc, argv) != 0) {
 			utils_die("Core initialization failed");
 	}
+
+    // Initialize fake AFL coverage tracking
+    if (fake_afl_setup() != 0) {
+        utils_die("Fake AFL initialization failed");
+    }
 
     #if ENABLE_LIBHW | ENABLE_LIBDEV
 	if (dev_init(argc, argv) != 0) {

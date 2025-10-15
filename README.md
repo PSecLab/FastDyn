@@ -26,6 +26,10 @@ to get more information about our great tool.
 
 3. By default the libraries like `libhw` and `libgz` disabled. To enable them, please go to `Makefile` and change the respective flags.
 
+### Fake AFL Coverage Tracking
+
+More in the [folder](./coverage/README.md)
+
 ### Extras Update the readme later
 We expect the `cmsis-svd-data` to be placed for the generator and verifier wherever you are the running the command!
 We recommend running the command from the main directory of fastdyn. (Do we need to update this?)

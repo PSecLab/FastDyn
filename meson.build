@@ -80,7 +80,7 @@ qemu_include = include_directories(
 )
 
 # --- Project include dir
-local_include = include_directories('include')
+local_include = include_directories('include', 'coverage')
 
 # Find BFD and libiberty
 # bfd_dep = cc.find_library('bfd', required: true)
@@ -96,6 +96,7 @@ srcs += files(
   'virtuals/virtuals.c',
   'libs/ring_buffer.c',
   'libs/mavlink_lib.c',
+  'coverage/fake_afl.c',
 )
 
 if ENABLE_LIBGZ

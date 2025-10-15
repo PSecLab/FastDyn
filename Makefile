@@ -2,7 +2,7 @@
 
 qemu_path ?= ../../qemu
 LIBGZ ?= false
-LIBHW ?= true
+LIBHW ?= false
 DEV ?= true
 DEBUG_PRINT ?= false
 LIBPY ?= false
