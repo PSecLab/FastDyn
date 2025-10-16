@@ -50,7 +50,7 @@ static const char * runtime;
 
 AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
-
+static int coverage;
 
 
 /**
@@ -462,6 +462,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     for (i = 0; i < n; i++) {
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
 
+		//TODO: THis will bite us one day!!
 		if (qemu_plugin_insn_vaddr(insn) == 0x20800050) {
 				//Magic instruction
 				qemu_plugin_u64 entry_tmp;
@@ -474,6 +475,21 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
 
 		//Highest priority: Logger
+		if (coverage) {
+			if (i == 0) {
+					//Only basic block is fine
+					static LookupResult cc_ret;
+					qemu_plugin_u64 entry_tmp;
+					if (!cc_ret.list->log_buf.buffer) {
+             	       cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
+		            }
+					entry_tmp.offset = (size_t)&cc_ret.list->log_buf;
+					cc_ret.entry->reg = 15;//Always PC
+
+					//LOG PC
+					qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOG_REG, entry_tmp, cc_ret.entry->reg);
+			}
+		}
 		LookupResult ret = lookup_addr(qemu_plugin_insn_vaddr(insn));
 		if (ret.list) {
 			qemu_plugin_u64 entry_tmp;
@@ -640,6 +656,11 @@ static int core_parse_arguments(int argc, char ** argv) {
         parse_rules_file(filename);
     }
 
+	//Filename should really be value
+	filename = utils_get_arg("coverage", argc, argv);
+	if (filename && strcmp(filename, "True") == 0) {
+			coverage =1;
+	}
 
     filename = utils_get_arg("logger", argc, argv);
     if (filename) {
