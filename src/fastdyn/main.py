@@ -91,7 +91,8 @@ def build_qemu_cmd(config, dev_config_path, out_path):
     plugin_files = [
         f"{plugin_lib_path},dev={dev_config_path}",
         f'virtual={virtuals_path}',
-        f'modifier={modifiers_path}'
+        f'modifier={modifiers_path}',
+		f"coverage={cpu['coverage']}"
     ]
 
     plugin_configs.extend([",".join(plugin_files)])
