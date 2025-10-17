@@ -13,6 +13,7 @@
 0x81508f4 chibiOS_tick_handler *
 0x80896dc create_gcs_mavlink_backend 
 0x80840a0 gcs_send_text 
+0x8084058 gcs_send_text 
 0x808bcc8 gcs_send_banner_once *
 0x8040254 gcs_read *
 0x8040274 gcs_bytes_available *

@@ -35,6 +35,43 @@ void sigint_handler(int sig) {
     exit(0);
 }
 
+// const char * mavlink_dictionary(uint32_t message_id){
+//     switch(message_id){
+//         case COMMAND_LONG:
+//             return "COMMAND_LONG";
+//         default:
+//             return "UNKNOWN_MESSAGE_ID";
+//     }
+// }
+
+void translate_and_forward(const mavlink_message_t* msg) {
+    // Example: Print message ID and system/component IDs
+    if (msg->compid == 220) {
+        // Ignore messages from companion computer
+        return;
+    }
+
+    // translate IDs to human readable message types
+    if (msg->msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
+        mavlink_command_long_t command;
+        mavlink_msg_command_long_decode(msg, &command);
+        printf("MAVLink Msg ID: %u (%s) from SysID: %u CompID: %u - Command: %u\n",
+            msg->msgid, "COMMAND_LONG", msg->sysid, msg->compid, command.command);
+    }
+}
+
+// Parser state (can be global or per-connection)
+static mavlink_status_t status;
+static mavlink_message_t msg;
+
+// Feed one byte at a time
+void mavlink_input_byte(uint8_t c) {
+    if (mavlink_parse_char(MAVLINK_COMM_0, c, &msg, &status)) {
+        // Full message received
+        translate_and_forward(&msg);
+    }
+}
+
 // UDP listener process
 static void* gcs_listener(void *rb) {
     RingBuffer * ring_buffer = (RingBuffer *)rb;
@@ -108,6 +145,8 @@ static void* gcs_listener(void *rb) {
                     printf("GCSReceiver: Failed to put byte into buffer\n");
                     continue;
                 }
+                // Also feed byte to MAVLink parser
+                mavlink_input_byte(buffer[i]);
             }
         }
     }
