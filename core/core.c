@@ -46,6 +46,14 @@ int isdigit(int c);
 
 #include <virtuals.h>  // For lookup_callback function
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 static const char * runtime;
 
 AddressList addressLists[MAX_LISTS];
@@ -477,12 +485,41 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 		//Highest priority: Logger
 		if (coverage) {
 			if (i == 0) {
+					static AddressList list;
+					list.count =1;
+					static LoggerEntry lentry;
 					//Only basic block is fine
 					static LookupResult cc_ret;
+					cc_ret.entry = &lentry;
+					cc_ret.list = &list;
 					qemu_plugin_u64 entry_tmp;
 					if (!cc_ret.list->log_buf.buffer) {
-             	       cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
+					size_t size = (size_t)UINT16_MAX + 1;
+					const char *path = "/tmp/cvg";
+					// Create or open the file
+			        int fd = open(path, O_RDWR | O_CREAT, 0666);
+				    if (fd < 0) {
+		       	       perror("open");
+				       exit(1);
+	   				}
+
+	   				// Resize file to the desired size
+				    if (ftruncate(fd, size) < 0) {
+	       				perror("ftruncate");
+	       				close(fd);
+	       				exit(1);
+	   				}
+
+	   				// Memory-map the file
+	   				void *buf = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	   				if (buf == MAP_FAILED) {
+	       				perror("mmap");
+	       				close(fd);
+	       				exit(1);
+				    }
+             	    cc_ret.list->log_buf.buffer = buf;
 		            }
+
 					entry_tmp.offset = (size_t)&cc_ret.list->log_buf;
 					cc_ret.entry->reg = 15;//Always PC
 
