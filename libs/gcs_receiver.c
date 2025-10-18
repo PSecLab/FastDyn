@@ -14,16 +14,21 @@
 #include "mavlink.h"
 
 #define RING_BUFFER_SIZE 512
-#define UDP_PORT 14552
+#define UDP_PORT 14551
 #define MAX_PACKET_SIZE 1024
+#define RED   "\033[31m"
+#define RESET "\033[0m"
 
 static pthread_t gcs_listener_tid;
 static bool gcs_listener_running = false;
 
 static struct sockaddr_in gcs_addr;
-// static socklen_t gcs_addr_len = sizeof(gcs_addr);
 static int send_sockfd = -1;
 static bool send_sockfd_initialized = false;
+
+static struct sockaddr_in gps_input_addr;
+static int gps_input_sockfd = -1;
+static bool gps_input_sockfd_initialized = false;
 
 void sigint_handler(int sig) {
     printf("\n[Main] Caught SIGINT (Ctrl-C). Killing GCS listener thread...\n");
@@ -51,13 +56,27 @@ void translate_and_forward(const mavlink_message_t* msg) {
         return;
     }
 
-    // translate IDs to human readable message types
-    if (msg->msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
-        mavlink_command_long_t command;
-        mavlink_msg_command_long_decode(msg, &command);
-        printf("MAVLink Msg ID: %u (%s) from SysID: %u CompID: %u - Command: %u\n",
-            msg->msgid, "COMMAND_LONG", msg->sysid, msg->compid, command.command);
-    }
+    // // write every message out to a file "/root/rooney/FastDyn/courbet/mavlink/mavlink_received.log"
+    // FILE *log_file = fopen("/root/rooney/FastDyn/courbet/mavlink/mavlink_received.log", "a");
+    // if (log_file) {
+    //     if (msg->msgid == MAVLINK_MSG_ID_COMMAND_LONG) {
+    //         mavlink_command_long_t command;
+    //         mavlink_msg_command_long_decode(msg, &command);
+    //         fprintf(log_file, "[GCS -> Drone] Received COMMAND_LONG: Command=%d, Param1=%.2f, Param2=%.2f, Param3=%.2f, Param4=%.2f, Param5=%.2f, Param6=%.2f, Param7=%.2f\n",
+    //                 command.command,
+    //                 command.param1,
+    //                 command.param2,
+    //                 command.param3,
+    //                 command.param4,
+    //                 command.param5,
+    //                 command.param6,
+    //                 command.param7);
+    //     } else {
+    //         fprintf(log_file, "[GCS -> Drone] Received MAVLink Message ID: %d from SYSID: %d, COMPID: %d, Length: %d\n",
+    //                 msg->msgid, msg->sysid, msg->compid, msg->len);
+    //         fclose(log_file);
+    //     }
+    // }
 }
 
 // Parser state (can be global or per-connection)
@@ -98,23 +117,6 @@ static void* gcs_listener(void *rb) {
 
     printf("[GCSReceiver]: Listening for incoming data on UDP port %d...\n", UDP_PORT);
 
-    // Initialize send socket and GCS address on first packet received
-    send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (send_sockfd < 0) {
-        perror("send socket creation failed");
-        close(sockfd);
-        exit(EXIT_FAILURE);
-    }
-
-    memset(&gcs_addr, 0, sizeof(gcs_addr));
-    gcs_addr.sin_family = AF_INET;
-    gcs_addr.sin_port = htons(14551); // GCS port
-    gcs_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // Assuming GCS is on localhost
-    send_sockfd_initialized = true;
-
-    printf("[GCSReceiver]: Initialized send socket to GCS at %s:14551\n",
-            inet_ntoa(gcs_addr.sin_addr));
-
     while (1) {
         socklen_t len = sizeof(cliaddr);
         ssize_t n = recvfrom(sockfd, buffer, MAX_PACKET_SIZE, 0,
@@ -129,6 +131,26 @@ static void* gcs_listener(void *rb) {
             // No data received
             sleep(1);
             continue;
+        }
+
+        if (!send_sockfd_initialized) {
+            send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+            if (send_sockfd < 0) {
+                perror("send socket creation failed");
+                close(sockfd);
+                exit(EXIT_FAILURE);
+            }
+
+            memset(&gcs_addr, 0, sizeof(gcs_addr));
+            gcs_addr.sin_family = AF_INET;
+            // use sender's src port and send back
+            gcs_addr.sin_port = cliaddr.sin_port; // Use sender's port
+            gcs_addr.sin_addr = cliaddr.sin_addr; // Use sender's IP
+
+            send_sockfd_initialized = true;
+
+            printf(RED "[GCSReceiver]: Initialized send socket to GCS at %s:%d\n" RESET,
+                   inet_ntoa(gcs_addr.sin_addr), ntohs(gcs_addr.sin_port));
         }
 
         // Put received bytes into the ring buffer
@@ -208,7 +230,8 @@ int send_mavlink_payload(uint32_t message_id,
 }
 
 void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_input_t *gps) {
-    if (!gps || send_sockfd < 0) {
+    if (!gps) {
+        fprintf(stderr, "Invalid GPS data. Cannot send GPS_INPUT message.\n");
         return;
     }
 
@@ -255,8 +278,23 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
     uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
 
-    // Send over the global UDP socket
-    ssize_t sent = sendto(send_sockfd, buffer, len, 0, (struct sockaddr*)&gcs_addr, sizeof(gcs_addr));
+    // Send over the global UDP socket to port 14551
+    if (!gps_input_sockfd_initialized) {
+        gps_input_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (gps_input_sockfd < 0) {
+            perror("GPS input socket creation failed");
+            return;
+        }
+
+        memset(&gps_input_addr, 0, sizeof(gps_input_addr));
+        gps_input_addr.sin_family = AF_INET;
+        gps_input_addr.sin_port = htons(14551); // GCS listening port
+        gps_input_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        
+        gps_input_sockfd_initialized = true;
+    }
+
+    ssize_t sent = sendto(gps_input_sockfd, buffer, len, 0, (const struct sockaddr*)&gps_input_addr, sizeof(gps_input_addr));
     if (sent < 0) {
         perror("sendto");
     }
