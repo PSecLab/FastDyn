@@ -455,6 +455,10 @@ LookupResult lookup_addr(uintptr_t addr) {
     return result;
 }
 static int init = 0;
+AddressList cc_list;
+LoggerEntry cc_entry;
+LookupResult cc_ret;
+static int tracer_ready =0;
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
 	if (runtime && !init) {
@@ -485,43 +489,15 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 		//Highest priority: Logger
 		if (coverage) {
 			if (i == 0) {
-					static AddressList list;
-					list.count =1;
-					static LoggerEntry lentry;
-					//Only basic block is fine
-					static LookupResult cc_ret;
-					cc_ret.entry = &lentry;
-					cc_ret.list = &list;
+#if DEBUG
+					printf("Instrumenting: 0x%lx with %ld instructions.\n", qemu_plugin_insn_vaddr(insn), n);
+					for (int iter = 0; iter <n; iter++) {
+							printf("	0x%lx \n", qemu_plugin_insn_vaddr(qemu_plugin_tb_get_insn(tb, iter)));
+					}
+#endif
+					while(!tracer_ready);
 					qemu_plugin_u64 entry_tmp;
-					if (!cc_ret.list->log_buf.buffer) {
-					size_t size = (size_t)UINT16_MAX + 1;
-					const char *path = "/tmp/cvg";
-					// Create or open the file
-			        int fd = open(path, O_RDWR | O_CREAT, 0666);
-				    if (fd < 0) {
-		       	       perror("open");
-				       exit(1);
-	   				}
-
-	   				// Resize file to the desired size
-				    if (ftruncate(fd, size) < 0) {
-	       				perror("ftruncate");
-	       				close(fd);
-	       				exit(1);
-	   				}
-
-	   				// Memory-map the file
-	   				void *buf = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	   				if (buf == MAP_FAILED) {
-	       				perror("mmap");
-	       				close(fd);
-	       				exit(1);
-				    }
-             	    cc_ret.list->log_buf.buffer = buf;
-		            }
-
 					entry_tmp.offset = (size_t)&cc_ret.list->log_buf;
-					cc_ret.entry->reg = 15;//Always PC
 
 					//LOG PC
 					qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOG_REG, entry_tmp, cc_ret.entry->reg);
@@ -599,8 +575,103 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     }
 }
 
+#include <stdio.h>      // for printf, fopen, fwrite, etc.
+#include <stdlib.h>     // for malloc, realloc, free, exit, abort
+#include <string.h>     // for memcpy
+#include <stdint.h>     // for uint32_t
+#include <unistd.h>     // for access, sleep, close, getopt_long
+#include <fcntl.h>      // for open
+#include <signal.h>     // for signal, sig_atomic_t
+#include <getopt.h>     // for command-line parsing
+#include <sys/mman.h>   // for mmap, munmap
+#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+// ---------------------------
+// Configuration / defaults
+// ---------------------------
+#define DEFAULT_PATH "/tmp/cvg"
+#define DEFAULT_DUMP_PATH "trace_log.bin"
+#define BUF_SIZE (64 * 1024)
+#define WORD_SIZE sizeof(uint32_t)
+#define NUM_WORDS (BUF_SIZE / WORD_SIZE)
+#define INITIAL_CAPACITY 536870912 // Initial size for our dynamic array of observed values
+
+// ---------------------------
+// Globals
+// ---------------------------
+static uint32_t *g_observed_values = NULL; // Buffer for new values
+static size_t g_observed_count = 0;        // Number of values currently buffered
+static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
+
+void add_observed_value(uint32_t val) {
+    if (g_observed_count >= g_observed_capacity) {
+        // Grow the buffer (double the capacity, or start with initial size)
+        size_t new_capacity = (g_observed_capacity == 0) ? INITIAL_CAPACITY : g_observed_capacity * 2;
+        uint32_t *new_buf = realloc(g_observed_values, new_capacity * sizeof(uint32_t));
+        if (!new_buf) {
+            perror("[-] Failed to reallocate memory for observed values");
+            return; // Continue without adding, or could choose to exit
+        }
+        g_observed_values = new_buf;
+        g_observed_capacity = new_capacity;
+    }
+    g_observed_values[g_observed_count++] = val;
+}
+
+
+/**
+ * @brief Writes the buffered values to a binary file.
+ * @param filename The path to the output file.
+ */
+void dump_values(const char *filename) {
+    if (g_observed_count == 0) {
+        printf("[+] No new values were observed. Nothing to dump.\n");
+        return;
+    }
+
+    FILE *f = fopen(filename, "wb");
+    if (!f) {
+        perror("[-] Failed to open dump file for writing");
+        return;
+    }
+
+    size_t written = fwrite(g_observed_values, WORD_SIZE, g_observed_count, f);
+    if (written != g_observed_count) {
+        fprintf(stderr, "[-] Error dumping values: tried to write %zu, but only wrote %zu\n", g_observed_count, written);
+    } else {
+        printf("[+] Dumped %zu entries to %s\n", g_observed_count, filename);
+    }
+
+    fclose(f);
+}
+
+void* tracer(void* arg) {
+	cc_list.count =1;
+	cc_ret.entry = &cc_entry;
+    cc_ret.list = &cc_list;
+	cc_ret.entry->reg = 15;
+	cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
+	uint16_t tracer_index =0;
+
+	tracer_ready=1;
+
+	//Maybe make read atomic
+	while(true) {
+		while((uint16_t) (cc_list.log_buf.index - tracer_index)) {
+			add_observed_value(cc_list.log_buf.buffer[tracer_index/4]);
+			tracer_index +=4;//32bit PC
+		}
+	}
+}
+
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
+	printf("FastDyn Exit.\n");
+	if (coverage) {
+		dump_values(DEFAULT_DUMP_PATH);
+	}
 }
 
 // lookup_callback function moved to virtuals.c
@@ -676,7 +747,7 @@ static void print_rules(void) {
     }
 }
 #endif
-
+static pthread_t thread;
 static int core_parse_arguments(int argc, char ** argv) {
 	const char *filename= utils_get_arg("detour", argc, argv);
     if (filename) {
@@ -697,6 +768,12 @@ static int core_parse_arguments(int argc, char ** argv) {
 	filename = utils_get_arg("coverage", argc, argv);
 	if (filename && strcmp(filename, "True") == 0) {
 			coverage =1;
+
+			// Create a new thread
+		    if (pthread_create(&thread, NULL, tracer, NULL) != 0) {
+        		perror("Failed to create thread");
+		        exit(1);
+		    }
 	}
 
     filename = utils_get_arg("logger", argc, argv);
