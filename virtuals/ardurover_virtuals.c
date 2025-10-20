@@ -942,4 +942,17 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
     printf("\n");
 }
 
-// TODO: Add GPS out of band updates once we have the thing working.
+/**
+ * @brief Initialize AHRS to use EKF3
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> ap_ahrs_init
+ */
+void ap_ahrs_init(unsigned int cpu_index, void *udata) {
+    uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    uint32_t offset = this_pointer + 562; // offset to ekf type
+    printf("Setting memory at offset %u to 0 (DCM)\n", offset);
+    uint8_t ekf_type = 0;
+    qemu_plugin_write_memory(offset, (uint8_t *)&ekf_type, sizeof(uint8_t));
+}

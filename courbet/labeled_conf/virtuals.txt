@@ -20,3 +20,4 @@ _ZN6AP_HAL10UARTDriver9availableEv gcs_bytes_available *
 _mav_finalize_message_chan_send gcs_send_mavlink_message *
 0x8150a02 raise_periodic_irq 66
 0x8032bce gps_get_type_mavlink
+_ZN7AP_AHRS4initEv ap_ahrs_init
