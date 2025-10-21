@@ -58,7 +58,7 @@ static const char * runtime;
 
 AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
-static int coverage;
+int coverage;
 
 
 /**
@@ -626,6 +626,9 @@ void add_observed_value(uint32_t val) {
  * @param filename The path to the output file.
  */
 void dump_values(const char *filename) {
+    if (!filename) {
+        filename = DEFAULT_DUMP_PATH;
+    }
     if (g_observed_count == 0) {
         printf("[+] No new values were observed. Nothing to dump.\n");
         return;
@@ -645,6 +648,11 @@ void dump_values(const char *filename) {
     }
 
     fclose(f);
+}
+
+void reset_and_dump_values(const char *filename) {
+    g_observed_count = 0; // Reset count after dumpin
+    dump_values(filename);
 }
 
 void* tracer(void* arg) {

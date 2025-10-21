@@ -30,5 +30,8 @@ int core_read_ram(uintptr_t address, size_t size, void* buffer);
  */
 int core_write_ram(uintptr_t address, size_t size, const void* buffer);
 
+
+void add_observed_value(uint32_t val);
+void reset_and_dump_values(const char *filename);
 #endif /* CORE_H */
 

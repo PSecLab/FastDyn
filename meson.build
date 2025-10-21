@@ -94,6 +94,7 @@ srcs += files(
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
+  'virtuals/fuzz.c',
   'libs/ring_buffer.c',
   'libs/mavlink_lib.c',
 )
