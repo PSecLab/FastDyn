@@ -28,7 +28,6 @@ def build_qemu_cmd(config, dev_config_path, out_path):
     """Builds the full qemu-system-arm command from the configuration."""
     #----------------------------------------QEMU & CPU configurations---------------------------------------
     cpu = config.dev_config.cpu  #short-hand
-
     cmd = [cpu.get('qemu_path')]
 
     cpu_configs = [
@@ -92,7 +91,7 @@ def build_qemu_cmd(config, dev_config_path, out_path):
         f"{plugin_lib_path},dev={dev_config_path}",
         f'virtual={virtuals_path}',
         f'modifier={modifiers_path}',
-		f"coverage={cpu['coverage']}"
+		f"coverage={cpu.get('coverage', False)}"
     ]
 
     plugin_configs.extend([",".join(plugin_files)])
@@ -111,7 +110,7 @@ def get_gdb_cmd(config, out_path):
     gdb_cmd = None
     if cpu['enable_gdb']:
         launch_gdb = True
-        if cpu['launch_gdb']:
+        if cpu.get('launch_gdb', True):
             gdb_cmd = [
                 'xterm',
                 '-e',

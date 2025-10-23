@@ -39,6 +39,8 @@ extern void qemu_set_register(uint32_t value, int reg);
 #include "../python/python.c"
 #endif
 
+extern void anchor(unsigned int cpu_index, void *udata);
+extern void virt_assert(unsigned int cpu_index, void *udata);
 /**
  * @brief Callback registry
  *
@@ -59,6 +61,9 @@ cb_entry_t cb_registry[] = {
     { "dyninst_lib", dyninst_lib},
     { "debug_log", debug_log},
     { "raise_periodic_irq", raise_periodic_irq},
+    //Fuzzing specific
+    { "anchor", anchor},
+    { "assert", virt_assert},
 #if ENABLE_LIBPY
     { "fastdyn_callback", fastdyn_callback},
 #endif
