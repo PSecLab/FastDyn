@@ -13,6 +13,31 @@
 #include "mavlink_lib.h"
 #include <arpa/inet.h>
 
+static void catch_up(void *opaque)
+{
+    (void) opaque;
+
+    sitl_state_data_t state;
+    double target_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+
+    if (!advance_simulation(target_time_s, &state)) {
+        fprintf(stderr, "advance_simulation failed in catch_up\n");
+    }
+}
+
+/**
+ * @brief Begins the periodic timer for advancing the simulation
+ *        given the QEMU sim time
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <entry point> start_advancing_sim
+ */
+void start_advancing_sim(unsigned int cpu_index, void *udata) {
+    // Start a periodic timer to advance the simulation
+    qemu_plugin_timer_new_period_ns(catch_up, NULL, 1e8);
+}
+
 // Storage
 static volatile char * storage_memory = NULL;
 static const size_t storage_size = 32 * 1024; // 32KB of simulated storage
@@ -202,7 +227,11 @@ void write_channel(unsigned int cpu_index, void *udata)
     {
         fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
-    // MAYBE: check if returning helps?
+    else if (pwm != 0 && pwm != 1500)
+    {
+        // Uncomment for debugging non-center PWM values
+        printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
+    }
 }
 
 // Wheel Encoder
@@ -298,7 +327,7 @@ void copy_wheel_encoder_state_to_frontend(unsigned int cpu_index, void *udata)
 static void send_gps_mavlink_message(void *opaque)
 {
     (void) opaque;
-    // TODO: Pull and send actual GPS data from Gazebo
+
     gps_data_t gps_data;
     if (!get_navsat_reading(&gps_data)) {
         fprintf(stderr, "Failed to get GPS reading from Gazebo\n");
@@ -322,6 +351,16 @@ static void send_gps_mavlink_message(void *opaque)
     send_mavlink_gps_input(1, 220, &gps_message);
 }
 
+static void gps_thread_func(void *arg)
+{
+    (void)arg;
+    const int interval_ms = 100; // 100 ms interval
+    while (1) {
+        send_gps_mavlink_message(NULL);
+        usleep(interval_ms * 1000);
+    }
+}
+
 
 /**
  * Set GPS type to MAVLink
@@ -333,14 +372,21 @@ static void send_gps_mavlink_message(void *opaque)
 void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
 {
     static bool requested_timer = false;
-    const char *msg = "Hello from GPS MAVLink!";
+    // const char *msg = "Hello from GPS MAVLink!";
     uint8_t gps_type = 14; // Default to GPS_TYPE_MAVLINK
     qemu_set_register(gps_type, ARM_V7M_R6);
     printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
     if (!requested_timer) {
         requested_timer = true;
-        // Request periodic timer every 100ms
-        qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
+        // // Request periodic timer every 100ms
+        // qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
+        // Start GPS thread
+        pthread_t gps_thread;
+        if (pthread_create(&gps_thread, NULL, (void *(*)(void *))gps_thread_func, NULL) != 0) {
+            fprintf(stderr, "Failed to create GPS thread\n");
+        } else {
+            pthread_detach(gps_thread);
+        }
     }
 }
 
@@ -897,6 +943,9 @@ void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
     qemu_set_register(lr, ARM_V7M_PC);
 }
 
+/**
+ * TODO: Put the address that this needs to be placed at
+ */
 void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
     uint32_t thread1 = qemu_get_register(ARM_V7M_R0);
     uint32_t thread2 = qemu_get_register(ARM_V7M_R1);

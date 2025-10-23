@@ -59,11 +59,13 @@ cb_entry_t cb_registry[] = {
     { "dyninst_lib", dyninst_lib},
     { "debug_log", debug_log},
     { "raise_periodic_irq", raise_periodic_irq},
-    // ChibiOS specific
 #if ENABLE_LIBPY
     { "fastdyn_callback", fastdyn_callback},
 #endif
 #if ENABLE_LIBGZ
+    // advancing sim
+    { "start_advancing_sim", start_advancing_sim},
+    // chibios debugging
     { "chDbgContextSwitching", chDbgContextSwitching},
     // storage
     { "storage_read_block", storage_read_block},

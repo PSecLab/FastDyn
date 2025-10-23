@@ -1,3 +1,4 @@
+0x8005308 start_advancing_sim
 _ZN7ChibiOS7Storage10read_blockEPvtj storage_read_block *
 _ZN7ChibiOS7Storage11write_blockEtPKvj storage_write_block *
 hrt_micros64 hrt_micros64 *

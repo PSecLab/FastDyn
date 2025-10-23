@@ -1,3 +1,4 @@
+0x8005308 start_advancing_sim 
 0x80e6f14 storage_read_block *
 0x80e6fb4 storage_write_block *
 0x814edd4 hrt_micros64 *
