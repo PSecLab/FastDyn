@@ -249,9 +249,14 @@ class DevConfig:
                 for model in model_attach:  #may be a single slave wants to attach to [elder, passthrough]
                     if model in model_ranges and device_name in model_ranges[model]:    #check if model (elder) is registered above as a handler
                         #add all the parameters except the model in the dict
-                        slave_dict[slave.get('device')] = {
-                            "address": slave.get('address'),
-                        }
+                        if "spi" in device_name:
+                            slave_dict[slave.get('device')] = {
+                                "cs_id": slave.get('cs_id'),
+                            }
+                        elif "i2c" in device_name:
+                            slave_dict[slave.get('device')] = {
+                                "address": slave.get('address'),
+                            }
                         if slave.get('device_scroll') is not None and os.path.exists(slave.get('device_scroll')):  #we are going to check offline if the scroll is a path or not for efficiency
                             slave_dict[slave.get('device')].update({
                                 "scroll_path": slave.get('device_scroll'),
@@ -262,6 +267,7 @@ class DevConfig:
                                 "is_scroll_path": False
                             })
 
-                model_ranges[model][device_name]['slaves'] = slave_dict
+                #Only attach the slave device in case the respective model is registered as well to avoid expection
+                if model_ranges.get(model): model_ranges[model][device_name]['slaves'] = slave_dict
 
         return model_ranges, models_info, builtin_model

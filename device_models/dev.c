@@ -325,6 +325,17 @@ void dev_free_config(AppConfig* config) {
     free(config);
 }
 
+/**
+ * @brief This function parses the main JSON configuration string to build a structured
+ * representation of all device models and their settings.
+ *
+ * @note This function assumes that the `DeviceModels` struct has been updated
+ * to include an `SPIdetails` member, similar to the existing `I2Cdevices` one,
+ * to hold SPI slave configurations.
+ *
+ * @param json_string The raw JSON configuration as a string.
+ * @return A pointer to a fully populated AppConfig struct, or NULL on failure.
+ */
 AppConfig* dev_parse_json_configs(const char* json_string) {
     cJSON* root = cJSON_Parse(json_string);
     if (!root) {
@@ -334,122 +345,183 @@ AppConfig* dev_parse_json_configs(const char* json_string) {
 
     // Allocate the main config struct
     AppConfig* app_config = calloc(1, sizeof(AppConfig));
-    if (!app_config) { /* handle malloc failure */ cJSON_Delete(root); return NULL; }
+    if (!app_config) {
+        fprintf(stderr, "Failed to allocate memory for AppConfig\n");
+        cJSON_Delete(root);
+        return NULL;
+    }
 
     // Iterate through top-level sections ("elder", "passthrough", etc.)
     cJSON* section_item = NULL;
     cJSON_ArrayForEach(section_item, root) {
         // Grow the sections array
         app_config->section_count++;
-        app_config->sections = realloc(app_config->sections, app_config->section_count * sizeof(ConfigSection));
-        ConfigSection* current_section = &app_config->sections[app_config->section_count - 1];
+        ConfigSection* new_sections = realloc(app_config->sections, app_config->section_count * sizeof(ConfigSection));
+        if (!new_sections) { /* handle realloc failure */ cJSON_Delete(root); free(app_config); return NULL; }
+        app_config->sections = new_sections;
 
-        // Initialize the new section
+        ConfigSection* current_section = &app_config->sections[app_config->section_count - 1];
         memset(current_section, 0, sizeof(ConfigSection));
         current_section->name = strdup(section_item->string);
 
-        // Iterate through items within the section
+        // Iterate through items within the section (overall, backend, devices)
         cJSON* item = NULL;
         cJSON_ArrayForEach(item, section_item) {
             const char* key = item->string;
-
             if (strcmp(key, "overall") == 0 && cJSON_IsArray(item)) {
                 dev_parse_string_array(item, &current_section->overall_range_count, &current_section->overall_ranges);
             } else if (strcmp(key, "backend") == 0) {
                 if (cJSON_IsString(item)) {
                     current_section->backend = strdup(item->valuestring);
                 }
-            } else { // Assume it's a device model
+            } else { // Assume it's a device model (e.g., "i2c", "spi", "unhandled_space")
                 // Grow the devices array for this section
                 current_section->device_count++;
-                current_section->devices = realloc(current_section->devices, current_section->device_count * sizeof(DeviceModels));
-                DeviceModels* current_device = &current_section->devices[current_section->device_count - 1];
+                DeviceModels* new_devices = realloc(current_section->devices, current_section->device_count * sizeof(DeviceModels));
+                if (!new_devices) { /* handle realloc failure */ cJSON_Delete(root); free(app_config); return NULL; }
+                current_section->devices = new_devices;
 
-                // Initialize and populate the new device
+                DeviceModels* current_device = &current_section->devices[current_section->device_count - 1];
                 memset(current_device, 0, sizeof(DeviceModels));
                 current_device->name = strdup(key);
 
+                // Parse common device properties
                 cJSON* scroll = cJSON_GetObjectItemCaseSensitive(item, "scroll");
                 if (cJSON_IsString(scroll)) {
                     current_device->scroll_path = strdup(scroll->valuestring);
                 }
-
                 cJSON* range = cJSON_GetObjectItemCaseSensitive(item, "range");
                 if (cJSON_IsArray(range)) {
                     dev_parse_string_array(range, &current_device->range_count, &current_device->ranges);
                 }
-
                 cJSON* irq = cJSON_GetObjectItemCaseSensitive(item, "irq");
                 if (cJSON_IsString(irq)) {
                     current_device->irq = strdup(irq->valuestring);
                 }
 
-                // >>> I2C SLAVE PARSING START <<<
+                // --- Peripheral-specific slave parsing ---
                 cJSON* slaves_obj = cJSON_GetObjectItemCaseSensitive(item, "slaves");
                 if (cJSON_IsObject(slaves_obj)) {
                     cJSON* slave_item = NULL;
-                    cJSON_ArrayForEach(slave_item, slaves_obj) {
-                        // Grow the slave devices array
-                        current_device->I2Cdevices.device_count++;
-                        current_device->I2Cdevices.i2cdevice = realloc(current_device->I2Cdevices.i2cdevice,
-                                                                       current_device->I2Cdevices.device_count * sizeof(I2CDevice));
-                        I2CDevice* current_slave = &current_device->I2Cdevices.i2cdevice[current_device->I2Cdevices.device_count - 1];
 
-                        // Initialize and populate the new slave device
-                        memset(current_slave, 0, sizeof(I2CDevice));
-                        current_slave->slave_name = strdup(slave_item->string);
+                    // >>> I2C SLAVE PARSING <<<
+                    if (strstr(current_device->name, "i2c") != 0) {
+                        cJSON_ArrayForEach(slave_item, slaves_obj) {
+                            current_device->I2Cdevices.device_count++;
+                            current_device->I2Cdevices.i2cdevice = realloc(current_device->I2Cdevices.i2cdevice, current_device->I2Cdevices.device_count * sizeof(I2CDevice));
+                            I2CDevice* current_slave = &current_device->I2Cdevices.i2cdevice[current_device->I2Cdevices.device_count - 1];
+                            memset(current_slave, 0, sizeof(I2CDevice));
 
-                        // Parse slave address
-                        cJSON* addr = cJSON_GetObjectItemCaseSensitive(slave_item, "address");
-                        if (cJSON_IsString(addr)) {
-                            // strtol with base 0 automatically handles "0x" for hex
-                            current_slave->address = (int)strtol(addr->valuestring, NULL, 0);
+                            current_slave->slave_name = strdup(slave_item->string);
+                            cJSON* addr = cJSON_GetObjectItemCaseSensitive(slave_item, "address");
+                            if (cJSON_IsString(addr)) {
+                                current_slave->address = (int)strtol(addr->valuestring, NULL, 0);
+                            }
+                            cJSON* slave_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "scroll_path");
+                            if (cJSON_IsString(slave_scroll)) {
+                                current_slave->scroll_path = strdup(slave_scroll->valuestring);
+                            }
+                            cJSON* is_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "is_scroll_path");
+                            if (cJSON_IsBool(is_scroll)) {
+                               current_slave->_is_scroll = cJSON_IsTrue(is_scroll);
+                            }
                         }
+                    }
 
-                        // Parse slave scroll path
-                        cJSON* slave_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "scroll_path");
-                        if (cJSON_IsString(slave_scroll)) {
-                            current_slave->scroll_path = strdup(slave_scroll->valuestring);
-                        }
+                    // >>> SPI SLAVE PARSING <<<
+                    else if (strstr(current_device->name, "spi") != 0) {
+                        cJSON_ArrayForEach(slave_item, slaves_obj) {
+                            current_device->SPIdetails.slave_count++;
+                            current_device->SPIdetails.spi_slave = realloc(current_device->SPIdetails.spi_slave, current_device->SPIdetails.slave_count * sizeof(SPISlaveDevice));
+                            SPISlaveDevice* current_spi_slave = &current_device->SPIdetails.spi_slave[current_device->SPIdetails.slave_count - 1];
+                            memset(current_spi_slave, 0, sizeof(SPISlaveDevice));
 
-                        // Parse slave is_scroll boolean
-                        cJSON* is_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "is_scroll_path");
-                        if (cJSON_IsBool(is_scroll)) {
-                           current_slave->_is_scroll = cJSON_IsTrue(is_scroll);
+                            current_spi_slave->slave_name = strdup(slave_item->string);
+                            cJSON* cs_id = cJSON_GetObjectItemCaseSensitive(slave_item, "cs_id");
+                            if (cJSON_IsNumber(cs_id)) {
+                                current_spi_slave->cs_id = cs_id->valueint;
+                            }
+                            cJSON* slave_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "scroll_path");
+                            if (cJSON_IsString(slave_scroll)) {
+                                current_spi_slave->scroll_path = strdup(slave_scroll->valuestring);
+                            }
+                            cJSON* is_scroll = cJSON_GetObjectItemCaseSensitive(slave_item, "is_scroll_path");
+                            if (cJSON_IsBool(is_scroll)) {
+                                current_spi_slave->is_scroll_path = cJSON_IsTrue(is_scroll);
+                            }
                         }
                     }
                 }
-                // >>> I2C SLAVE PARSING END <<<
             }
         }
     }
 
-    cJSON_Delete(root); // We are done with the cJSON object
+    cJSON_Delete(root);
     return app_config;
 }
 
-// A simple function to print the stored config to verify it worked
+#include <stdio.h>
+
+// NOTE: This assumes all the necessary struct definitions from your previous prompts are available.
+
+/**
+ * @brief Prints the entire parsed application configuration to the console.
+ * This is a utility function primarily used for debugging to verify that the
+ * JSON configuration was parsed correctly.
+ *
+ * @param config A pointer to the populated AppConfig struct.
+ */
 void dev_print_config(const AppConfig* config) {
+    if (!config) {
+        printf("Configuration is NULL.\n");
+        return;
+    }
+
     printf("--- Stored Configuration ---\n");
     for (int i = 0; i < config->section_count; i++) {
         ConfigSection* s = &config->sections[i];
         printf("\nSection: [%s] (Backend: %s)\n", s->name, s->backend ? s->backend : "null");
-        printf("All ranges:\n");
-        for (int k=0; k<s->overall_range_count; k++){
-            printf("    %s\n", s->overall_ranges[k]);
+
+        // Print overall memory ranges for the section
+        if (s->overall_range_count > 0) {
+            printf("  Overall Ranges:\n");
+            for (int k = 0; k < s->overall_range_count; k++){
+                printf("    - %s\n", s->overall_ranges[k]);
+            }
         }
+
+        // Print details for each device in the section
         for (int j = 0; j < s->device_count; j++) {
             DeviceModels* d = &s->devices[j];
-            printf("  - Device: %s\n", d->name);
+            printf("  Device: %s\n", d->name);
             printf("    -> Scroll: %s\n", d->scroll_path ? d->scroll_path : "N/A");
             printf("    -> Ranges: %d\n", d->range_count);
-            printf("    -> IRQ: %s\n", d->irq[0] ? d->irq : "N/A");
-            I2CDevices* I2C = &d->I2Cdevices;
-            for (int l=0; l < I2C->device_count; l++) {
-                I2CDevice* curr_i2c = &I2C->i2cdevice[l];
-                printf(" - I2C Slave Name: %s\n", curr_i2c->slave_name);
-                printf("    -> Address for the slave: %d\n", curr_i2c->address);
-                printf("    -> Path to the scroll: %s\n", curr_i2c->_is_scroll ? curr_i2c->scroll_path: "N/A");
+            printf("    -> IRQ: %s\n", d->irq ? d->irq : "N/A");
+
+            // --- Print I2C Slaves ---
+            I2CDevices* i2c_devs = &d->I2Cdevices;
+            if (i2c_devs->device_count > 0) {
+                printf("    -> I2C Slaves:\n");
+                for (int l = 0; l < i2c_devs->device_count; l++) {
+                    I2CDevice* curr_i2c = &i2c_devs->i2cdevice[l];
+                    printf("       - Name: %s\n", curr_i2c->slave_name);
+                    printf("         -> Address: 0x%X\n", curr_i2c->address);
+                    printf("         -> Is Scroll: %s\n", curr_i2c->_is_scroll ? "true" : "false");
+                    printf("         -> Path: %s\n", curr_i2c->scroll_path ? curr_i2c->scroll_path : "N/A");
+                }
+            }
+
+            // --- Print SPI Slaves (NEW) ---
+            SPIDevices* spi_devs = &d->SPIdetails;
+            if (spi_devs->slave_count > 0) {
+                printf("    -> SPI Slaves:\n");
+                for (int m = 0; m < spi_devs->slave_count; m++) {
+                    SPISlaveDevice* curr_spi = &spi_devs->spi_slave[m];
+                    printf("       - Name: %s\n", curr_spi->slave_name);
+                    printf("         -> CS ID: %d\n", curr_spi->cs_id);
+                    printf("         -> Is Scroll: %s\n", curr_spi->is_scroll_path ? "true" : "false");
+                    printf("         -> Path: %s\n", curr_spi->scroll_path ? curr_spi->scroll_path : "N/A");
+                }
             }
         }
     }

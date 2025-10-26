@@ -28,6 +28,20 @@ typedef struct {
 
 //I2C Model related info end
 
+//SPI Model related info end
+typedef struct {
+    char* slave_name;
+    int cs_id;
+    char* scroll_path;
+    bool is_scroll_path;
+} SPISlaveDevice;
+
+typedef struct {
+    int slave_count;
+    SPISlaveDevice* spi_slave; // Dynamic array of SPI slaves
+} SPIDevices;
+// SPI Model Info End
+
 // Represents a single device model (e.g., "uart", "gpio_g")
 typedef struct {
     char* name;
@@ -36,6 +50,7 @@ typedef struct {
     int range_count;
     char* irq;
     I2CDevices I2Cdevices;
+    SPIDevices SPIdetails;
 } DeviceModels;
 
 // Represents a top-level section (e.g., "elder", "passthrough")
@@ -97,7 +112,7 @@ typedef struct unimp_exporter {
 } DEV_XPORTER;
 
 //4KB regions for now.
-#define SLOT_SIZE   0x100
+#define SLOT_SIZE   0x10
 
 #define DEVICE_BASE 0x40000000ULL
 #define DEVICE_SIZE 0x20000000ULL  // 0x40000000 -> 0x5FFFFFFF, ~512 MB

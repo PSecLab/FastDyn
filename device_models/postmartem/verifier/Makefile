@@ -1,6 +1,9 @@
 all:
 	gcc -g -shared -fPIC -I../../../include/ -I../../../../qemu/include/ -Iapis/include `pkg-config --cflags --libs glib-2.0` ./tests/gen.c ./apis/src/devmodels_apis.c /scratch/Fastdyn/FastDyn/utils/utils.c ./apis/src/i2c_bus.c -o gen.so
 
+spi:
+	gcc -g -shared -fPIC -I../../../include/ -I../../../../qemu/include/ -Iapis/include `pkg-config --cflags --libs glib-2.0` ./tests/gen.c ./apis/src/devmodels_apis.c /scratch/Fastdyn/FastDyn/utils/utils.c ./apis/src/spi_bus.c -o gen.so
+
 verify:
 	gcc -g -shared -fPIC -I../../../include/ -I../../../../qemu/include/ `pkg-config --cflags --libs glib-2.0` ./tests/gen.c ./tests/libtest.c -o gen.so
 

@@ -34,7 +34,9 @@ qemu_api_list = """
 - `void api_i2c_end_transfer(I2CBus* bus)`: Ends the current I2C transaction.
 - `int api_i2c_send(I2CBus *bus, uint8_t data)`: Sends a byte to the active I2C slave device.
 - `uint8_t api_i2c_recv(I2CBus *bus)`: Receives a byte from the active I2C slave device.
-
+- `SPIBus api_spi_init_bus(ConfigSection* model_info)`: Takes a ConfigSection pointer, parses the SPI configuration, loads all specified slave device models, and returns a populated SPIBus structure.
+- `uint32_t api_spi_transfer(SPIBus *bus, uint32_t val)`: Performs a full-duplex transfer on the bus by sending val (MOSI) to the currently selected slave and returning the uint32_t value received from it (MISO).
+- `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
 // --- I2C Bus struct definitions here ---
 typedef struct {
     char* name; //Name of the slave
@@ -56,6 +58,26 @@ typedef struct {
 } I2CBus;
 // --- End of struct definitions ---
 
+// --- SPI Bus struct definitions here ---
+#define NUM_CS_LINES 4          //USER can change the max number based on the requirement
+
+typedef struct {
+    char* name;                 //Name of the slave
+    int cs_id;                  //Chip select id for which the device will be registered
+    int cs_enable;              //is the current chip enable
+    SlaveTransferFunc transfer; //transfer function used to send and receive the data to/from slave
+    SlaveSetcsFunc set_cs;      //function to tell the slave it is selected
+} SpiSlaveDetails;
+
+typedef struct {
+    int num_slaves;
+    SpiSlaveDetails* slave; //Dynamic array of slaves
+} SpiSlaveList;
+
+typedef struct {
+    SpiSlaveList Slaves;  //Registered on spi_init_bus
+} SPIBus;
+// --- End of struct definitions ---
 """
 
 def initial_prompt_gen(analysis_dir, peripheral, out_dir):
@@ -106,10 +128,9 @@ If a required API is missing from the registry, stop and do not generate the mod
 If you need more info about the firmware, stop here and ask the user to give you the firmware code, dont generate the device model.
 
 If you believe the issue is not in the model but the device (slave) attached to it, stop and ask the user for the slave model and observe the slave model first and correct the slave model as well if it has issues, don't generate the master model!
-The slave model will just have three supporting functions and not any more registeration functions which **MUST NOT** be changed
-- STM32F4_event
-- STM32F4_send
-- STM32F4_receive
+The slave model will just have two supporting functions and not any more registeration functions which **MUST NOT** be changed
+- STM32F4_set_cs
+- STM32F4_transfer
 
 ## Commands:
 After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
@@ -186,7 +207,7 @@ void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, 
         // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
 }}}}
 
-void {peripheral_name.lower()}_init(void *opaque) {{{{
+void {peripheral_name.lower()}_init(ConfigSection* model_info) {{{{
 		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
 }}}}
 ```

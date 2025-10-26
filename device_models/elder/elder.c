@@ -61,7 +61,7 @@ DeviceModel elder_model_def = {
 };
 
 static int elder_init(ConfigSection* model_info) {
-    //Find the overall ranges for all the devices registered as passthrough
+    //Find the overall ranges for all the devices registered as elder
     Range ranges[10];
 	device_count = model_info->device_count;
     utils_parse_ranges(model_info->overall_range_count,model_info->overall_ranges, ranges);
