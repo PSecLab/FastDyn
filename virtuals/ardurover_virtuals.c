@@ -227,11 +227,11 @@ void write_channel(unsigned int cpu_index, void *udata)
     {
         fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
-    else if (pwm != 0 && pwm != 1500)
-    {
-        // Uncomment for debugging non-center PWM values
-        printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
-    }
+    // else if (pwm != 0 && pwm != 1500)
+    // {
+    //     // Uncomment for debugging non-center PWM values
+    //     printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
+    // }
 }
 
 // Wheel Encoder
@@ -239,7 +239,7 @@ static const int encoder_counts_per_rev = 3200;
 static const float wheel_radius = 0.069f; // meters
 
 /**
- * @brief Initialize wheel encoder parameters
+ * @brief Initialize wheel encoder parameters 
  *
  * Called like this from virtuals.txt:
  *
