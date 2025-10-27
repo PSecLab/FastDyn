@@ -17,10 +17,9 @@ static void catch_up(void *opaque)
 {
     (void) opaque;
 
-    sitl_state_data_t state;
     double target_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
 
-    if (!advance_simulation(target_time_s, &state)) {
+    if (!advance_simulation(target_time_s)) {
         fprintf(stderr, "advance_simulation failed in catch_up\n");
     }
 }
@@ -239,7 +238,7 @@ static const int encoder_counts_per_rev = 3200;
 static const float wheel_radius = 0.069f; // meters
 
 /**
- * @brief Initialize wheel encoder parameters 
+ * @brief Initialize wheel encoder parameters
  *
  * Called like this from virtuals.txt:
  *

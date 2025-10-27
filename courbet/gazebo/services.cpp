@@ -136,7 +136,7 @@ public:
     frame_count_ = 1;
 
     // Send initial packet to establish communication
-    sendInitialPacket();
+    // sendInitialPacket();
 
   }
 
@@ -286,10 +286,6 @@ private:
   bool OnServiceRequest(const gz::msgs::Time &request,
                         gz::msgs::Boolean &response)
   {
-    // if (last_response_.empty()) {
-    //     sendInitialPacket();
-    // }
-
     {
       std::lock_guard<std::mutex> lock(mutex_);
       // get timestamp from request
@@ -299,9 +295,9 @@ private:
 
     // std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
 
-    while (run_until_time_s_ - latest_time_s_ > 0.001)
+    while (run_until_time_s_ - latest_time_s_ > 0.1)
     {
-      // wait for the sim to catch up
+      // wait for the sim to catch up within 0.1 s
       // std::cout << "Waiting... latest_time_s_: " << latest_time_s_ << " s\n";
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -314,6 +310,12 @@ private:
   void advanceSimThread()
   {
     std::cout << "Starting simulation advance thread...\n";
+    // sleep 5 seconds to allow Gazebo to start
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    if (last_response_.empty()) {
+        sendInitialPacket();
+    }
+
     bool toggle = false;
     while (true)
     {
@@ -373,9 +375,6 @@ private:
   bool OnGetLatestSimStateRequest(const gz::msgs::Empty &,
                                   gz::msgs::StringMsg &rep)
   {
-    // if (last_response_.empty()) {
-    //     sendInitialPacket();
-    // }
     std::lock_guard<std::mutex> lock(mutex_);
     rep.set_data(last_response_);
     return true;
