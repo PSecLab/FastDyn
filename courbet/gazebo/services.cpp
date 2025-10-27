@@ -17,6 +17,8 @@
 #include <string>
 #include <memory>
 
+const static bool DEBUG = false;
+
 /**
  * @brief Get a large set of different readings from multiple
  * sensors in Gazebo. and return them as a JSON string.
@@ -78,12 +80,21 @@ private:
  * @brief Advances the simulation by one step and gets the model state
  *        from Gazebo.
  *
- * This class exposes the /step_simulation service, which when called,
- * advances the Gazebo simulation by one step and retrieves the current
- * state of the specified model.
+ * This class exposes the /set_run_until_time service, which when called,
+ * advances the Gazebo simulation until the specified time. The actual advancing
+ * is done in a separate thread to avoid blocking the service call.
+ *
+ * @param[in] req An gz::msgs::Time request message
+ * @param[out] rep Boolean response message
+ * @return true if the service call was successful, false otherwise
+ *
+ * @brief Service handler for /get_latest_sim_state
+ *
+ * This service retrieves the latest simulation state we have received
+ * from Gazebo.
  *
  * @param[in] req An empty request message
- * @param[out] rep The response message containing the model state
+ * @param[out] rep A string message containing the latest simulation state in JSON format
  * @return true if the service call was successful, false otherwise
  *
  * This class also exposes a /set_servo service to set individual
@@ -113,18 +124,47 @@ public:
     // Advertise the service
     node.Advertise(service_name, &ServoService::OnServiceRequest, this);
     node.Advertise("/set_servo", &ServoService::OnSetPwmRequest, this);
+    node.Advertise("/get_latest_sim_state", &ServoService::OnGetLatestSimStateRequest, this);
+
+    // Start the simulation advance thread
+    std::thread(&ServoService::advanceSimThread, this).detach();
 
     // Initialize PWM values to 1500
     pwm_values_.resize(16, 1500);
     magic_ = 18458;
     frame_rate_ = 5;
     frame_count_ = 1;
+
+    // Send initial packet to establish communication
+    sendInitialPacket();
+
   }
 
   ~ServoService()
   {
     if (sock_ >= 0)
       close(sock_);
+  }
+
+  void sendInitialPacket()
+  {
+    SendServos();
+    std::string response = ReceiveResponse();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      last_response_ = response;
+    }
+    auto pos = response.find("\"timestamp\":");
+    if (pos != std::string::npos)
+    {
+      size_t start = response.find_first_of("0123456789.-", pos);
+      size_t end = response.find_first_of(",", start);
+      if (start != std::string::npos && end != std::string::npos)
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        latest_time_s_ = std::stod(response.substr(start, end - start));
+      }
+    }
   }
 
 private:
@@ -198,6 +238,9 @@ private:
     for (auto pwm : pwm_values_)
     {
       val16 = pwm;
+      // if (pwm != 0 && pwm != 1500) {
+      //     std::cout << "Sending PWM: " << pwm << std::endl;
+      // }
       memcpy(buffer + offset, &val16, sizeof(val16));
       offset += sizeof(val16);
     }
@@ -225,20 +268,117 @@ private:
           perror("recvfrom");
           return "";  // No data received or timeout
       }
-      std::cout << "Received " << n << " bytes from Gazebo: ";
+      if (DEBUG)
+      {
+          std::cout << "Received " << n << " bytes from Gazebo: ";
+      }
 
       buffer[n] = '\0';  // Null-terminate
-      std::cout << std::string(reinterpret_cast<char*>(buffer), n) << std::endl;
+
+      if (DEBUG)
+      {
+          std::cout << std::string(reinterpret_cast<char*>(buffer), n) << std::endl;
+      }
       return std::string(reinterpret_cast<char*>(buffer), n);
   }
 
-  // Service callback: empty request, no response needed
-  bool OnServiceRequest(const gz::msgs::Empty &,
-                        gz::msgs::StringMsg &response)
+  // TODO: implement this service request as advancing the "run_until_time"
+  bool OnServiceRequest(const gz::msgs::Time &request,
+                        gz::msgs::Boolean &response)
   {
-    SendServos();
-    response.set_data(ReceiveResponse());
-    return !response.data().empty();
+    // if (last_response_.empty()) {
+    //     sendInitialPacket();
+    // }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      // get timestamp from request
+      double req_time_s = request.sec() + request.nsec() * 1e-9;
+      run_until_time_s_ = req_time_s;
+    }
+
+    // std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
+
+    while (run_until_time_s_ - latest_time_s_ > 0.001)
+    {
+      // wait for the sim to catch up
+      // std::cout << "Waiting... latest_time_s_: " << latest_time_s_ << " s\n";
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // return true for now
+    response.set_data(true);
+    return true;
+  }
+
+  void advanceSimThread()
+  {
+    std::cout << "Starting simulation advance thread...\n";
+    bool toggle = false;
+    while (true)
+    {
+      {
+        // std::lock_guard<std::mutex> lock(mutex_);
+        if (latest_time_s_ < run_until_time_s_)
+        {
+          if (!toggle) {
+              toggle = true;
+              std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
+              std::cout << "Current latest_time_s_: " << latest_time_s_ << " s\n";
+          }
+          // std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
+          SendServos();
+          std::string response = ReceiveResponse();
+          if (response.empty())
+            continue;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            last_response_ = response;
+          }
+          auto pos = response.find("\"timestamp\":");
+          if (pos != std::string::npos)
+          {
+            size_t start = response.find_first_of("0123456789.-", pos);
+            size_t end = response.find_first_of(",", start);
+            if (start != std::string::npos && end != std::string::npos)
+            {
+              std::lock_guard<std::mutex> lock(mutex_);
+              latest_time_s_ = std::stod(response.substr(start, end - start));
+            }
+          }
+          else
+          {
+            std::cout << "No timestamp found in response\n";
+          }
+        }
+        else
+        {
+          // Sleep briefly to avoid busy wait
+          if (toggle) {
+              toggle = false;
+              std::cout << "Simulation caught up to requested time: " << run_until_time_s_ << " s\n";
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+      }
+    }
+  }
+
+  /**
+   * gz service   -s /get_latest_sim_state \\
+   *    --reqtype gz.msgs.Empty  \\
+   *    --reptype gz.msgs.StringMsg  \\
+   *    --timeout 3000 --req ''
+   */
+  bool OnGetLatestSimStateRequest(const gz::msgs::Empty &,
+                                  gz::msgs::StringMsg &rep)
+  {
+    // if (last_response_.empty()) {
+    //     sendInitialPacket();
+    // }
+    std::lock_guard<std::mutex> lock(mutex_);
+    rep.set_data(last_response_);
+    return true;
   }
 
   // Service callback: set individual servo PWM values given (channel, pwm)
@@ -279,6 +419,10 @@ private:
   uint16_t magic_;
   uint16_t frame_rate_;
   uint32_t frame_count_;
+
+  double latest_time_s_{0.0};
+  double run_until_time_s_{0.0};
+  std::string last_response_;
   // std::vector<uint16_t> pwm_values_;
 };
 
@@ -316,7 +460,7 @@ int main(int argc, char **argv)
 
   ServoService servoService(
     node,
-    "/step_simulation",
+    "/set_run_until_time",
     "127.0.0.1",
     9002,
     5200
