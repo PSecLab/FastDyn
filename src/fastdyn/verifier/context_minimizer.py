@@ -197,7 +197,9 @@ class MMIOAnalyzer:
                     interrupt_match = interrupt_pattern.match(line.strip())
                     if interrupt_match:
                         data = interrupt_match.groupdict()
-                        vector = int(data['vector'], 16)
+                        vector = int(data['vector'], 16) - 16   #Map to the actual interrupt number
+                        if vector < 0:
+                            continue    #not an external interrupt, ignore!
                         p_name = self.interrupt_map.get(vector)
                         if p_name is None:
                             fastdyn_log.warn(f"On log line {line_num}: Failed to map interrupt vector {vector} (0x{vector:X}) to any SVD peripheral.")
