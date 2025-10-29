@@ -135,11 +135,10 @@ int set_servo_pwm(int channel, int pwm);
  * retrieves the current SITL state data including IMU, position,
  * attitude, velocity, rangefinder readings, wind vane, and airspeed.
  *
- * @param steps The number of simulation steps to advance
- * @param state_data Pointer to a sitl_state_data_t struct to store the state data
+ * @param run_until_time The simulation time to run until
  * @return 1 on success, 0 on failure
  */
-int advance_simulation(uint32_t steps, sitl_state_data_t *state_data);
+int advance_simulation(double run_until_time);
 
 /**
  * @brief Retrieves the latest SITL state data without advancing the simulation.

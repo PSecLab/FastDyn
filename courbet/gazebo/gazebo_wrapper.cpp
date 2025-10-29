@@ -17,8 +17,9 @@
 #include <cstdlib>
 #include <mutex>
 
-static std::mutex sitl_state_mutex;
-static sitl_state_data_t latest_sitl_state;
+// static std::mutex sitl_state_mutex;
+// static sitl_state_data_t latest_sitl_state;
+// static double latest_time_s = 0.0;
 
 template <typename ResponseT>
 bool request_service(const std::string &service_name, ResponseT &response,
@@ -31,6 +32,19 @@ bool request_service(const std::string &service_name, ResponseT &response,
     bool executed = node.Request(service_name, request, timeout_ms, response, result);
 
     return executed && result;
+}
+
+bool request_run_until_time(double run_until_time_s) {
+    gz::transport::Node node;
+    gz::msgs::Time request;
+    request.set_sec(static_cast<uint32_t>(std::floor(run_until_time_s)));
+    request.set_nsec(static_cast<uint32_t>((run_until_time_s - std::floor(run_until_time_s)) * 1e9));
+
+    gz::msgs::Boolean response;
+    bool result;
+    bool executed = node.Request("/set_run_until_time", request, 5000, response, result);
+
+    return executed && result && response.data();
 }
 
 // Helper: parse a JSON array of numbers into a vector of doubles
@@ -205,29 +219,22 @@ int get_navsat_reading(gps_data_t *gps_data) {
     return 1;
 }
 
-int advance_simulation(uint32_t steps, sitl_state_data_t *state_data) {
-    gz::msgs::StringMsg response;
-    if (!request_service("/step_simulation", response)) {
+int advance_simulation(double run_until_time) {
+    if (!request_run_until_time(run_until_time)) {
         return 0;
     }
-
-    sitl_state_data_t data;
-    if (!parse_sitl_state(response.data(), data)) {
-        return 0;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(sitl_state_mutex);
-        latest_sitl_state = data;
-    }
-
-    *state_data = data;
     return 1;
 }
 
 int get_latest_sitl_state(sitl_state_data_t *state_data) {
-    std::lock_guard<std::mutex> lock(sitl_state_mutex);
-    *state_data = latest_sitl_state;
+    gz::msgs::StringMsg response;
+    bool success = request_service("/get_latest_sim_state", response);
+    if (!success) {
+        return 0;
+    }
+    if (!parse_sitl_state(response.data(), *state_data)) {
+        return 0;
+    }
     return 1;
 }
 

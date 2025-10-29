@@ -1,12 +1,30 @@
-# Baby fuzzer with Custom Executor
+# FastDyn Unified Fuzzer
 
-This is a minimalistic example about how to create a LibAFL-based fuzzer.
+This directory contains a unified fuzzer which allows to fuzz a Courbet system with CPFuzz.
 
-In contrast to the normal baby fuzzer, this uses a (very simple) custom executor.
+## Building
 
-The custom executor won't catch any timeouts or actual errors (i.e., memory corruptions, etc.) in the target.
+To build the fuzzer first get the 0.15.3 release of LibAFL from the [GitHub releases page](https://github.com/AFLplusplus/LibAFL/releases/tag/0.15.3).
 
-The tested program is a simple Rust function without any instrumentation.
-For real fuzzing, you will want to add some sort to add coverage or other feedback.
+Build the docker image:
 
-You can run this example using `cargo run`, and you can enable the TUI feature by running `cargo run --features tui`.
+```sh
+cd LibAFL-0.15.3/
+docker build -t libafl .
+```
+
+Then run the docker container with the following command:
+
+```sh
+./fuzzer/fastdyn_split/run_docker.sh
+```
+
+**Note:** Make sure to adjust the volume mount paths in `run_docker.sh` to point to the correct locations on your system.
+
+This should drop you into our fuzzing directory. Inside the docker container, build the fuzzer with:
+
+```sh
+cargo build --release
+```
+
+The resulting binary will be located at `target/debug/fastdyn_split_fuzz`.

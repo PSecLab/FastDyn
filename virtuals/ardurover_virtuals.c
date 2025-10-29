@@ -17,10 +17,9 @@ static void catch_up(void *opaque)
 {
     (void) opaque;
 
-    sitl_state_data_t state;
     double target_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
 
-    if (!advance_simulation(target_time_s, &state)) {
+    if (!advance_simulation(target_time_s)) {
         fprintf(stderr, "advance_simulation failed in catch_up\n");
     }
 }
@@ -227,11 +226,11 @@ void write_channel(unsigned int cpu_index, void *udata)
     {
         fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
-    else if (pwm != 0 && pwm != 1500)
-    {
-        // Uncomment for debugging non-center PWM values
-        printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
-    }
+    // else if (pwm != 0 && pwm != 1500)
+    // {
+    //     // Uncomment for debugging non-center PWM values
+    //     printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
+    // }
 }
 
 // Wheel Encoder
