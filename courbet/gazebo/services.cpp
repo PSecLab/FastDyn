@@ -366,6 +366,11 @@ private:
     }
   }
 
+  // gz service   -s /world/runway/wind_info \
+  //     --reqtype gz.msgs.Empty  \
+  //     --reptype gz.msgs.Wind  \
+  //     --timeout 3000 --req ''
+
   /**
    * gz service   -s /get_latest_sim_state \\
    *    --reqtype gz.msgs.Empty  \\
