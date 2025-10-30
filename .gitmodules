@@ -4,3 +4,6 @@
 [submodule "submodules/mavlink_headers"]
 	path = submodules/mavlink_headers
 	url = https://github.com/mavlink/c_library_v2.git
+[submodule "submodules/SITL_Models"]
+	path = submodules/SITL_Models
+	url = https://github.com/michaelprooney/SITL_Models.git
