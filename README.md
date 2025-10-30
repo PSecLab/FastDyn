@@ -20,8 +20,9 @@ to get more information about our great tool.
    if you don't pass the `qemu_path` argument, then, it will use the `../qemu` as the path for the QEMU.
    The Makefile will set up the build and run `ninja`.
    also,
+   #TODO: Update this later to be more efficient
    ```bash
-   export LD_LIBRARY_PATH=/home/FastDyn/build:$LD_LIBRARY_PATH
+   export LD_LIBRARY_PATH=/home/FastDyn/build:Fastdyn/FastDyn/device_models/postmartem/verifier
    ```
 
 3. By default the libraries like `libhw` and `libgz` disabled. To enable them, please go to `Makefile` and change the respective flags.

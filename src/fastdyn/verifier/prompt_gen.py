@@ -37,6 +37,8 @@ qemu_api_list = """
 - `SPIBus api_spi_init_bus(ConfigSection* model_info)`: Takes a ConfigSection pointer, parses the SPI configuration, loads all specified slave device models, and returns a populated SPIBus structure.
 - `uint32_t api_spi_transfer(SPIBus *bus, uint32_t val)`: Performs a full-duplex transfer on the bus by sending val (MOSI) to the currently selected slave and returning the uint32_t value received from it (MISO).
 - `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
+- `void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque)`: Called by a DMA model. Takes a `stream_id`, a `handler` callback, and an `opaque` data pointer. Registers the handler to be called when a peripheral triggers a request for that stream.
+- `void api_dma_request(int stream_id)`: Called by a peripheral model (e.g., ADC). Takes a `stream_id` to trigger. This function looks up the corresponding handler (registered via `api_dma_register_stream`).
 // --- I2C Bus struct definitions here ---
 typedef struct {
     char* name; //Name of the slave
@@ -78,6 +80,13 @@ typedef struct {
     SpiSlaveList Slaves;  //Registered on spi_init_bus
 } SPIBus;
 // --- End of struct definitions ---
+
+// --- Start of DMA Info
+
+#define MAX_DMA_STREAMS 16
+
+// --- End of DMA Info
+
 """
 
 def initial_prompt_gen(analysis_dir, peripheral, out_dir):
@@ -174,6 +183,10 @@ This file measures the randomness of values read from registers. High entropy su
 This file contains all the accesses information for the data registers
 {diff_obj.diff_runtime_trace}
 
+# ISR Analysis data (`isr_analysis.txt`):
+This file contiains the information about the irqs
+{diff_obj.isr_analysis_data}
+
 --- END OF ANALYSIS DATA ---
 
 Based **only** on the data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
@@ -262,12 +275,15 @@ def generate_prompt(peripheral_directory: str) -> str:
     summary_path = os.path.join(parent_dir, "summary.txt")
     summary_info = parse_summary_file(summary_path)
     platform_name = summary_info.get("Platform", "Unknown Platform")
+    isr_analysis = os.path.join(peripheral_directory, "isr_analysis.txt")
 
     # Read all other analysis files
     init_data = read_file_content(os.path.join(peripheral_directory, "init.txt"))
     state_data = read_file_content(os.path.join(peripheral_directory, "state.txt"))
     entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
     loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
+    isr_analysis_data = read_file_content(isr_analysis) if os.path.exists(isr_analysis) else None
+
     loop_data_list = []
     if not loop_files:
         loop_data_list.append("No repeating loop patterns were detected for this peripheral.")
@@ -326,6 +342,10 @@ This file measures the randomness of values read from registers. High entropy su
 ```
 {entropy_data}
 ```
+
+# ISR Analysis data (`isr_analysis.txt`):
+This file contiains the information about the irqs
+{isr_analysis_data}
 
 --- END OF ANALYSIS DATA ---
 

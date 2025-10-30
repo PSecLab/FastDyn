@@ -59,7 +59,43 @@ def verify_automata(automata1, automata2, peripheral):
     fastdyn_log.info('Performing Verification for the Data Registers')
     diff_runtime_trace_analysis(differential_data, periph_hw, periph_em)
 
+    #Check the ISR Analysis
+    fastdyn_log.info('Performing Verification for the ISRs')
+    diff_isr_analysis(differential_data, periph_hw, periph_em)
+
     return differential_data.not_match, differential_data
+
+def diff_isr_analysis(diff_data, periph_hw, periph_em):
+    '''
+    Lazy analysis -> Just patch the isr analysis instead of any comparison
+    '''
+    isr_hw_path = os.path.join(periph_hw, 'isr_analysis.txt')
+    isr_em_path = os.path.join(periph_em, 'isr_analysis.txt')
+
+    if not os.path.exists(isr_hw_path):
+        diff_data.isr_analysis_data = ''
+        #search over, as isr file does not exists
+        return
+
+    isr_hw = parse_irq_file(isr_hw_path, periph_hw)
+    isr_sw = parse_irq_file(isr_em_path, periph_hw)
+
+    if len(isr_hw) != len(isr_sw):
+        fastdyn_log.warn("Number of ISRs by the emulated device model does not match with the hardware")
+    else:
+        for isr_iter in range(len(isr_hw)):
+            if isr_hw[isr_iter] != isr_sw[isr_iter]:
+                fastdyn_log.warn(f"Hardware ISR Loop by the emulated device model does not match with the hardware access ISR Loop")
+
+    diff_data.isr_analysis_data = f'''
+    Hardware ISR Analysis
+    {isr_hw}
+
+    Emulated Model ISR Analysis
+    {isr_sw}
+
+    '''
+
 
 def diff_runtime_trace_analysis(diff_data, periph_hw, periph_em):
     state_hw_path = os.path.join(periph_hw, 'runtime_full_trace.txt')
@@ -259,6 +295,68 @@ def parse_state_file(path, periph_name):
                 state_data.append(match.group(1))   #just track the register names
 
     return state_data
+
+import os
+import re
+from collections import defaultdict
+
+def parse_irq_file(path, periph_name, ignore_registers=None):
+    """
+    Parses an IRQ/ISR trace file into structured patterns per IRQ vector.
+
+    Returns:
+        list[list[list[str]]]:
+            iterations[occurrence] = [
+                [periph, vector],
+                [access_type, peripheral, register, address, value, pc],
+                ...
+            ]
+    """
+    ignore_registers = set(ignore_registers or [])
+
+    irq_header = re.compile(
+        r'^\s*\[\s*\d+\.\d+\]\s*INTERRUPT on ([A-Za-z0-9_]+), Vector=(\d+)'
+    )
+
+    pattern = re.compile(
+        r'^\s*\[\s*\d+\.\d+\]\s+'
+        r'(READ|WRITE)\s+to\s+'
+        r'([A-Za-z0-9_]+)->([A-Za-z0-9_]+)\s*'
+        r'\((0x[0-9A-Fa-f]+)\)\s*'
+        r'value=(0x[0-9A-Fa-f]+),\s*pc=(0x[0-9A-Fa-f]+)'
+    )
+
+    iterations = []
+    current_iter = []
+
+    if not os.path.exists(path):
+        print(f'IRQ trace file does not exist: {path}')
+        return iterations
+
+    with open(path, 'r') as file:
+        for line in file:
+            # New interrupt header
+            if header_match := irq_header.search(line):
+                periph, vector = header_match.groups()
+                # flush old iteration if exists
+                if current_iter:
+                    iterations.append(current_iter)
+                # start new iteration and add header at index 0
+                current_iter = []
+                current_iter.insert(0, [periph, vector])
+
+            # MMIO access lines
+            elif match := pattern.search(line):
+                access_type, peripheral, register, addr, value, pc = match.groups()
+                if register in ignore_registers:
+                    continue
+                current_iter.append([access_type, peripheral, register, addr, value, pc])
+
+    # flush last iteration
+    if current_iter:
+        iterations.append(current_iter)
+
+    return iterations
 
 def parse_init_file(path, periph_name, data_registers):
     """Parses an init file and returns a list of all the accesses."""

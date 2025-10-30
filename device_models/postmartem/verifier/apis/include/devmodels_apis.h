@@ -90,3 +90,19 @@ SPIBus api_spi_init_bus(ConfigSection* model_info);             //takes the user
 uint32_t api_spi_transfer(SPIBus *bus, uint32_t val);           //transfer the data to all the slaves and calls spi_transfer_raw_default for each slave
 void api_spi_set_cs(SPIBus *bus, int cs_id, int level);
 //End of SPI API funcitons definitions
+
+
+// --- DMA Dispatcher API ---
+
+// Define the function pointer type for the DMA's request handler
+typedef void (*dma_request_handler_t)(void *opaque);
+
+/**
+ * @brief Called by a DMA model to register its stream with the dispatcher.
+ */
+void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque);
+
+/**
+ * @brief Called by a peripheral (e.g., ADC) to trigger a DMA request.
+ */
+void api_dma_request(int stream_id);
