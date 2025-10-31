@@ -119,7 +119,7 @@ def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path):
     final_prompt = f'''
 Take this prompt independent from previous prompt history.
 
-You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for STM32F429 with special familiarity with {peripheral_name} peripheral.
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name} peripheral.
 Your task is to analyze the following summary of MMIO trace data and generate a complete working C device model.
 
 #Backward-pass/Correction:

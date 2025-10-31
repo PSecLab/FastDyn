@@ -37,7 +37,7 @@ def verify_automata(automata1, automata2, peripheral):
         sys.exit(0)
 
     #parse platform name
-    differential_data.platform_name = parse_summary_file(os.path.join(periph_hw, 'summary.txt'))
+    differential_data.platform_name = parse_summary_file(os.path.join(automata1, 'summary.txt')).get('Platform')
 
     #check the entropy file and see if there is any data field, if yes, ignore the data field for verification
     fastdyn_log.info('Performing Verification for the Entropy')
@@ -410,8 +410,9 @@ def parse_runtime_trace(path, periph_name, data_registers):
     return runtime_trace_data
 
 def parse_summary_file(filepath: str) -> Dict[str, str]:
-    """Parses the key-value pairs from the summary.txt file."""
+    """Parses the key-value pairs from the summary.txt file, cleaning prefixes like '-'."""
     summary_data = {}
+    print(summary_data)
     if not os.path.exists(filepath):
         return summary_data
     try:
@@ -419,8 +420,8 @@ def parse_summary_file(filepath: str) -> Dict[str, str]:
             for line in f:
                 if ":" in line:
                     key, value = line.split(":", 1)
-                    summary_data[key.strip()] = value.strip()
+                    key = key.strip().lstrip("-").strip()  # remove leading '-' and spaces
+                    summary_data[key] = value.strip()
     except Exception:
-        # Ignore errors if the summary file is malformed
         pass
     return summary_data

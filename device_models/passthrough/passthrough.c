@@ -39,7 +39,12 @@ static void passthrough_write(void *opaque, hwaddr address, uint64_t value, unsi
         utils_die("HW handle not initialized");
     }
 
-    int status = hw_write32(hw, address, (uint32_t)value);
+    int status;
+    if (size ==1) {
+        status = hw_write8(hw, address, (uint32_t)value);
+    } else {
+        status = hw_write32(hw, address, (uint32_t)value);
+    }
     pthread_mutex_unlock(&hw_mutex);
 
     if (status != 0) {
