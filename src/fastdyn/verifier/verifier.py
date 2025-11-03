@@ -236,7 +236,7 @@ def diff_init_pattern(diff_data, periph_hw, periph_em):
 def parse_entropy_file(path, periph_name):
     """Parses an entropy file and returns a dict of register → [level, entropy]."""
     register_entropy = re.compile(
-        r'^-?\s*Register\s+([A-Z0-9]+):\s+([A-Z]+)\s+\(suggests status/control register\)\s+-\s+Entropy\s+=\s+([\d.]+)\s+bits'
+        r'(?i)^\s*[-•*]?\s*Register\s+([A-Z0-9_]+)\s*:\s*([A-Z]+)\s*(?:\([^)]*\))?\s*[-–—]*\s*Entropy\s*[:=≈]\s*((?:\d+(?:\.\d+)?|\.\d+))\s*bits?'
     )
 
     entropy_data = {}

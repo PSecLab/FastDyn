@@ -28,9 +28,9 @@ qemu_api_list = """
 - `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for the pseudo-terminal device /tmp/usart1_pty
 - `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
 - `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
-- `I2CBus api_i2c_init_bus(ConfigSection* model_info)`: Initializes an I2C bus from a configuration section.
+- `I2CBus api_i2c_init_bus(ConfigSection* model_info)`: Initializes an I2C bus from a configuration section and returns the I2CBus struct by value.
 - `int api_i2c_start_transfer(I2CBus* bus, uint8_t address, bool is_recv)`: Starts an I2C transaction with a slave device.
-- `int api_i2c_start_transfer_10bit(I2CBus* bus, uint16_t address, bool is_recv)`: Starts an I2C transaction with a slave device.
+- `int api_i2c_start_transfer_10bit(I2CBus* bus, uint16_t address, bool is_recv)`: Starts an I2C transaction with a slave device when the address is 10bit.
 - `void api_i2c_end_transfer(I2CBus* bus)`: Ends the current I2C transaction.
 - `int api_i2c_send(I2CBus *bus, uint8_t data)`: Sends a byte to the active I2C slave device.
 - `uint8_t api_i2c_recv(I2CBus *bus)`: Receives a byte from the active I2C slave device.
@@ -137,7 +137,13 @@ If a required API is missing from the registry, stop and do not generate the mod
 If you need more info about the firmware, stop here and ask the user to give you the firmware code, dont generate the device model.
 
 If you believe the issue is not in the model but the device (slave) attached to it, stop and ask the user for the slave model and observe the slave model first and correct the slave model as well if it has issues, don't generate the master model!
-The slave model will just have two supporting functions and not any more registeration functions which **MUST NOT** be changed
+The slave model will just have following supporting functions and not any more registration functions which **MUST NOT** be changed
+//In case of an I2C slave
+- STM32F4_event
+- STM32F4_send
+- STM32F4_receive
+
+//In case of a SPI slave
 - STM32F4_set_cs
 - STM32F4_transfer
 
@@ -177,7 +183,7 @@ This file identifies programming patterns like Read-Modify-Write (RMW), which in
 ## Register Entropy Analysis (`entropy.txt`):
 This file measures the randomness of values read from registers. High entropy suggests data registers, while low entropy suggests status registers.
 ```
-{diff_obj.diff_entropy}
+{diff_obj.diff_entropy_data}
 ```
 ## Runtime Data Accesses
 This file contains all the accesses information for the data registers
@@ -386,3 +392,97 @@ void {peripheral_name.lower()}_init(ConfigSection* model_info) {{{{
 ```
 """
     return prompt.strip()
+
+#TODO: Update this prompt and clean it
+# slave_gen_prompt = f"""
+# Take this prompt independent from previous prompt history.
+
+# You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
+# Your task is to analyze the following summary of MMIO trace data and generate a complete C device model.
+
+# ## Available  APIs
+# You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
+# ```c
+# {qemu_api_list.strip()}
+# ```
+
+# ### NOTE
+# If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
+
+# ## Commands:
+# After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
+
+# --- START OF ANALYSIS DATA ---
+
+# ## Platform:
+# {platform_name}
+
+# ## Peripheral Name:
+# {peripheral_name}
+
+# ## Initialization Sequence (`init.txt`):
+# This file contains all accesses that occur before the main runtime loop begins.
+# ```
+# {init_data}
+# ```
+
+# ## Detected Runtime Loops (`loop_pattern_*.txt`):
+# These files contain the most common repeating sequences of operations during runtime.
+# ```
+# {loop_data}
+# ```
+
+# ## Stateful Behavior Analysis (`state.txt`):
+# This file identifies programming patterns like Read-Modify-Write (RMW), which indicate stateful registers.
+# ```
+# {state_data}
+# ```
+
+# ## Register Entropy Analysis (`entropy.txt`):
+# This file measures the randomness of values read from registers. High entropy suggests data registers, while low entropy suggests status registers.
+# ```
+# {entropy_data}
+# ```
+
+# # ISR Analysis data (`isr_analysis.txt`):
+# This file contiains the information about the irqs
+# {isr_analysis_data}
+
+# --- END OF ANALYSIS DATA ---
+
+# Based **only** on the data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
+
+# ## Required Output Format:
+
+# ### 1. High-Level Summary
+# A concise, one-paragraph summary of this peripheral's likely purpose and overall behavior, considering the platform context.
+
+# ### 2. Register Analysis
+# A bulleted list of the important registers mentioned in the traces and their inferred functions.
+
+# ### 3. C Device Model Source Code
+# The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <devmodels_apis.h> will give you access to all APIs i mentioned.
+
+# ```c
+# // Device Model for {peripheral_name}
+
+# // Inferred Register Functions:
+# // ... add registers here ...
+
+# // This function will emulation all device reads
+# uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{{{
+#     // Example: return device->register; // Return some register value from device
+# 	// ... {peripheral_name.lower()} reads, the retuned value will be emulation of device ...
+# }}}}
+
+# // This function will emulate all device writes
+# void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{{{
+#         // Example: GPIOG->BSRR = value; // Set PG13 high
+#         // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
+# }}}}
+
+# void {peripheral_name.lower()}_init(ConfigSection* model_info) {{{{
+# 		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
+# }}}}
+# ```
+# """

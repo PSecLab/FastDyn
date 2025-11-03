@@ -1,0 +1,113 @@
+# ==============================================================================
+#                              Memory Configuration
+# ==============================================================================
+[Memory]
+main_ram_size = "512M"
+shared_ram_size = "512K"
+ram_base_addr = "0x20000000"
+shared_ram_base_addr = "0x30000000"
+shared_mem_path = "/dev/shm"        # Directory for memory backend files
+main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
+shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
+init_nsvtor = "0x08000000"
+
+# ==============================================================================
+#                                CPU Configuration
+# ==============================================================================
+[CPU]
+# --- Core Emulation & Plugin Settings ---
+arch = "arm"
+machine = "cortexm"
+cpu = "cortex-m7"
+plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
+monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
+platform = "STM32F7x9"
+binary = "boardrunner_examples/examples/STM32F769i-eval/I2C/Firmwares/I2C_TwoBoards_Master.elf"
+# --- Debugging, Control, and Logging ---
+qemu_path = "qemu-system-arm"
+enable_gdb = false
+stop_on_start = false
+launch_gdb = false
+monitor_port = 5555
+qmp_socket = "/tmp/qmp.sock"
+log_file = "qemu.log"
+log_options = "in_asm,op"
+semihosting = true
+semihosting_config = "enable=on,target=native"
+
+# --- Embedded CPU Behavior Configurations ---
+logger_content = """
+# --- Plugin Logger Configuration ---
+# level = DEBUG
+# output = stderr
+"""
+
+
+
+# ==============================================================================
+#                              Device Configuration
+# ==============================================================================
+
+# --- Model-Specific Configurations ---
+# Define the global arguments for each type of plugin device model here.
+
+[Device.Models.elder]
+    # The libhw backend is a global argument for the elder model.
+
+[Device.Models.passthrough]
+    backend = "stlink"
+
+[Device.Models.classic]
+    # The classic model has no global arguments.
+
+[Device.Models.unhandled]
+    # This model explicitly marks memory as unhandled.
+
+
+# --- Peripheral Definitions ---
+# Each peripheral gets its own sub-table. If it uses the elder model,
+# its specific scroll configuration is defined directly within it.
+
+[Device.i2c1]
+    irq = "0-15:20-25:41:53"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
+    ranges = ["0x40005400-0x400057FF"]
+    description = "Main USART peripheral for serial communication."
+    # The configuration for this specific device when handled by the elder model.
+    # 'internal_model' is the name of the model compiled into the main plugin library.
+    scroll_config = """
+[i2c1]
+internal_model = "i2c1_model"
+"""
+        [[Device.i2c1.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+
+    [[Device.i2c1.handlers]]
+        model   = "passthrough"
+        enabled = false # This handler is defined but will be skipped for this device.
+
+[Device.unhandled_space]
+    irq = "0-15:20-25:41:53"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
+    ranges = ["0x40000000-0x400053FF", "0x40005800-0xE00FFFFF" , "0xE0000000-0xEFFFFFFF"]
+    description = "Memory regions that are explicitly not handled by any model."
+
+    [[Device.unhandled_space.handlers]]
+        model = "passthrough"
+        enabled = true
+
+    [[Device.i2c1.slaves]]
+        model = ["elder"]       #attach this device to elder model only
+        device = "STM32F4"
+        address = "0x30F"
+        device_scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/slave_gen.so"
+
+
+# [Device.unhandled_space]
+#     irq = "0-20:21-25:41:53:69"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
+#     ranges = ["0x00000000-0x000000FF", "0xE0000000-0xEFFFFFFF", "0x40000000-0xE00FFFFF"]
+#     description = "Memory regions that are explicitly not handled by any model."
+
+#     [[Device.unhandled_space.handlers]]
+#         model = "passthrough"
+#         enabled = true
