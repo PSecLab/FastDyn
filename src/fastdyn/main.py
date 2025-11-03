@@ -249,9 +249,26 @@ def run(config, map_file, work_dir):
 )
 @click.option(
     '-hw', '--hardware-log',
-    required=True,
+    required=False,
     type=click.Path(resolve_path=True, exists=True),
     help='Path to the log file generated when running the firmware on hardware.',
+    metavar='PATH'
+)
+@click.option(
+    '-sm', '--slave-model',
+    is_flag=True,
+    help='Generate a slave model instead of the main model.'
+)
+@click.option(
+    '-rm', '--reference-model',
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the reference model file.',
+    metavar='PATH'
+)
+@click.option(
+    '-fc', '--firmware-code',
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the firmware source code for slave model.',
     metavar='PATH'
 )
 @click.option(
@@ -295,40 +312,65 @@ def run(config, map_file, work_dir):
     type=click.Path(resolve_path=True, writable=True),
     help='Path to the work directory.'
 )
-def generate(hardware_log, board, peripheral, method, n, isr_window, work_dir):
+def generate(hardware_log, slave_model, reference_model, firmware_code, board, peripheral, method, n, isr_window, work_dir):
     """Generates the LLM Prompt using the hardware log passed by the user."""
-    if work_dir is not None:
-        if not os.path.isdir(work_dir):
-            log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
-    else:
-        work_dir = "fastdyn_work"
+    if slave_model:
+        if reference_model is None:
+            raise click.UsageError("--slave-model requires --reference-model.")
+        if firmware_code is None:
+            raise click.UsageError("--slave-model requires --firmware-code.")
 
-    if os.path.exists(work_dir):
-        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
-        shutil.rmtree(work_dir)
+        if work_dir is not None:
+            if not os.path.isdir(work_dir):
+                log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+        else:
+            work_dir = "fastdyn_work"
 
-    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
-    os.makedirs(work_dir)
-
-    #minimize the context
-    cm_path = cm.minimize_context(
-        out_dir=work_dir,
-        log_file=hardware_log,
-        platform=board,
-        method=method,
-        peripheral=peripheral,
-        n=n,
-        isr_window=isr_window,
-        cm_dir_name="out_cm"
+        #generate the prompt
+        pg_path = pg.slave_model_gen(
+            peripheral_name=peripheral,
+            platform_name = board,
+            out_dir=work_dir,
+            slave_firmware_path=firmware_code,
+            reference_model_path=reference_model
         )
 
+    else:
+        if hardware_log is None:
+            raise click.UsageError("Generating the model required --hardware-log is required.")
 
-    #generate the prompt
-    pg_path = pg.initial_prompt_gen(
-        analysis_dir=cm_path,
-        peripheral=peripheral,
-        out_dir=work_dir
-    )
+        if work_dir is not None:
+            if not os.path.isdir(work_dir):
+                log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+        else:
+            work_dir = "fastdyn_work"
+
+        if os.path.exists(work_dir):
+            log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
+            shutil.rmtree(work_dir)
+
+        log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
+        os.makedirs(work_dir)
+
+        #minimize the context
+        cm_path = cm.minimize_context(
+            out_dir=work_dir,
+            log_file=hardware_log,
+            platform=board,
+            method=method,
+            peripheral=peripheral,
+            n=n,
+            isr_window=isr_window,
+            cm_dir_name="out_cm"
+            )
+
+
+        #generate the prompt
+        pg_path = pg.initial_prompt_gen(
+            analysis_dir=cm_path,
+            peripheral=peripheral,
+            out_dir=work_dir
+        )
 
 @cli.command(
     'verifier',

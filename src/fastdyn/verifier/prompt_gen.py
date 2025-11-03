@@ -393,96 +393,51 @@ void {peripheral_name.lower()}_init(ConfigSection* model_info) {{{{
 """
     return prompt.strip()
 
-#TODO: Update this prompt and clean it
-# slave_gen_prompt = f"""
-# Take this prompt independent from previous prompt history.
+def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path, reference_model_path):
+    '''
+    based on the slave firmware code and the existing reference code, generate a C model for the slave.
+    '''
+    fastdyn_log.info("Generating Prompt for LLM")
 
-# You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
-# Your task is to analyze the following summary of MMIO trace data and generate a complete C device model.
+    with open(slave_firmware_path, 'r') as f:
+        slave_firmware = f.read().strip()
 
-# ## Available  APIs
-# You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
-# ```c
-# {qemu_api_list.strip()}
-# ```
+    with open(reference_model_path, 'r') as f:
+        reference_model = f.read().strip()
 
-# ### NOTE
-# If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
+    slave_gen_prompt = f"""
+    Take this prompt independent from previous prompt history.
 
-# ## Commands:
-# After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
+    You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
+    Your task is to analyze the following firmware of the {peripheral_name} slave and a reference c model.
 
-# --- START OF ANALYSIS DATA ---
+    ## Available  APIs
+    The slave model will just have following supporting functions and not any more registration functions which **MUST NOT** be changed
+    //In case of an I2C slave
+    - STM32F4_event
+    - STM32F4_send
+    - STM32F4_receive
 
-# ## Platform:
-# {platform_name}
+    //In case of a SPI slave
+    - STM32F4_set_cs
+    - STM32F4_transfer
 
-# ## Peripheral Name:
-# {peripheral_name}
+    ### NOTE
+    If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
 
-# ## Initialization Sequence (`init.txt`):
-# This file contains all accesses that occur before the main runtime loop begins.
-# ```
-# {init_data}
-# ```
+    ## Commands:
+    After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
 
-# ## Detected Runtime Loops (`loop_pattern_*.txt`):
-# These files contain the most common repeating sequences of operations during runtime.
-# ```
-# {loop_data}
-# ```
+    ## Slave Firmware
+    {slave_firmware}
 
-# ## Stateful Behavior Analysis (`state.txt`):
-# This file identifies programming patterns like Read-Modify-Write (RMW), which indicate stateful registers.
-# ```
-# {state_data}
-# ```
+    ## Slave Model Reference Code
+    {reference_model}
+    """
 
-# ## Register Entropy Analysis (`entropy.txt`):
-# This file measures the randomness of values read from registers. High entropy suggests data registers, while low entropy suggests status registers.
-# ```
-# {entropy_data}
-# ```
+    output_path = os.path.join(out_dir, "slave_model_prompt.txt")
+    with open(output_path, "w") as f:
+        f.write(slave_gen_prompt + "\n")
 
-# # ISR Analysis data (`isr_analysis.txt`):
-# This file contiains the information about the irqs
-# {isr_analysis_data}
-
-# --- END OF ANALYSIS DATA ---
-
-# Based **only** on the data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
-
-# ## Required Output Format:
-
-# ### 1. High-Level Summary
-# A concise, one-paragraph summary of this peripheral's likely purpose and overall behavior, considering the platform context.
-
-# ### 2. Register Analysis
-# A bulleted list of the important registers mentioned in the traces and their inferred functions.
-
-# ### 3. C Device Model Source Code
-# The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <devmodels_apis.h> will give you access to all APIs i mentioned.
-
-# ```c
-# // Device Model for {peripheral_name}
-
-# // Inferred Register Functions:
-# // ... add registers here ...
-
-# // This function will emulation all device reads
-# uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{{{
-#     // Example: return device->register; // Return some register value from device
-# 	// ... {peripheral_name.lower()} reads, the retuned value will be emulation of device ...
-# }}}}
-
-# // This function will emulate all device writes
-# void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{{{
-#         // Example: GPIOG->BSRR = value; // Set PG13 high
-#         // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
-# }}}}
-
-# void {peripheral_name.lower()}_init(ConfigSection* model_info) {{{{
-# 		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
-# }}}}
-# ```
-# """
+    fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
+    return output_path
