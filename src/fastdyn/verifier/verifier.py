@@ -159,6 +159,7 @@ def diff_loop_pattern(diff_data, periph_hw, periph_em):
                 for i in range(len(loop_pattern_hw)):
                     if loop_pattern_hw[i] != loop_pattern_em[i]:
                         fastdyn_log.warn(f'Access {loop_pattern_em[i]} by the emulated model does not match with the hardware access {loop_pattern_hw[i]}')
+                        diff_data.not_match = True
 
             diff_data.diff_loop_pattern_data += f'''
                 Hardware Loop pattern {index+1}
