@@ -186,6 +186,31 @@ void hrt_micros64(unsigned int cpu_index, void *udata) {
     qemu_set_register(lr, ARM_V7M_PC);
 }
 
+/**
+ * @brief Micros function that returns uint32_t value and is MMIO
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> micros32 *
+ */
+void micros32(unsigned int cpu_index, void *udata) {
+    int64_t nanos = qemu_plugin_get_virtual_timer();
+
+    if (nanos < 0) {
+        fprintf(stderr, "Error getting virtual timer\n");
+        return;
+    }
+
+    uint32_t micros = (uint32_t)((nanos / 1000) & 0xFFFFFFFF);
+    // int seconds = (int)(micros / 1000000);
+    // printf("micros32: %u microseconds\n", micros);
+    // printf("  (approx %d seconds)\n", seconds);
+
+    qemu_set_register(micros, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
 // Voltage
 /**
  * @brief Simulate ADC voltage reading
@@ -1000,7 +1025,7 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
 void ap_ahrs_init(unsigned int cpu_index, void *udata) {
     uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
     uint32_t offset = this_pointer + 562; // offset to ekf type
-    printf("Setting memory at offset %u to 0 (DCM)\n", offset);
-    uint8_t ekf_type = 0;
+    printf("Setting memory at offset %u to 2 (EKF3)\n", offset);
+    uint8_t ekf_type = 2; // EKF3
     qemu_plugin_write_memory(offset, (uint8_t *)&ekf_type, sizeof(uint8_t));
 }

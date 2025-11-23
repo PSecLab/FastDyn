@@ -2,6 +2,7 @@
 _ZN7ChibiOS7Storage10read_blockEPvtj storage_read_block *
 _ZN7ChibiOS7Storage11write_blockEtPKvj storage_write_block *
 hrt_micros64 hrt_micros64 *
+_ZN6AP_HAL6microsEv micros32 *
 _ZN7ChibiOS8AnalogIn13board_voltageEv adc_voltage *
 _ZN7ChibiOS8AnalogIn17servorail_voltageEv adc_voltage *
 _ZN7ChibiOS8RCOutput5writeEht write_channel

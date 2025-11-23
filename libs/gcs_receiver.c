@@ -261,7 +261,7 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
         gps->fix_type,                     // fix_type
         lat,                               // lat
         lon,                               // lon
-        (float)(gps->altitude_m * 1000.0f), // alt in mm
+        (float)(gps->altitude_m),          // alt in m
         0.0f,                              // hdop
         0.0f,                              // vdop
         gps->velocity_n,                   // vn
@@ -271,7 +271,8 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
         0.0f,                              // horiz_accuracy
         0.0f,                              // vert_accuracy
         gps->satellites_visible,           // satellites_visible
-        36000                              // yaw (in cdeg, 36000 = 360.00 degrees) TODO: make accurate
+        0                                  // ignore yaw
+        // 36000                              // yaw (in cdeg, 36000 = 360.00 degrees) TODO: make accurate
     );
 
     // Serialize the message into a buffer
@@ -290,7 +291,7 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
         gps_input_addr.sin_family = AF_INET;
         gps_input_addr.sin_port = htons(14551); // GCS listening port
         gps_input_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-        
+
         gps_input_sockfd_initialized = true;
     }
 

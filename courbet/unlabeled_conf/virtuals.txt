@@ -2,6 +2,7 @@
 0x80e6f14 storage_read_block *
 0x80e6fb4 storage_write_block *
 0x814edd4 hrt_micros64 *
+0x80e72a4 micros32 *
 0x81354b8 adc_voltage *
 0x81354c0 adc_voltage *
 0x8137f08 write_channel 

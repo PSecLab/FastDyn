@@ -85,6 +85,7 @@ cb_entry_t cb_registry[] = {
     { "compass_read_block", compass_read_block},
     // Timer
     { "hrt_micros64", hrt_micros64},
+    { "micros32", micros32},
     { "chibiOS_tick_handler", chibiOS_tick_handler},
     // wheel encoder
     { "init_wheel_encoder", init_wheel_encoder},
