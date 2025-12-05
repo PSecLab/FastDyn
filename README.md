@@ -12,7 +12,9 @@ to get more information about our great tool.
 
 1. Make sacrifice for debugging gods so your debugging and rehosting goes smoothly.
 
-2. Run the following command and pass the `qemu` path along with it like:
+2. Build Fastdyn-qemu and libhw.
+
+3. Run the following command and pass the `qemu` path along with it like:
 
    ```bash
    make qemu_path="/home/fastdyn-qemu"

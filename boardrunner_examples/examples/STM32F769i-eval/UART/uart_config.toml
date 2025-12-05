@@ -19,7 +19,7 @@ init_nsvtor = "0x08000000"
 arch = "arm"
 machine = "cortexm"
 cpu = "cortex-m7"
-plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
+plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 platform = "STM32F7x9"
 binary = "boardrunner_examples/examples/STM32F769i-eval/UART/Firmwares/uart.elf"
@@ -81,12 +81,12 @@ internal_model = "usart1_model"
 """
         [[Device.usart1.handlers]]
         model   = "elder"
-        enabled = true
+        enabled = false
         scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
 
     [[Device.usart1.handlers]]
         model   = "passthrough"
-        enabled = false # This handler is defined but will be skipped for this device.
+        enabled = true # This handler is defined but will be skipped for this device.
 
 [Device.unhandled_space]
     irq = "0-15:20-25:41:53"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled

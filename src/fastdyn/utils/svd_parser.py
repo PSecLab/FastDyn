@@ -1,6 +1,7 @@
 import logging
 import os
 from .. import fastdyn_log as fastdyn_log_conf
+import subprocess
 
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
