@@ -516,14 +516,14 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         float gyro_y = imu.gyro.y;
         float gyro_z = imu.gyro.z;
         float temp_celsius = TEMP_ZERO_C_INV;
-
+        // ROTATION_PITCH_180
         float imu_data[7] = {
-            accel_x,
-            accel_y,
+            -1 * accel_x,
+            -1 * accel_y,
             accel_z,
             temp_celsius,
-            gyro_x,
-            gyro_y,
+            -1 * gyro_x,
+            -1 * gyro_y,
             gyro_z
         };
 
@@ -664,10 +664,15 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
         return;
     }
 
+    // printf("Magnetometer reading (Gauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_x, mag_y, mag_z);
+    // yaw
+    // double yaw = atan2(mag_y, mag_x) * 180.0 / M_PI;
+    // printf("Calculated yaw: %.3f degrees\n", yaw);
+
     SimulatorMagnetometer sim_data = {
         .mag_x_gauss = (float)mag_x,
-        .mag_y_gauss = (float)mag_y,
-        .mag_z_gauss = (float)mag_z
+        .mag_y_gauss = (float)mag_z,
+        .mag_z_gauss = (float)mag_y
     };
 
     // convert to raw format
