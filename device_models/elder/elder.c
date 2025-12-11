@@ -21,14 +21,14 @@ DeviceModels configs[MAX_DEVICES];
 
 static int device_count = 0;
 
-static uint64_t elder_read(void *opaque, hwaddr address, unsigned size) {
+static uint64_t elder_read(void *opaque, hwaddr address, unsigned size, uint64_t pc) {
 	for (int i = 0; i < device_count; i++) {
 		Range ranges[10];
 		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
 		for (int j=0; j<devices[i].config->range_count; j++) {
 			if (address >= ranges[j].start && address < ranges[j].end) {
 				// Good case, my scroll worked
-				return devices[i].model.read(NULL, address, size);
+				return devices[i].model.read(NULL, address, size, pc);
 			}
 		}
     }
@@ -37,14 +37,14 @@ static uint64_t elder_read(void *opaque, hwaddr address, unsigned size) {
 
 }
 
-static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned size) {
+static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned size, uint64_t pc) {
 	for (int i = 0; i < device_count; i++) {
 		Range ranges[10];
 		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
 		for (int j=0; j<devices[i].config->range_count; j++) {
 			if (address >= ranges[j].start && address < ranges[j].end) {
 				// Good case, my scroll worked
-				devices[i].model.write(NULL, address, value, size);
+				devices[i].model.write(NULL, address, value, size, pc);
 				return;
 			}
 		}

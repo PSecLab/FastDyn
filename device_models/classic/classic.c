@@ -3,7 +3,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
-static uint64_t classic_read(void *opaque, hwaddr address, unsigned size) {
+static uint64_t classic_read(void *opaque, hwaddr address, unsigned size, uint64_t pc) {
     (void)opaque;
 
     uint64_t value = 0;
@@ -35,7 +35,7 @@ static uint64_t classic_read(void *opaque, hwaddr address, unsigned size) {
     }
 }
 
-static void classic_write(void *opaque, hwaddr address, uint64_t value, unsigned size) {
+static void classic_write(void *opaque, hwaddr address, uint64_t value, unsigned size, uint64_t pc) {
     (void)opaque;
 }
 static int classic_serve(int line) {

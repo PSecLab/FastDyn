@@ -79,7 +79,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
     while (node) {
         DeviceModel *dev = node->dev;
         if (dev) {
-            dev->write(dev->opaque, address, value, size);
+            dev->write(dev->opaque, address, value, size, pc);
             handled = true;
 #ifdef DEV_LOGGER
             utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
@@ -153,7 +153,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 
     if (dev_to_use) {
         // A device was selected (either the single one, or the priority one from a list)
-        value = dev_to_use->read(dev_to_use->opaque, address, size);
+        value = dev_to_use->read(dev_to_use->opaque, address, size, pc);
         *buf = value;
 #ifdef DEV_LOGGER
         utils_log_to_file(io_logger, "[%5ld.%06ld] [%s] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
@@ -198,9 +198,10 @@ void dev_notify_irq(int number) {
 	time_t sec;
     long usec;
     dev_get_timestamp(&sec, &usec);
+#ifdef DEV_LOGGER
 	utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
               sec, usec, number);
-
+#endif
 	DeviceModel* dev = irq_lut[number];
 	if (dev != NULL) {
 		dev->interrupt(number);
