@@ -23,3 +23,8 @@ _mav_finalize_message_chan_send gcs_send_mavlink_message *
 0x8150a02 raise_periodic_irq 66
 0x8032bce gps_get_type_mavlink
 _ZN7AP_AHRS4initEv ap_ahrs_init
+_ZN13AP_Filesystem4readEiPvm ap_fs_read *
+_ZN13AP_Filesystem4openEPKcib ap_fs_open *
+_ZN13AP_Filesystem5fsyncEi ap_fs_fsync *
+_ZN13AP_Filesystem5writeEiPKvm ap_fs_write *
+_ZN13AP_Filesystem5closeEi ap_fs_close *

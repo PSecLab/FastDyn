@@ -67,6 +67,20 @@ int mav_finalize_message_chan_send(int sockfd,
 void start_gcs_listener(RingBuffer *rb);
 
 /**
+* @brief Mark the open of a flight log file descriptor.
+*
+* @param fd File descriptor of the flight log file.
+*/
+void mark_open_flight_log_fd(int fd);
+
+/**
+* @brief Mark the close of a flight log file descriptor.
+*
+* @param fd File descriptor of the flight log file.
+*/
+void mark_close_flight_log_fd(int fd);
+
+/**
  * @brief Check how many bytes are available in the ring buffer.
  *
  * @param rb Pointer to ring buffer.

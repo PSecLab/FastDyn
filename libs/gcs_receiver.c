@@ -30,13 +30,43 @@ static struct sockaddr_in gps_input_addr;
 static int gps_input_sockfd = -1;
 static bool gps_input_sockfd_initialized = false;
 
+static int flight_log_fd_array[100] = {-1};
+static int flight_log_fd_index = 0;
+
+void mark_open_flight_log_fd(int fd) {
+    flight_log_fd_array[flight_log_fd_index] = fd;
+    flight_log_fd_index++;
+}
+
+void mark_close_flight_log_fd(int fd) {
+    for (int i = 0; i < flight_log_fd_index; i++) {
+        if (flight_log_fd_array[i] == fd) {
+            flight_log_fd_array[i] = -1;
+            break;
+        }
+    }
+}
+
+static void close_all_flight_log_fds() {
+    for (int i = 0; i < flight_log_fd_index; i++) {
+        if (flight_log_fd_array[i] != -1) {
+            close(flight_log_fd_array[i]);
+            flight_log_fd_array[i] = -1;
+        }
+    }
+    flight_log_fd_index = 0;
+}
+
 void sigint_handler(int sig) {
-    printf("\n[Main] Caught SIGINT (Ctrl-C). Killing GCS listener thread...\n");
-    // Send cancellation request to GCS listener thread
+    printf("\n[Main] Caught SIGINT (Ctrl-C).\n");
+    printf("[Main] Closing all flight log file descriptors...\n");
+    close_all_flight_log_fds();
+    printf("[Main] Flight log file descriptors closed.\n");
+    printf("[Main] Sending cancellation request to GCS listener thread...\n");
     pthread_cancel(gcs_listener_tid);
     pthread_join(gcs_listener_tid, NULL);
     gcs_listener_running = false;
-    printf("[Main] GCS listener thread terminated. Exiting.\n");
+    printf("[Main] GCS listener thread joined. Exiting.\n");
     exit(0);
 }
 

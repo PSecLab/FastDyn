@@ -141,10 +141,13 @@ if __name__ == "__main__":
     #     sys.exit(1)
 
     map_file = "rover_map.txt"
+    # map_file = "rover_v462_map.txt"
     modifier_file = "labeled_conf/modifiers.txt"
     modifier_out = "unlabeled_conf/modifiers.txt"
+    # modifier_out = "test_conf/modifiers.txt"
     virtuals_file = "labeled_conf/virtuals.txt"
     virtuals_out = "unlabeled_conf/virtuals.txt"
+    # virtuals_out = "test_conf/virtuals.txt"
 
     symbols_dict = load_symbol_addresses(map_file)
 

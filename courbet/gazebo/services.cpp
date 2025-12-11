@@ -18,6 +18,7 @@
 #include <memory>
 
 const static bool DEBUG = false;
+static bool READY = false;
 
 /**
  * @brief Get a large set of different readings from multiple
@@ -309,6 +310,9 @@ private:
 
   void advanceSimThread()
   {
+    while (!READY) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
     std::cout << "Starting simulation advance thread...\n";
     // sleep 5 seconds to allow Gazebo to start
     std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -360,6 +364,9 @@ private:
               toggle = false;
               std::cout << "Simulation caught up to requested time: " << run_until_time_s_ << " s\n";
           }
+          // else {
+          //     std::cout << "Latest time: " << latest_time_s_ << " s, Run until time: " << run_until_time_s_ << " s\n";
+          // }
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
       }
@@ -471,6 +478,8 @@ int main(int argc, char **argv)
   );
 
   std::cout << "ArduPilot Services running...\n";
+
+  READY = true;
 
   while (true)
   {

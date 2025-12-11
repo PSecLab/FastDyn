@@ -7,6 +7,8 @@
  * @author Michael Rooney
  */
 
+#include <fcntl.h>
+#include <unistd.h>
 #include "virtuals.h"
 #include "gazebo_wrapper.h"
 #include <math.h>
@@ -1033,4 +1035,103 @@ void ap_ahrs_init(unsigned int cpu_index, void *udata) {
     printf("Setting memory at offset %u to 2 (EKF3)\n", offset);
     uint8_t ekf_type = 2; // EKF3
     qemu_plugin_write_memory(offset, (uint8_t *)&ekf_type, sizeof(uint8_t));
+}
+
+
+/*
+AP File System Hooks for the AP_Logger_File Backend
+
+int open(const char *fname, int flags, bool allow_absolute_paths = false);
+int close(int fd);
+int32_t read(int fd, void *buf, uint32_t count);
+int32_t write(int fd, const void *buf, uint32_t count);
+int fsync(int fd);
+
+Should be opening these all under a single directory like flight_logs/
+
+All virtuals should be called like this:
+
+<address/symbol> ap_fs_open *
+<address/symbol> ap_fs_close *
+<address/symbol> ap_fs_read *
+<address/symbol> ap_fs_write *
+<address/symbol> ap_fs_fsync *
+*/
+
+void ap_fs_open(unsigned int cpu_index, void *udata) {
+    uint32_t fname_ptr = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    uint32_t flags = (uint32_t)qemu_get_register(ARM_V7M_R2);
+    // bool allow_absolute_paths = false;
+
+    char fname[256];
+    memset(fname, 0, sizeof(fname));
+    qemu_plugin_read_memory(fname_ptr, (uint8_t*)fname, sizeof(fname));
+
+    printf("Opening file: /root/rooney/FastDyn/courbet/flight_logs/%s\n", fname);
+
+    char path[256];
+    snprintf(path, sizeof(path) + 41, "/root/rooney/FastDyn/courbet/flight_logs/%s", fname);
+
+    int fd = open(path, flags, 0666);
+    mark_open_flight_log_fd(fd);
+    qemu_set_register(fd, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+void ap_fs_close(unsigned int cpu_index, void *udata) {
+    uint32_t fd = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    int result = close(fd);
+    mark_close_flight_log_fd(fd);
+    qemu_set_register(result, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+void ap_fs_read(unsigned int cpu_index, void *udata) {
+    uint32_t fd = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    uint32_t buf_ptr = (uint32_t)qemu_get_register(ARM_V7M_R2);
+    uint32_t count = (uint32_t)qemu_get_register(ARM_V7M_R3);
+    char *buf = (char *)malloc(count);
+    if (!buf) {
+        fprintf(stderr, "Failed to allocate memory for read\n");
+        qemu_set_register(-1, ARM_V7M_R0);
+        uint32_t lr = qemu_get_register(ARM_V7M_LR);
+        qemu_set_register(lr, ARM_V7M_PC);
+        return;
+    }
+    ssize_t result = read(fd, buf, count);
+    qemu_plugin_write_memory(buf_ptr, (uint8_t*)buf, count);
+    free(buf);
+    qemu_set_register(result, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+void ap_fs_write(unsigned int cpu_index, void *udata) {
+    uint32_t fd = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    uint32_t buf_ptr = (uint32_t)qemu_get_register(ARM_V7M_R2);
+    uint32_t count = (uint32_t)qemu_get_register(ARM_V7M_R3);
+    char *buf = (char *)malloc(count);
+    if (!buf) {
+        fprintf(stderr, "Failed to allocate memory for write\n");
+        qemu_set_register(-1, ARM_V7M_R0);
+        uint32_t lr = qemu_get_register(ARM_V7M_LR);
+        qemu_set_register(lr, ARM_V7M_PC);
+        return;
+    }
+    qemu_plugin_read_memory(buf_ptr, (uint8_t*)buf, count);
+    ssize_t result = write(fd, buf, count);
+    free(buf);
+    qemu_set_register(result, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+void ap_fs_fsync(unsigned int cpu_index, void *udata) {
+    uint32_t fd = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    int result = fsync(fd);
+    qemu_set_register(result, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
 }
