@@ -1,0 +1,103 @@
+# ==============================================================================
+#                              Memory Configuration
+# ==============================================================================
+[Memory]
+main_ram_size = "512M"
+shared_ram_size = "512K"
+ram_base_addr = "0x20000000"
+shared_ram_base_addr = "0x30000000"
+shared_mem_path = "/dev/shm"        # Directory for memory backend files
+main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
+shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
+init_nsvtor = "0x08000000"
+
+# ==============================================================================
+#                                CPU Configuration
+# ==============================================================================
+[CPU]
+# --- Core Emulation & Plugin Settings ---
+arch = "arm"
+machine = "cortexm"
+cpu = "cortex-m7"
+plugin_library = "/data/fastdyn/build/libfastdyn.so"
+monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
+platform = "STM32F469"
+binary = "/data/fastdyn/device_models/server_firmwares/stm32f4/build/RTOSDemo.axf"
+qemu_path="/data/qemu/build/qemu-system-arm"
+
+# --- Debugging, Control, and Logging ---
+enable_gdb = true
+stop_on_start = true
+monitor_port = 5555
+qmp_socket = "/tmp/qmp.sock"
+log_file = "qemu.log"
+log_options = "in_asm,op"
+
+# --- Embedded CPU Behavior Configurations ---
+logger_content = """
+# --- Plugin Logger Configuration ---
+# level = DEBUG
+# output = stderr
+"""
+
+# --- Virtual Instructions (Structured) ---
+# Each block defines a single virtual instruction to be registered.
+# --- Virtual Instructions (Structured) ---
+# Each block defines a single virtual instruction to be registered.
+[[CPU.virtuals]]
+at = 0x8000736 
+instruction = "debug_log"
+args = ["0x0"]
+
+[[CPU.virtuals]]
+at = 0x8000790 
+instruction = "debug_log"
+args = ["0x0"]
+
+# --- Instruction Modifiers (Structured) ---
+# Each block defines a runtime binary patch using a high-level representation.
+[[CPU.modifiers]]
+at = "0x8000784"
+patch= "r15 <- 0x8000786"
+
+[[CPU.modifiers]]
+at = "0x800077e"
+patch = "r15 <- 0x8000780"
+
+
+
+
+
+
+# ==============================================================================
+#                              Device Configuration
+# ==============================================================================
+
+# --- Model-Specific Configurations ---
+# Define the global arguments for each type of plugin device model here.
+
+[Device.Models.elder]
+    # The libhw backend is a global argument for the elder model.
+    # The scroll content is now defined per-device below.
+    backend = "stlink"
+
+[Device.Models.passthrough]
+    backend = "stlink"
+
+[Device.Models.classic]
+    # The classic model has no global arguments.
+
+[Device.Models.unhandled]
+    # This model explicitly marks memory as unhandled.
+
+
+# --- Peripheral Definitions ---
+# Each peripheral gets its own sub-table. If it uses the elder model,
+# its specific scroll configuration is defined directly within it.
+[Device.unhandled_space]
+    ranges = ["0x40000000-0x40FFFFFF", "0xE0000000-0xEFFFFFFF"]
+    description = "Memory regions that are explicitly not handled by any model."
+
+    [[Device.unhandled_space.handlers]]
+        model = "classic"
+        enabled = true
