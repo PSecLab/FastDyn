@@ -137,7 +137,7 @@ static void* dev_thread_fn(void* arg) {
 				dev_debug("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));
                 dev_debug("Register%d: 0x%lx\n", 15, hw_read_reg(hw, 15));
 				pthread_mutex_unlock(&hw_mutex);
-				qemu_plugin_raise_irq(firing_line);
+				qemu_plugin_raise_irq(firing_line, false);
 		} else {
 			pthread_mutex_unlock(&hw_mutex);
 			// usleep(40000);

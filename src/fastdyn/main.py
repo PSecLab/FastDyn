@@ -91,7 +91,7 @@ def build_qemu_cmd(config, dev_config_path, out_path):
         f"{plugin_lib_path},dev={dev_config_path}",
         f'virtual={virtuals_path}',
         f'modifier={modifiers_path}',
-		f"coverage={cpu.get('coverage', False)}"
+        f"coverage={cpu.get('coverage', False)}"
     ]
 
     plugin_configs.extend([",".join(plugin_files)])
@@ -228,6 +228,8 @@ def run(config, map_file, work_dir):
 
     if map_file is not None:
         log.info(f"Parsing Config file: {map_file}")
+    else:
+        log.info(f"Config file not found")
 
     config_obj.add_device_config(config, map_file, svd_file_map)
 

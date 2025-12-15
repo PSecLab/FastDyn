@@ -97,7 +97,8 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
         dev_debug("IO Access not handled");
     }
 
-    if (handler && (handler[0] == 'g')) {
+	//This is fix so we don't inject two interrupts
+    if (handler && (handler[0] == 'g' || handler[0] == 'v')) {
            return 0;
     }
 
