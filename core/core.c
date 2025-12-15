@@ -454,11 +454,147 @@ LookupResult lookup_addr(uintptr_t addr) {
     result.entry = NULL;
     return result;
 }
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <ctype.h>
+
+#define MAX_DEV_NAME 64
+
+typedef enum {
+    ACCESS_READ,
+    ACCESS_WRITE
+} access_type_t;
+
+typedef struct {
+    uint64_t        pc;
+    access_type_t  type;
+    char            dev[MAX_DEV_NAME];
+    uint64_t        offset;
+} access_t;
+
+#if 0
+static const char *rw_str(access_type_t t)
+{
+    return (t == ACCESS_READ) ? "R" : "W";
+}
+#endif 
+
+static size_t count;
+static access_t *accesses;
+static int parse_access_type(const char *s, access_type_t *out)
+{
+    if (!s || !*s)
+        return -1;
+
+    if (strcasecmp(s, "R") == 0 || strcasecmp(s, "READ") == 0) {
+        *out = ACCESS_READ;
+        return 0;
+    }
+
+    if (strcasecmp(s, "W") == 0 || strcasecmp(s, "WRITE") == 0) {
+        *out = ACCESS_WRITE;
+        return 0;
+    }
+
+    return -1;
+}
+
+static int parse_line(const char *line, access_t *out)
+{
+    char dev[MAX_DEV_NAME];
+    char rw[16];
+    unsigned long long pc, off;
+
+    /* Skip comments / empty lines */
+    if (line[0] == '#' || line[0] == '\n')
+        return 0;
+
+    /*
+     * Accepted formats:
+     *   0x800123 R gpioa 0x1
+     *   0x800123 READ gpioa 0x1
+     */
+    int n = sscanf(line, "%llx %15s %63s %llx",
+                   &pc, rw, dev, &off);
+    if (n != 4)
+        return -1;
+
+    access_type_t type;
+    if (parse_access_type(rw, &type) != 0)
+        return -1;
+
+    out->pc     = pc;
+    out->type   = type;
+    out->offset = off;
+    strncpy(out->dev, dev, MAX_DEV_NAME);
+    out->dev[MAX_DEV_NAME - 1] = '\0';
+
+    return 1;
+}
+
+access_t *parse_access_file(const char *path, size_t *count)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        perror("fopen");
+        return NULL;
+    }
+
+    size_t cap = 128, n = 0;
+    access_t *list = malloc(cap * sizeof(*list));
+    if (!list) {
+        fclose(f);
+        return NULL;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        access_t a;
+        int r = parse_line(line, &a);
+        if (r <= 0)
+            continue;
+
+        if (n == cap) {
+            cap *= 2;
+            access_t *tmp = realloc(list, cap * sizeof(*list));
+            if (!tmp) {
+                free(list);
+                fclose(f);
+                return NULL;
+            }
+            list = tmp;
+        }
+
+        list[n++] = a;
+    }
+
+    fclose(f);
+    *count = n;
+    return list;
+}
+
+static const access_t *find_access_by_pc(const access_t *list,
+                                  size_t count,
+                                  uint64_t pc)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (list[i].pc == pc)
+            return &list[i];
+    }
+    return NULL;
+}
+
+
+
 static int init = 0;
 AddressList cc_list;
 LoggerEntry cc_entry;
 LookupResult cc_ret;
 static int tracer_ready =0;
+char gpio_memory[0x400];
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
 	if (runtime && !init) {
@@ -525,6 +661,23 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
                     	insn, rule->func, QEMU_PLUGIN_CB_RW_REGS, rule->args);
 				}
         }
+
+		//2.5 Inline IO
+		const access_t *a = find_access_by_pc(accesses, count, qemu_plugin_insn_vaddr(insn)); 
+		if (a) {
+			qemu_plugin_u64 entry_tmp;
+    	    entry_tmp.offset = (size_t)&cc_ret.list->log_buf;
+			// TODO: Get Device Memory
+			entry_tmp.offset = (size_t)gpio_memory[a->offset];
+			if (a->type == ACCESS_WRITE) {
+		        //STORE IO or LOAD IO Based on the address
+		        qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_STORE_IO, entry_tmp, cc_ret.entry->reg);
+			} else {
+				//STORE IO or LOAD IO Based on the address
+                qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOAD_IO, entry_tmp, cc_ret.entry->reg);
+			}
+		}
+
 
 		//Third priority: Modifier
 		//void * handle= qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn,  QEMU_PLUGIN_CB_GEN_LABEL, NULL, 0);
@@ -770,6 +923,11 @@ static int core_parse_arguments(int argc, char ** argv) {
     filename = utils_get_arg("virtual", argc, argv);
     if (filename) {
         parse_rules_file(filename);
+    }
+
+	filename = utils_get_arg("finline", argc, argv);
+    if (filename) {
+        accesses = parse_access_file(filename, &count);
     }
 
 	//Filename should really be value

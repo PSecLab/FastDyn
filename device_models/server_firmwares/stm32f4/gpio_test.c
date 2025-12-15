@@ -38,11 +38,12 @@ int gpio_test(void) {
                      (0x1 << (LED_RED*2)));
 
     // 3. Blink loop
-    while (1) {
+    for (int i =0; i < 1000000; i++) {
         // Toggle all LEDs
         GPIOG_ODR ^= (1 << LED_BLUE) | (1 << LED_GREEN) |
                      (1 << LED_ORANGE) | (1 << LED_RED);
-        delay(1000000);
     }
+
+	while(1<2);
 }
 #endif /* TRAIN_GPIO */
