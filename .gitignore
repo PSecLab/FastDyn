@@ -8,3 +8,4 @@ Doxyfile.bak
 *.egg-info
 *tmp
 *fastdyn_work
+fastdyn-env

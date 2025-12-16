@@ -24,6 +24,7 @@ monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the targ
 platform = "STM32F469"
 binary = "/data/fastdyn/device_models/server_firmwares/stm32f4/build/RTOSDemo.axf"
 qemu_path="/data/qemu/build/qemu-system-arm"
+finline="/data/fastdyn/staticiomapper"  #update with your custom one
 
 # --- Debugging, Control, and Logging ---
 enable_gdb = true
@@ -45,12 +46,12 @@ logger_content = """
 # --- Virtual Instructions (Structured) ---
 # Each block defines a single virtual instruction to be registered.
 [[CPU.virtuals]]
-at = 0x8000736 
+at = 0x8000736
 instruction = "debug_log"
 args = ["0x0"]
 
 [[CPU.virtuals]]
-at = 0x8000790 
+at = 0x8000790
 instruction = "debug_log"
 args = ["0x0"]
 
