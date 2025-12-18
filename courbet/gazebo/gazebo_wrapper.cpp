@@ -204,6 +204,14 @@ int get_navsat_reading(gps_data_t *gps_data) {
         return 0;
     }
 
+    gz::msgs::Float yaw_rads;
+    if (!request_service("/get_yaw_reading", yaw_rads)) {
+        return 0;
+    }
+
+    // convert radians to degrees
+    float yaw_deg = yaw_rads.data() * 180.0 / M_PI;
+
     gps_data_t data;
     data.lat = response.latitude_deg();
     data.lon = response.longitude_deg();
@@ -213,6 +221,7 @@ int get_navsat_reading(gps_data_t *gps_data) {
     data.vel_d = response.velocity_up();
     data.sec = (uint64_t)response.header().stamp().sec();
     data.nsec = (uint32_t)response.header().stamp().nsec();
+    data.yaw_deg = yaw_deg;
 
     *gps_data = data;
 

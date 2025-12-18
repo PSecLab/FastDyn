@@ -437,6 +437,57 @@ private:
   // std::vector<uint16_t> pwm_values_;
 };
 
+/**
+ * @brief Service to get yaw from model pose
+ *
+ * This service subscribes to the model pose topic and provides
+ * the yaw angle upon request.
+ */
+template <typename MsgType = gz::msgs::Pose_V>
+class YawService
+{
+public:
+  YawService(gz::transport::Node &node,
+              const std::string &topic_name,
+              const std::string &service_name)
+  {
+    node.Subscribe(topic_name, &YawService::OnPoseMsg, this);
+    node.Advertise(service_name, &YawService::OnServiceRequest, this);
+  }
+
+private:
+  void OnPoseMsg(const MsgType &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_pose_ = msg;
+  }
+
+  float QuaternionToYaw(const gz::msgs::Quaternion &q)
+  {
+    // Yaw (Z-axis rotation)
+    double siny_cosp = 2.0 * (q.w() * q.z() + q.x() * q.y());
+    double cosy_cosp = 1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z());
+    double yaw = std::atan2(siny_cosp, cosy_cosp);
+    // subtract 90 degrees to convert from Gazebo NED to ArduPilot ENU
+    yaw -= M_PI / 2.0;
+    if (yaw < -M_PI)
+      yaw += 2.0 * M_PI;
+    return static_cast<float>(yaw);
+  }
+
+  bool OnServiceRequest(const gz::msgs::Empty &,
+                        gz::msgs::Float &rep)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    float yaw = QuaternionToYaw(latest_pose_.pose(0).orientation());
+    rep.set_data(yaw);
+    return true;
+  }
+
+  MsgType latest_pose_;
+  std::mutex mutex_;
+};
+
 
 int main(int argc, char **argv)
 {
@@ -475,6 +526,12 @@ int main(int argc, char **argv)
     "127.0.0.1",
     9002,
     5200
+  );
+
+  YawService yawService(
+    node,
+    "/model/" + model_name + "/pose",
+    "/get_yaw_reading"
   );
 
   std::cout << "ArduPilot Services running...\n";

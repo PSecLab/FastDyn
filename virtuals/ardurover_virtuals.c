@@ -370,7 +370,8 @@ static void send_gps_mavlink_message(void *opaque)
         .timestamp_sec = (uint32_t)gps_data.sec,
         .timestamp_nsec = gps_data.nsec,
         .fix_type = 3, // 3D fix
-        .satellites_visible = 10 // Arbitrary number of satellites
+        .satellites_visible = 10, // Arbitrary number of satellites
+        .yaw_deg = gps_data.yaw_deg
     };
 
     // 220 https://mavlink.io/en/messages/common.html#MAV_COMP_ID_GPS
@@ -519,13 +520,38 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         float gyro_z = imu.gyro.z;
         float temp_celsius = TEMP_ZERO_C_INV;
         // ROTATION_PITCH_180
+
+        // test case 1
+        // float imu_data[7] = {
+        //     accel_y,
+        //     -1 * accel_x,
+        //     accel_z,
+        //     temp_celsius,
+        //     gyro_y,
+        //     -1 * gyro_x,
+        //     gyro_z
+        // };
+
+        // test case 2
+        // float imu_data[7] = {
+        //     accel_y,
+        //     accel_x,
+        //     -1 *accel_z,
+        //     temp_celsius,
+        //     gyro_y,
+        //     gyro_x,
+        //     -1 *gyro_z
+        // };
+
+        // test case 3
+        // gyro_in   --(PITCH_180)-->   gyro_FRD
         float imu_data[7] = {
-            -1 * accel_x,
             -1 * accel_y,
+            accel_x,
             accel_z,
             temp_celsius,
-            -1 * gyro_x,
             -1 * gyro_y,
+            gyro_x,
             gyro_z
         };
 
@@ -577,19 +603,26 @@ HMC5843RawData convert_to_hmc5843(SimulatorMagnetometer sim_data) {
     int temp_z = (int)(sim_data.mag_z_gauss * lsb_per_gauss);
 
     // Apply remapping and sign adjustments
-    int mag_x_raw = -temp_x;   // raw X
-    int mag_y_raw = temp_z;    // raw Z -> Y
-    int mag_z_raw = -temp_y;   // raw Y -> Z (negated)
+    // int mag_x_raw = -1 * temp_x;   // raw X
+    // int mag_y_raw = temp_z;    // raw Z -> Y
+    // int mag_z_raw = -1 * temp_y;   // raw Y -> Z (negated)
+
+    int mag_x_raw = temp_x;
+    int mag_y_raw = -1 * temp_y;
+    int mag_z_raw = -1 * temp_z;
 
     // Clamp to ±2048
     mag_x_raw = constrain_int16(mag_x_raw, -2048, 2047);
     mag_y_raw = constrain_int16(mag_y_raw, -2048, 2047);
     mag_z_raw = constrain_int16(mag_z_raw, -2048, 2047);
 
+    // y and z are negated because +z is up and +y is left from gazebo
     HMC5843RawData raw = {
         .mag_x_raw = (int16_t)mag_x_raw,
-        .mag_y_raw = (int16_t)mag_y_raw,
-        .mag_z_raw = (int16_t)mag_z_raw
+        .mag_y_raw = (int16_t)(-1 * mag_y_raw),
+        .mag_z_raw = (int16_t)(-1 * mag_z_raw)
+        // .mag_y_raw = (int16_t)(mag_y_raw),
+        // .mag_z_raw = (int16_t)(mag_z_raw)
     };
 
     return raw;
@@ -671,10 +704,11 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
     // double yaw = atan2(mag_y, mag_x) * 180.0 / M_PI;
     // printf("Calculated yaw: %.3f degrees\n", yaw);
 
+    // transformation of this data to HMC5843 format occurs in `convert_to_hmc5843`
     SimulatorMagnetometer sim_data = {
         .mag_x_gauss = (float)mag_x,
-        .mag_y_gauss = (float)mag_z,
-        .mag_z_gauss = (float)mag_y
+        .mag_y_gauss = (float)mag_y,
+        .mag_z_gauss = (float)mag_z
     };
 
     // convert to raw format
@@ -1060,7 +1094,7 @@ All virtuals should be called like this:
 
 void ap_fs_open(unsigned int cpu_index, void *udata) {
     uint32_t fname_ptr = (uint32_t)qemu_get_register(ARM_V7M_R1);
-    uint32_t flags = (uint32_t)qemu_get_register(ARM_V7M_R2);
+    // uint32_t flags = (uint32_t)qemu_get_register(ARM_V7M_R2);
     // bool allow_absolute_paths = false;
 
     char fname[256];
@@ -1072,7 +1106,7 @@ void ap_fs_open(unsigned int cpu_index, void *udata) {
     char path[256];
     snprintf(path, sizeof(path) + 41, "/root/rooney/FastDyn/courbet/flight_logs/%s", fname);
 
-    int fd = open(path, flags, 0666);
+    int fd = open(path, O_RDWR | O_CREAT, 0666);
     mark_open_flight_log_fd(fd);
     qemu_set_register(fd, ARM_V7M_R0);
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
