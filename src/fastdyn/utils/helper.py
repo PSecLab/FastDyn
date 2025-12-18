@@ -1,4 +1,5 @@
 import re
+from elftools.elf.elffile import ELFFile
 
 def parse_symbol(s: str):
     """
@@ -61,3 +62,19 @@ def extract_regs(expr: str):
     left = parts[0].strip()
     right = parts[1].strip()
     return left, right
+
+def elf_file_parser(elf_path: str) -> str:
+    """
+    Returns the VTOR base (as a hex string) to use as:
+      -global armv7m.init-nsvtor=<value>
+    """
+    with open(elf_path, "rb") as f:
+        ef = ELFFile(f)
+        sec = ef.get_section_by_name(".isr_vector")
+        if sec is None:
+            raise ValueError("ELF has no .isr_vector section")
+        return hex(int(sec["sh_addr"]))
+
+def is_elf(path: str) -> bool:
+    with open(path, "rb") as f:
+        return f.read(4) == b"\x7fELF"

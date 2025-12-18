@@ -17,7 +17,7 @@ from fastdyn.__init__ import __version__
 from .verifier import verifier as verify             #contains the verification framework
 from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
-from .utils import svd_parser
+from .utils import svd_parser, helper
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
@@ -33,19 +33,12 @@ def build_qemu_cmd(config, dev_config_path, out_path):
     cpu_configs = [
         "-machine", f"{cpu['machine']},memory-backend=ram0",
         "-cpu", cpu['cpu'],
-        # "-kernel", cpu['binary'],
-        # f"-device", f"loader,file=/tmp/vectors.bin,addr=0x000000,force-raw=on",
-        # f"-device", f"loader,file={cpu['binary']},addr=0x000000",
+        "-kernel", cpu['binary'],
         "-qmp", f"unix:{cpu['qmp_socket']},server,nowait",
         "-d", cpu['log_options'],
         "-D", cpu['log_file'],
         "-monitor", f"tcp:127.0.0.1:{cpu['monitor_port']},server,nowait"
     ]
-
-    if cpu.get("vtor_base"):
-        cpu_configs.extend([f"-device", f"loader,file={cpu['binary']},addr={cpu.get('vtor_base')}"])
-    else:
-        cpu_configs.extend(["-kernel", cpu['binary']])
 
     if cpu.get('enable_gdb'):
         log.info("GDB debugging enabled on Port 1234")
@@ -83,8 +76,15 @@ def build_qemu_cmd(config, dev_config_path, out_path):
         '-global', 'cortexm-soc.shram_backend=ram1',
         '-global', f'cortexm-soc.ram_baseaddr={memory.get("ram_base_addr")}',
         '-global', f'cortexm-soc.shram_baseaddr={memory.get("shared_ram_base_addr")}',
-        # '-global', f'armv7m.init-nsvtor={memory.get("init_nsvtor")}',
     ]
+
+    if memory.get("init_nsvtor"):
+        memory_configs.extend(['-global', f'armv7m.init-nsvtor={memory.get("init_nsvtor")}'])
+    else:
+        if not helper.is_elf(cpu['binary']):
+            raise ValueError("Not an ELF (raw dump/bin). Need init_nsvtor in the toml configuration.")
+        nsvtor_elf = helper.elf_file_parser(cpu['binary'])
+        memory_configs.extend(['-global', f'armv7m.init-nsvtor={nsvtor_elf}'])
 
 
     cmd.extend(memory_configs)

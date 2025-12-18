@@ -18,6 +18,20 @@
 #define USART1_BRR   (*(volatile unsigned int*)(USART1_BASE + 0x08))
 #define USART1_CR1   (*(volatile unsigned int*)(USART1_BASE + 0x0C))
 
+void uart_send_char(char c) {
+    while (!(USART1_SR & (1 << 7))); // Wait TXE
+    USART1_DR = c;
+}
+
+char uart_receive_char(void) {
+    while (!(USART1_SR & (1 << 5))); // Wait RXNE
+    return USART1_DR;
+}
+
+void uart_send_string(const char *str) {
+    while (*str) uart_send_char(*str++);
+}
+
 void uart_init(void) {
     // Enable GPIOA clock
     RCC_AHB1ENR |= (1 << 0); // GPIOAEN
@@ -38,25 +52,18 @@ void uart_init(void) {
     USART1_CR1 = (1 << 13) | (1 << 3) | (1 << 2); // UE, TE, RE
 }
 
-void uart_send_char(char c) {
-    while (!(USART1_SR & (1 << 7))); // Wait TXE
-    USART1_DR = c;
-}
-
-char uart_receive_char(void) {
-    while (!(USART1_SR & (1 << 5))); // Wait RXNE
-    return USART1_DR;
-}
-
-void uart_send_string(const char *str) {
-    while (*str) uart_send_char(*str++);
-}
 
 int usart_test(void) {
+    __asm volatile ("nop");              //just a nop
+    __asm volatile ("nop");              //just a nop
+    __asm volatile ("nop");              //just a nop
+    __asm volatile ("nop");              //just a nop
     uart_init();
     uart_send_string("Hello UART at 115200 baud!\r\n");
 
     while (1) {
+        // uart_init();
+    // uart_send_string("Hello UART at 115200 baud!\r\n");
         char c = uart_receive_char();
         uart_send_char(c); // Echo
     }
