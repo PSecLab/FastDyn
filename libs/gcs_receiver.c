@@ -278,6 +278,8 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
     // Hardcoded GPS week (replace with real computation if desired)
     uint16_t gps_week = 15;
 
+    // printf("[GPS_YAW]: %.2f degrees\n", gps->yaw_deg);
+
     // Pack the MAVLink GPS_INPUT message (21 arguments)
     mavlink_msg_gps_input_pack(
         system_id,
@@ -301,8 +303,8 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
         0.0f,                              // horiz_accuracy
         0.0f,                              // vert_accuracy
         gps->satellites_visible,           // satellites_visible
-        18000                              // heading (in cdeg, 18000 = 180.00 degrees)
-        // 36000                              // yaw (in cdeg, 36000 = 360.00 degrees) TODO: make accurate
+        (int)(gps->yaw_deg * 100)          // yaw in centi-degrees
+        // 2200                               // yaw in centi-degrees (fixed to 2200 for testing)
     );
 
     // Serialize the message into a buffer

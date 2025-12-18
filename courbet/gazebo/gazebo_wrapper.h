@@ -16,6 +16,7 @@ typedef struct gps_data_t {
     double vel_d;
     uint64_t sec;
     uint32_t nsec;
+    float yaw_deg;
 } gps_data_t;
 
 // 3D float vector
