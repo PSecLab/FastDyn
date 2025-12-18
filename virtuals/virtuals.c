@@ -135,12 +135,12 @@ void raiseirq(unsigned int cpu_index, void *udata) {
 
     // Convert string to integer (auto-detect base: 0x = hex, 0 = octal, else decimal)
     unsigned long num = strtoul(str, NULL, 0);
-    qemu_plugin_raise_irq(num);
+    qemu_plugin_raise_irq(num, false);
 }
 
 void kick_irq(void *opaque) {
     int irq_num = *((int *)opaque);
-    qemu_plugin_raise_irq(irq_num);
+    qemu_plugin_raise_irq(irq_num, false);
 }
 
 void raise_periodic_irq(unsigned int cpu_index, void *udata) {

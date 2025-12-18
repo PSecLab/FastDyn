@@ -1,13 +1,36 @@
 # FastDyn Plugins
 ## How to run?
-Install `Fastdyn` as a package using:
-   ```bash
-   ./setup.sh
-   ```
+Before running the setup, it is highly recommended to use a virtual environment to isolate dependencies.
+
+### Install the venv package:
+```bash
+sudo apt update
+sudo apt install python3-venv -y
+```
+
+Create and activate the virtual environment:
+
+### Create the environment (named 'venv')
+```bash
+python3 -m venv fastdyn-env
+```
+### Activate it
+```bash
+source fastdyn-env/bin/activate
+```
+
+(Note: You can deactivate the environment later by simply running deactivate)
+
+
+### Install `Fastdyn` as a package using:
+```bash
+./setup.sh
+```
 You can pass the arguments using -c for configuration.toml, -m for symbol map file and -o for output dir. Further use:
-   ```bash
-   fastdyn --help
-   ```
+
+```bash
+fastdyn --help
+```
 to get more information about our great tool.
 
 1. Make sacrifice for debugging gods so your debugging and rehosting goes smoothly.

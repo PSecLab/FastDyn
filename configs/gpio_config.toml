@@ -4,8 +4,8 @@
 [Memory]
 main_ram_size = "512M"
 shared_ram_size = "512K"
-ram_base_addr = "0x00000000"
-shared_ram_base_addr = "0x20000000"
+ram_base_addr = "0x20000000"
+shared_ram_base_addr = "0x30000000"
 shared_mem_path = "/dev/shm"        # Directory for memory backend files
 main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
 shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
@@ -19,15 +19,15 @@ init_nsvtor = "0x08000000"
 arch = "arm"
 machine = "cortexm"
 cpu = "cortex-m4"
-plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
-# monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-platform = "STM32F429"
-binary = "/scratch/Fastdyn/FastDyn/device_models/server_firmwares/stm32f4/build/RTOSDemo.axf"
+coverage = true
+monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
+platform = "STM32F469"
+binary = "/data/FreeRTOS/FreeRTOS/Demo/STM32F429I-DISC1/build/RTOSDemo.axf"
 
 # --- Debugging, Control, and Logging ---
-qemu_path = "qemu-system-arm"
-enable_gdb = false
-stop_on_start = false
+qemu_path = "/data/qemu/build/qemu-system-arm"
+enable_gdb = true
+stop_on_start = true
 launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
@@ -35,7 +35,6 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-vtor_base = "0x0"
 
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
@@ -46,22 +45,21 @@ logger_content = """
 
 # --- Virtual Instructions (Structured) ---
 # Each block defines a single virtual instruction to be registered.
-# [[CPU.virtuals]]
-# at = "main+8"
-# instruction = "raiseirq"
-# args = ["TIM1_BRK_TIM9"]
 
-# # --- Instruction Modifiers (Structured) ---
-# # Each block defines a runtime binary patch using a high-level representation.
-# [[CPU.modifiers]]
-# at = "main+2"
-# patch = "r2 <- r3"
+[[CPU.virtuals]]
+at = "0x8003940"
+instruction = “anchor”
+args = ["/tmp/input_fastdyn:0x0"]
 
-# [[CPU.modifiers]]
-# at = "main+4"
-# patch = "r15 <- r14"
+[[CPU.virtuals]]
+at = "0x800395e"
+instruction = “assert”
+args = ["*0x8003940"]
 
 
+[[CPU.modifiers]]
+at = "0x0800395c"
+patch= "r15 <- 0x08003940"
 # ==============================================================================
 #                              Device Configuration
 # ==============================================================================
@@ -86,39 +84,10 @@ logger_content = """
 # Each peripheral gets its own sub-table. If it uses the elder model,
 # its specific scroll configuration is defined directly within it.
 
-[Device.usart1]
-    irq = "0-15:20-25:41"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
-    ranges = ["0x40011000-0x40011FFF"]
-    description = "Main USART peripheral for serial communication."
-    # The configuration for this specific device when handled by the elder model.
-    # 'internal_model' is the name of the model compiled into the main plugin library.
-    scroll_config = """
-[usart1]
-internal_model = "uart1_model"
-"""
-    # Define all models responsible for this device in the 'handlers' list.
-    [[Device.usart1.handlers]]
-        model   = "qemu"
-        type    = "stm32f2xx-usart" # QEMU-specific type
-        enabled = false
-        args = "device chardev"
-
-    [[Device.usart1.handlers]]
-        model   = "elder"
-        enabled = true
-        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
-
-    [[Device.usart1.handlers]]
-        model   = "passthrough"
-        enabled = false # This handler is defined but will be skipped for this device.
-
 [Device.unhandled_space]
-    irq = "0-15:20-25:41"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
-    ranges = ["0x40000000-0x40010FFF", "0x40012000-0xE00FFFFF", "0xE0000000-0xEFFFFFFF"]
-    # ranges = ["0x40000000-0x40010FFF", "0x40011000-0x40011FFF", "0x40012000-0xE00FFFFF", "0xE0000000-0xEFFFFFFF"]
-    # ranges = ["0x40000000-0x400237FF","0x40023800-0xE00FFFFF"]
+    ranges = ["0x40000000-0x40010FFF", "0xE0000000-0xEFFFFFFF", "0x40000000-0xE00FFFFF"]
     description = "Memory regions that are explicitly not handled by any model."
 
     [[Device.unhandled_space.handlers]]
-        model = "passthrough"
+        model = "classic"
         enabled = true
