@@ -34,3 +34,9 @@ docs:
 
 clean:
 	rm -rf build docs/html
+
+test:
+	pytest
+
+test_versbose:
+	pytest -o log_cli=true --log-cli-level=INFO
