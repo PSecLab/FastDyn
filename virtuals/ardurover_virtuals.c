@@ -546,12 +546,12 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         // test case 3
         // gyro_in   --(PITCH_180)-->   gyro_FRD
         float imu_data[7] = {
-            -1 * accel_y,
-            accel_x,
+            accel_y,
+            -1 * accel_x,
             accel_z,
             temp_celsius,
-            -1 * gyro_y,
-            gyro_x,
+            gyro_y,
+            -1 * gyro_x,
             gyro_z
         };
 
