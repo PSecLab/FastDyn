@@ -1,3 +1,5 @@
+//UNDER DEVELOPMENT NOTE: DONT REMOVE/CHANGE THE MAIN FILE! IF DO PLEASE KEEP THE CODE SEPARATE
+
 // #include <stdint.h>
 
 // /*
@@ -313,7 +315,7 @@ __attribute__((naked)) void init_regs(void) {
     );
 }
 int main() {
-#ifdef TRAIN_TIMER
+    #ifdef TRAIN_TIMER
 		timer_test();
 #endif
 #ifdef TRAIN_GPIO

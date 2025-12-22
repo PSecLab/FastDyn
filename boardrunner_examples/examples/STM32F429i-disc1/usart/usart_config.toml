@@ -4,12 +4,12 @@
 [Memory]
 main_ram_size = "512M"
 shared_ram_size = "512K"
-ram_base_addr = "0x00000000"
-shared_ram_base_addr = "0x20000000"
+ram_base_addr = "0x20000000"
+shared_ram_base_addr = "0x30000000"
 shared_mem_path = "/dev/shm"        # Directory for memory backend files
 main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
 shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
-init_nsvtor = "0x08000000"
+# init_nsvtor = "0x08000000"
 
 # ==============================================================================
 #                                CPU Configuration
@@ -22,7 +22,7 @@ cpu = "cortex-m4"
 plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
 # monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 platform = "STM32F429"
-binary = "/scratch/Fastdyn/FastDyn/device_models/server_firmwares/stm32f4/build/RTOSDemo.axf"
+binary = "boardrunner_examples/examples/STM32F429i-disc1/usart/firmwares/uart_firmware.axf"
 
 # --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
