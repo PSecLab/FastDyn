@@ -107,6 +107,7 @@ typedef struct {
     uint32_t timestamp_nsec; // nanoseconds
     uint8_t fix_type;        // 0=no fix, 3=3D fix
     uint8_t satellites_visible;
+    float yaw_deg;        // yaw in degrees
 } gps_input_t;
 
 void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_input_t *gps);

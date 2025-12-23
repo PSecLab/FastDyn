@@ -477,6 +477,11 @@ void convert_to_invensense(const float in[7], int16_t out[7]) {
     out[6] = gyro_z;
 }
 
+// total time
+static volatile double ins_total_elapsed_time_s = 0.0;
+static volatile double ins_last_time_s = 0.0;
+static volatile int ins_read_count = 0;
+
 /**
  * Must be called like this from virtuals.txt
  *
@@ -495,6 +500,23 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
     }
     else if (reg == 0x74) {
+        // instrumentation to check frequency of reads of IMU
+        if (ins_read_count == 0) {
+            ins_last_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+        } else {
+            double current_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+            double elapsed_s = current_time_s - ins_last_time_s;
+            ins_total_elapsed_time_s += elapsed_s;
+            ins_last_time_s = current_time_s;
+            if (ins_read_count % 1000 == 0) {
+                double average_interval_ms = (ins_total_elapsed_time_s / ins_read_count) * 1000.0;
+                double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
+                printf("INS block read average interval: %.3f ms (%.2f Hz) over %d reads\n",
+                       average_interval_ms, frequency_hz, ins_read_count);
+            }
+        }
+        ins_read_count++;
+
         if (size < 14) {
             printf("INS block read size too small: %u\n", size);
             qemu_set_register(0, ARM_V7M_R0); // failure
