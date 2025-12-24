@@ -9,6 +9,7 @@
 #include <gz/msgs/empty.pb.h>
 #include <gz/msgs/pose.pb.h>
 #include <gz/msgs/pose_v.pb.h>
+#include <boost/circular_buffer.hpp>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -16,26 +17,49 @@
 #include <unistd.h>
 #include <string>
 #include <memory>
+#include <nlohmann/json.hpp>
 
 const static bool DEBUG = false;
 static bool READY = false;
 
+using json = nlohmann::json;
+
+typedef struct
+{
+  std::string accel_x;
+  std::string accel_y;
+  std::string accel_z;
+  std::string gyro_x;
+  std::string gyro_y;
+  std::string gyro_z;
+} imu_data_t;
+
 /**
- * @brief Get a large set of different readings from multiple
- * sensors in Gazebo. and return them as a JSON string.
+ * @brief Parse IMU data from JSON string
  *
- * @tparam Tuple of msg types to request
- * {
- *    heading: ....
- *    imu: {accel:..., gyro:..., mag:...}
- *    gps: {lat:..., lon:..., alt:...}
- *    baro: {pressure:..., altitude:...}
- *    rng: [rng0, rng1, ...]
- *    airspeed: ...
- *    pose: {position:..., orientation:...}
- *    velocity: {linear:..., angular:...}
- * }
+ * @param input JSON string containing IMU data
+ * @return Parsed imu_data_t structure
  */
+imu_data_t parse_imu_json(const std::string &input)
+{
+    imu_data_t imu{};
+
+    // Parse JSON
+    json j = json::parse(input);
+
+    auto &gyro  = j["imu"]["gyro"];
+    auto &accel = j["imu"]["accel_body"];
+
+    imu.gyro_x  = std::to_string(gyro[0].get<double>());
+    imu.gyro_y  = std::to_string(gyro[1].get<double>());
+    imu.gyro_z  = std::to_string(gyro[2].get<double>());
+
+    imu.accel_x = std::to_string(accel[0].get<double>());
+    imu.accel_y = std::to_string(accel[1].get<double>());
+    imu.accel_z = std::to_string(accel[2].get<double>());
+
+    return imu;
+}
 
 /**
  * @brief Generic service template for any sensor message type
@@ -126,6 +150,7 @@ public:
     node.Advertise(service_name, &ServoService::OnServiceRequest, this);
     node.Advertise("/set_servo", &ServoService::OnSetPwmRequest, this);
     node.Advertise("/get_latest_sim_state", &ServoService::OnGetLatestSimStateRequest, this);
+    node.Advertise("/get_imu_batch", &ServoService::OnGetIMUBatch, this);
 
     // Start the simulation advance thread
     std::thread(&ServoService::advanceSimThread, this).detach();
@@ -283,7 +308,7 @@ private:
       return std::string(reinterpret_cast<char*>(buffer), n);
   }
 
-  // TODO: implement this service request as advancing the "run_until_time"
+
   bool OnServiceRequest(const gz::msgs::Time &request,
                         gz::msgs::Boolean &response)
   {
@@ -350,6 +375,12 @@ private:
             {
               std::lock_guard<std::mutex> lock(mutex_);
               latest_time_s_ = std::stod(response.substr(start, end - start));
+            }
+
+            imu_data_t imu = parse_imu_json(response);
+            {
+              std::lock_guard<std::mutex> lock(mutex_);
+              imu_buffer_.push_back(imu);
             }
           }
           else
@@ -421,6 +452,25 @@ private:
     return true;
   }
 
+  // Service callback: get imu batch data
+  // Data should be returned CSV string format:
+  // timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z\n...
+  // Where the first line contains the number of samples (17)
+  bool OnGetIMUBatch(const gz::msgs::Empty &,
+                     gz::msgs::StringMsg &rep)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string csv_data;
+    csv_data += std::to_string(imu_buffer_.size()) + "\n";
+    for (const auto &imu : imu_buffer_)
+    {
+      csv_data += imu.accel_x + "," + imu.accel_y + "," + imu.accel_z + ",";
+      csv_data += imu.gyro_x + "," + imu.gyro_y + "," + imu.gyro_z + "\n";
+    }
+    rep.set_data(csv_data);
+    return true;
+  }
+
   int sock_{-1};
   sockaddr_in remote_addr_{};
   std::mutex mutex_;
@@ -435,6 +485,9 @@ private:
   double run_until_time_s_{0.0};
   std::string last_response_;
   // std::vector<uint16_t> pwm_values_;
+
+  // boost circular buffer for imu data
+  boost::circular_buffer<imu_data_t> imu_buffer_{17};
 };
 
 /**

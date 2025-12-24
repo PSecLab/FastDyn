@@ -18,6 +18,25 @@
 #define SYS_ID  1
 #define COMP_ID 1
 
+// /**
+//  * @brief IMU data structure.
+//  */
+// typedef struct {
+//     float accel_x;  // Acceleration in X (m/s^2)
+//     float accel_y;  // Acceleration in Y (m/s^2)
+//     float accel_z;  // Acceleration in Z (m/s^2)
+//     float gyro_x;   // Gyroscope in X (rad/s)
+//     float gyro_y;   // Gyroscope in Y (rad/s)
+//     float gyro_z;   // Gyroscope in Z (rad/s)
+// } imu_data_t;
+
+// /**
+//  * @brief IMU batch data structure (17 samples)
+//  */
+// typedef struct {
+//     imu_data_t samples[17]; // Array of 17 IMU samples
+// } imu_batch_t;
+
 /**
  * @brief Wrapper around mav_finalize_message_chan_send to send MAVLink messages over UDP.
  *

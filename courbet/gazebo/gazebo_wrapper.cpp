@@ -16,6 +16,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <mutex>
+#include <charconv>
+
 
 // static std::mutex sitl_state_mutex;
 // static sitl_state_data_t latest_sitl_state;
@@ -265,6 +267,61 @@ int set_servo_pwm(int channel, int pwm) {
     }
 
     return 1;
+}
+
+int get_imu_batch(imu_batch_t *imu_batch) {
+    gz::msgs::StringMsg response;
+    bool success = request_service("/get_imu_batch", response);
+    if (!success) {
+        return 0;
+    }
+
+    // data is CSV: first line is count, then each line is accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z
+    std::istringstream ss(response.data());
+    std::string line;
+    // Read count
+    if (!std::getline(ss, line)) {
+        return 0;
+    }
+    int count = std::stoi(line);
+    if (count <= 0 || count > 100) { // arbitrary max limit
+        return 0;
+    }
+    // imu_batch->count = count; non existing field
+    for (int i = 0; i < count; i++) {
+        if (!std::getline(ss, line)) {
+            return 0;
+        }
+        std::istringstream line_ss(line);
+        std::string value;
+        // accel_x
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [accel_x, ec] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].accel_body.x);
+        if (ec != std::errc()) return 0;
+        // accel_y
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [accel_y, ec2] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].accel_body.y);
+        if (ec2 != std::errc()) return 0;
+        // accel_z
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [accel_z, ec3] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].accel_body.z);
+        if (ec3 != std::errc()) return 0;
+        // gyro_x
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [gyro_x, ec4] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.x);
+        if (ec4 != std::errc()) return 0;
+        // gyro_y
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [gyro_y, ec5] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.y);
+        if (ec5 != std::errc()) return 0;
+        // gyro_z
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [gyro_z, ec6] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.z);
+        if (ec6 != std::errc()) return 0;
+    }
+
+    return 1;
+
 }
 
 } // extern "C"

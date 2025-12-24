@@ -15,6 +15,8 @@
 #include "mavlink_lib.h"
 #include <arpa/inet.h>
 
+#define PROFILE_INS_READS 0
+
 static void catch_up(void *opaque)
 {
     (void) opaque;
@@ -477,10 +479,12 @@ void convert_to_invensense(const float in[7], int16_t out[7]) {
     out[6] = gyro_z;
 }
 
+#ifdef PROFILE_INS_READS
 // total time
 static volatile double ins_total_elapsed_time_s = 0.0;
 static volatile double ins_last_time_s = 0.0;
 static volatile int ins_read_count = 0;
+#endif // PROFILE_INS_READS
 
 /**
  * Must be called like this from virtuals.txt
@@ -501,6 +505,7 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
     }
     else if (reg == 0x74) {
         // instrumentation to check frequency of reads of IMU
+#ifdef PROFILE_INS_READS
         if (ins_read_count == 0) {
             ins_last_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
         } else {
@@ -516,6 +521,7 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
             }
         }
         ins_read_count++;
+#endif // PROFILE_INS_READS
 
         if (size < 14) {
             printf("INS block read size too small: %u\n", size);
@@ -524,8 +530,19 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
             return;
         }
 
+        imu_batch_t imu_batch;
+        int success = get_imu_batch(&imu_batch);
+        if (!success) {
+            printf("Failed to get IMU batch for INS block read\n");
+        }
+
+        imu_t first_sample = imu_batch.imu[0];
+        printf("INS block read: First sample Accel(m/s²) [%.3f, %.3f, %.3f], Gyro(deg/s) [%.3f, %.3f, %.3f]\n",
+               first_sample.accel_body.x, first_sample.accel_body.y, first_sample.accel_body.z,
+               first_sample.gyro.x * RAD_TO_DEG, first_sample.gyro.y * RAD_TO_DEG, first_sample.gyro.z * RAD_TO_DEG);
+
         sitl_state_data_t state;
-        int success = get_latest_sitl_state(&state);
+        success = get_latest_sitl_state(&state);
         if (!success) {
             printf("Failed to get latest SITL state for INS block read\n");
             qemu_set_register(0, ARM_V7M_R0); // failure

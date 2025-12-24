@@ -47,6 +47,12 @@ typedef struct {
     vector3f_t accel_body;
 } imu_t;
 
+// IMU batch
+// Contains 17 IMU readings
+typedef struct {
+    imu_t imu[17];
+} imu_batch_t;
+
 // Wind vane apparent
 typedef struct {
     float direction;
@@ -152,6 +158,19 @@ int advance_simulation(double run_until_time);
  * @return 1 on success, 0 on failure
  */
 int get_latest_sitl_state(sitl_state_data_t *state_data);
+
+/**
+ * @brief Gets a batch of IMU readings
+ *
+ * This function retrieves a batch of IMU readings from the Gazebo
+ * simulation. After profiling, it was determined the IMU driver function is hit ~60
+ * times per second, so we use a circular buffer to store the last 17 readings to reach
+ * approximately 1000 Hz.
+ *
+ * @param imu_batch Pointer to an imu_batch_t struct to store the IMU data
+ * @return 1 on success, 0 on failure
+ */
+int get_imu_batch(imu_batch_t *imu_batch);
 
 #ifdef __cplusplus
 }
