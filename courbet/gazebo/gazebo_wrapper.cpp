@@ -287,6 +287,9 @@ int get_imu_batch(imu_batch_t *imu_batch) {
     if (count <= 0 || count > 100) { // arbitrary max limit
         return 0;
     }
+    // if (count != 17) {
+    //     return 0;
+    // }
     // imu_batch->count = count; non existing field
     for (int i = 0; i < count; i++) {
         if (!std::getline(ss, line)) {

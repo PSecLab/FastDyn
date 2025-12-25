@@ -479,7 +479,7 @@ void convert_to_invensense(const float in[7], int16_t out[7]) {
     out[6] = gyro_z;
 }
 
-#ifdef PROFILE_INS_READS
+#if PROFILE_INS_READS == 1
 // total time
 static volatile double ins_total_elapsed_time_s = 0.0;
 static volatile double ins_last_time_s = 0.0;
@@ -495,17 +495,18 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
     uint32_t reg = (uint32_t)qemu_get_register(ARM_V7M_R1);
     uint32_t buf = (uint32_t)qemu_get_register(ARM_V7M_R2);
     uint32_t size = (uint32_t)qemu_get_register(ARM_V7M_R3);
+    uint16_t count = 14 * 24; // 24 samples of 14 bytes each (3 x 8 samples)
 
     if (reg == 0x72) {
         uint8_t count_bytes[2];
-        fifo_count_to_bytes(14, count_bytes);
+        fifo_count_to_bytes(count, count_bytes);
         qemu_plugin_write_memory(buf, count_bytes, 2);
         qemu_set_register(1, ARM_V7M_R0); // success
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
     }
     else if (reg == 0x74) {
         // instrumentation to check frequency of reads of IMU
-#ifdef PROFILE_INS_READS
+#if PROFILE_INS_READS == 1
         if (ins_read_count == 0) {
             ins_last_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
         } else {
@@ -534,33 +535,53 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         int success = get_imu_batch(&imu_batch);
         if (!success) {
             printf("Failed to get IMU batch for INS block read\n");
-        }
-
-        imu_t first_sample = imu_batch.imu[0];
-        printf("INS block read: First sample Accel(m/s²) [%.3f, %.3f, %.3f], Gyro(deg/s) [%.3f, %.3f, %.3f]\n",
-               first_sample.accel_body.x, first_sample.accel_body.y, first_sample.accel_body.z,
-               first_sample.gyro.x * RAD_TO_DEG, first_sample.gyro.y * RAD_TO_DEG, first_sample.gyro.z * RAD_TO_DEG);
-
-        sitl_state_data_t state;
-        success = get_latest_sitl_state(&state);
-        if (!success) {
-            printf("Failed to get latest SITL state for INS block read\n");
             qemu_set_register(0, ARM_V7M_R0); // failure
             qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
             return;
         }
 
-        imu_t imu = state.imu;
-        float accel_x = imu.accel_body.x;
-        float accel_y = imu.accel_body.y;
-        float accel_z = imu.accel_body.z;
-        float gyro_x = imu.gyro.x;
-        float gyro_y = imu.gyro.y;
-        float gyro_z = imu.gyro.z;
-        float temp_celsius = TEMP_ZERO_C_INV;
-        // ROTATION_PITCH_180
+        uint16_t mini_batch_size = 8 * 14; // 8 samples of 14 bytes each
+        uint8_t imu_data_bytes[mini_batch_size];
+        memset(imu_data_bytes, 0, sizeof(imu_data_bytes));
+        for (int i = 0; i < 8; i++) {
+            imu_t imu = imu_batch.imu[i];
+            float accel_x = imu.accel_body.x;
+            float accel_y = imu.accel_body.y;
+            float accel_z = imu.accel_body.z;
+            float gyro_x = imu.gyro.x;
+            float gyro_y = imu.gyro.y;
+            float gyro_z = imu.gyro.z;
+            float temp_celsius = TEMP_ZERO_C_INV;
 
-        // test case 1
+            // Apply remapping and sign adjustments here if needed
+
+            float imu_data[7] = {
+                accel_y,
+                -1 * accel_x,
+                accel_z,
+                temp_celsius,
+                gyro_y,
+                -1 * gyro_x,
+                gyro_z
+            };
+
+            int16_t imu_data_int16[7];
+            convert_to_invensense(imu_data, imu_data_int16);
+
+            uint8_t imu_sample[14];
+            convert_int16_array_to_be_bytes(imu_data_int16, 7, imu_sample);
+            memcpy(imu_data_bytes + (i * 14), imu_sample, 14);
+        }
+
+        // imu_t imu = imu_batch.imu[0];
+        // float accel_x = imu.accel_body.x;
+        // float accel_y = imu.accel_body.y;
+        // float accel_z = imu.accel_body.z;
+        // float gyro_x = imu.gyro.x;
+        // float gyro_y = imu.gyro.y;
+        // float gyro_z = imu.gyro.z;
+        // float temp_celsius = TEMP_ZERO_C_INV;
+
         // float imu_data[7] = {
         //     accel_y,
         //     -1 * accel_x,
@@ -571,41 +592,15 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         //     gyro_z
         // };
 
-        // test case 2
-        // float imu_data[7] = {
-        //     accel_y,
-        //     accel_x,
-        //     -1 *accel_z,
-        //     temp_celsius,
-        //     gyro_y,
-        //     gyro_x,
-        //     -1 *gyro_z
-        // };
+        // int16_t imu_data_int16[7];
+        // convert_to_invensense(imu_data, imu_data_int16);
 
-        // test case 3
-        // gyro_in   --(PITCH_180)-->   gyro_FRD
-        float imu_data[7] = {
-            accel_y,
-            -1 * accel_x,
-            accel_z,
-            temp_celsius,
-            gyro_y,
-            -1 * gyro_x,
-            gyro_z
-        };
+        // uint8_t imu_data_bytes[14];
+        // convert_int16_array_to_be_bytes(imu_data_int16, 7, imu_data_bytes);
 
-        int16_t imu_data_int16[7];
-        convert_to_invensense(imu_data, imu_data_int16);
-
-        uint8_t imu_data_bytes[14];
-        convert_int16_array_to_be_bytes(imu_data_int16, 7, imu_data_bytes);
-        qemu_plugin_write_memory(buf, imu_data_bytes, 14);
+        qemu_plugin_write_memory(buf, imu_data_bytes, mini_batch_size);
         qemu_set_register(1, ARM_V7M_R0); // success
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
-        // printf("INS block read: Accel(m/s²) [%.3f, %.3f, %.3f], Gyro(deg/s) [%.3f, %.3f, %.3f], Temp(C) %.2f\n",
-        //        accel_x, accel_y, accel_z,
-        //        gyro_x * RAD_TO_DEG, gyro_y * RAD_TO_DEG, gyro_z * RAD_TO_DEG,
-        //        temp_celsius);
     } else {
         printf("INS block read unknown register: 0x%X\n", reg);
         qemu_set_register(0, ARM_V7M_R0); // failure
