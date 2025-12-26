@@ -9,7 +9,7 @@ shared_ram_base_addr = "0x30000000"
 shared_mem_path = "/dev/shm"        # Directory for memory backend files
 main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
 shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
-# init_nsvtor = "0x08000000"
+init_nsvtor = "0x08000000"
 
 # ==============================================================================
 #                                CPU Configuration
@@ -35,7 +35,6 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-vtor_base = "0x0"
 
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
@@ -46,20 +45,22 @@ logger_content = """
 
 # --- Virtual Instructions (Structured) ---
 # Each block defines a single virtual instruction to be registered.
-# [[CPU.virtuals]]
+[[CPU.virtuals]]
 # at = "main+8"
-# instruction = "raiseirq"
+at = "0x000008"
+instruction = "raiseirq"
 # args = ["TIM1_BRK_TIM9"]
+args = ["0x000008"]
 
-# # --- Instruction Modifiers (Structured) ---
-# # Each block defines a runtime binary patch using a high-level representation.
-# [[CPU.modifiers]]
-# at = "main+2"
-# patch = "r2 <- r3"
+# --- Instruction Modifiers (Structured) ---
+# Each block defines a runtime binary patch using a high-level representation.
+[[CPU.modifiers]]
+at = "0x000018"
+patch = "r2 <- r3"
 
-# [[CPU.modifiers]]
-# at = "main+4"
-# patch = "r15 <- r14"
+[[CPU.modifiers]]
+at = "0x000012"
+patch = "r15 <- r14"
 
 
 # ==============================================================================

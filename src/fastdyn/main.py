@@ -6,6 +6,7 @@ import click
 import os, shutil
 import subprocess
 import signal
+import sys
 
 from dotenv import load_dotenv
 
@@ -14,10 +15,15 @@ from . import gen_config    #generate the files for the configs.
 from . import parse_config  #Parse the config
 from . import fastdyn_log
 from fastdyn.__init__ import __version__
+from . import fastdyn_config
+# from .machine import Machine, CPUConfig, VirtualInstruction, InstructionModifier
 from .verifier import verifier as verify             #contains the verification framework
 from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
-from .utils import svd_parser, helper
+from .utils import helper
+from . import machine_apis
+
+from dataclasses import asdict
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
@@ -229,28 +235,46 @@ def run(config, map_file, work_dir):
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
 
-    log.info("Parsing CMSIS-SVD")
-    svd_file_map = svd_parser.discover_svd_files()
+    #We will handle multiple machines case in future
+    machine  = fastdyn_config.parse_config("machine0", toml_config=config, map_file_path=map_file)
 
-    config_obj = parse_config.Fastdyn_Config()  #generate the object for the config
+    # #In future: For MCP, create a separate main file that will use the same APIs
+    # registered_machines: list[Machine] = []
+    # for i, config in enumerate(configs):
+    #     machine = machine_apis.create_machine(f"machine{i}")  #each config contains a single machine
+    #     registered_machines.append(machine)
+    #     #Parse each of the config
+    #     success = parse_config(toml_config=config, map_file=map_file)
+    #     if not success:
+    #         log.error("Unable to parse the configuration files")
+    #         sys.exit()  #TODO: Update the exit mechanism
 
-    log.info(f"Parsing Config file: {config}")
 
-    if map_file is not None:
-        log.info(f"Parsing Config file: {map_file}")
-    else:
-        log.warn(f"Map Config file not found")
+    # parse_config = fastdyn_config.ParseConfig()
 
-    config_obj.add_device_config(config, map_file, svd_file_map)
+
+    # log.info("Parsing CMSIS-SVD")
+    # svd_file_map = svd_parser.discover_svd_files()
+
+    # config_obj = parse_config.Fastdyn_Config()  #generate the object for the config
+
+    # log.info(f"Parsing Config file: {config}")
+
+    # if map_file is not None:
+    #     log.info(f"Parsing Config file: {map_file}")
+    # else:
+    #     log.warning(f"Map Config file not found")
+
+    # config_obj.add_device_config(config, map_file, svd_file_map)
 
     #Initial Verification before running
-    Platform = config_obj.dev_config.cpu['platform']
-    if Platform not in svd_file_map:
-        log.error(f'{Platform} not found in the SVD File Map')
-        sys.exit(1)
+    # Platform = config_obj.dev_config.cpu['platform']
+    # if Platform not in svd_file_map:
+    #     log.error(f'{Platform} not found in the SVD File Map')
+    #     sys.exit(1)
 
     run_qemu(
-        config=config_obj,
+        config=machine,
         out_path=work_dir
     )
 
@@ -353,7 +377,7 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
 
         if work_dir is not None:
             if not os.path.isdir(work_dir):
-                log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+                log.warning(f"The output directory: {work_dir} passed by the user does not exist.")
         else:
             work_dir = "fastdyn_work"
 
