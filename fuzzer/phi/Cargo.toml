@@ -1,0 +1,8 @@
+[package]
+name = "optifuzz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+scirs2-core = "0.1.0-rc.2"
+scirs2-optimize = "0.1.0-rc.2"
