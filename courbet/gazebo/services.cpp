@@ -26,12 +26,12 @@ using json = nlohmann::json;
 
 typedef struct
 {
-  std::string accel_x;
-  std::string accel_y;
-  std::string accel_z;
-  std::string gyro_x;
-  std::string gyro_y;
-  std::string gyro_z;
+  double accel_x;
+  double accel_y;
+  double accel_z;
+  double gyro_x;
+  double gyro_y;
+  double gyro_z;
 } imu_data_t;
 
 /**
@@ -50,13 +50,21 @@ imu_data_t parse_imu_json(const std::string &input)
     auto &gyro  = j["imu"]["gyro"];
     auto &accel = j["imu"]["accel_body"];
 
-    imu.gyro_x  = std::to_string(gyro[0].get<double>());
-    imu.gyro_y  = std::to_string(gyro[1].get<double>());
-    imu.gyro_z  = std::to_string(gyro[2].get<double>());
+    imu.gyro_x  = gyro[0].get<double>();
+    imu.gyro_y  = gyro[1].get<double>();
+    imu.gyro_z  = gyro[2].get<double>();
 
-    imu.accel_x = std::to_string(accel[0].get<double>());
-    imu.accel_y = std::to_string(accel[1].get<double>());
-    imu.accel_z = std::to_string(accel[2].get<double>());
+    imu.accel_x = accel[0].get<double>();
+    imu.accel_y = accel[1].get<double>();
+    imu.accel_z = accel[2].get<double>();
+
+    // imu.gyro_x  = std::to_string(gyro[0].get<double>());
+    // imu.gyro_y  = std::to_string(gyro[1].get<double>());
+    // imu.gyro_z  = std::to_string(gyro[2].get<double>());
+
+    // imu.accel_x = std::to_string(accel[0].get<double>());
+    // imu.accel_y = std::to_string(accel[1].get<double>());
+    // imu.accel_z = std::to_string(accel[2].get<double>());
 
     return imu;
 }
@@ -460,14 +468,31 @@ private:
                      gz::msgs::StringMsg &rep)
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string csv_data;
-    csv_data += std::to_string(imu_buffer_.size()) + "\n";
-    for (const auto &imu : imu_buffer_)
-    {
-      csv_data += imu.accel_x + "," + imu.accel_y + "," + imu.accel_z + ",";
-      csv_data += imu.gyro_x + "," + imu.gyro_y + "," + imu.gyro_z + "\n";
+    // std::string csv_data;
+    // csv_data += std::to_string(imu_buffer_.size()) + "\n";
+    // for (const auto &imu : imu_buffer_)
+    // {
+    //   csv_data += imu.accel_x + "," + imu.accel_y + "," + imu.accel_z + ",";
+    //   csv_data += imu.gyro_x + "," + imu.gyro_y + "," + imu.gyro_z + "\n";
+    // }
+    // rep.set_data(csv_data);
+
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed);
+    oss << std::setprecision(9);
+
+    oss << imu_buffer_.size() << "\n";
+    for (const auto &imu : imu_buffer_) {
+      oss << imu.accel_x << ","
+          << imu.accel_y << ","
+          << imu.accel_z << ","
+          << imu.gyro_x  << ","
+          << imu.gyro_y  << ","
+          << imu.gyro_z  << "\n";
     }
-    rep.set_data(csv_data);
+
+    rep.set_data(oss.str());
+
     return true;
   }
 
