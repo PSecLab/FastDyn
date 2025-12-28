@@ -109,10 +109,10 @@ def add_modifier_instruction(mod: InstructionModifier, cpu_config: CPUConfig) ->
         return False
 
 # =============================================================================
-# Memory Instructions and Modifiers
+# Memory Information
 # =============================================================================
 
-def populate_cpu_config(memory: MemoryConfig, param, val):
+def populate_memory_config(memory: MemoryConfig, param, val):
     if not hasattr(memory, param):
         print(f"Unknown MemoryConfig field: {param}")
         return False

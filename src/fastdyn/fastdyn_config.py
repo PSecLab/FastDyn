@@ -98,7 +98,7 @@ class MachineConfigParser:
 
     def add_machine_memory(self, toml_config):
         for param in toml_config.get('Memory'):
-            success = machine_apis.populate_cpu_config(self.machine.memory, param, toml_config['Memory'].get(param))
+            success = machine_apis.populate_memory_config(self.machine.memory, param, toml_config['Memory'].get(param))
             if not success:
                 log.error(f"Unable to Find Param: {param} in MemoryConfig")
                 sys.exit()
