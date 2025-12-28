@@ -61,6 +61,7 @@ class CPUConfig:
     binary: str = ""
     qemu_path: str = ""
     finline: Optional[str] = None
+    coverage: bool = False
 
     plugin_library: Optional[str] = None
     monitor_elf: Optional[str] = None
@@ -69,7 +70,7 @@ class CPUConfig:
     stop_on_start: bool = False
     launch_gdb: bool = False
     semihosting: bool = True
-    semihosting_config: str = ""
+    semihosting_config: str = "enable=on,target=native"
     monitor_port: Optional[int] = None
     qmp_socket: Optional[str] = None
 
@@ -80,25 +81,40 @@ class CPUConfig:
     virtuals: List = field(default_factory=list)
     modifiers: List = field(default_factory=list)
 
+
 # =============================================================================
 # Device / Peripheral modeling
 # =============================================================================
+ModelName = str
 
 @dataclass
 class DeviceModelDefaults:
     """
     Global defaults for a handler model type (from [Device.Models.<name>]).
-    Example: passthrough.backend = "stlink"
+
+    Example TOML:
+      [Device.Models.passthrough]
+      backend = "stlink"
+
+    Stored as:
+      device.models["passthrough"].params["backend"] == "stlink"
     """
-    # Keep this flexible: different models may define different keys.
     params: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class DeviceHandler:
     """
     One handler entry inside [[Device.<dev>.handlers]].
+
+    Example TOML:
+      [[Device.usart1.handlers]]
+      model   = "elder"
+      enabled = true
+      scroll  = "/path/gen.so"
+
+    Everything besides {model, enabled} goes into `params`.
     """
-    model: str                           # "qemu" | "elder" | "passthrough" | ...
+    model: ModelName                           # "qemu" | "elder" | "passthrough" | ...
     enabled: bool = True
 
     # QEMU-specific bits (optional)
@@ -109,9 +125,39 @@ class DeviceHandler:
     scroll: Optional[str] = None         # path to .so (your example uses this for elder)
 
 @dataclass
+class SlaveDevice:
+    """
+    Optional: a slave device attached to a parent peripheral (SPI/I2C etc.).
+
+    Example idea (TOML-ish):
+      [[Device.i2c1.slaves]]
+      device = "tmp102"
+      model = ["elder", "passthrough"]
+      param = "0x48"
+      device_scroll = "/path/slave.so"
+    """
+    device: str
+    model: List[ModelName] = field(default_factory=list)     # which models to attach this slave under
+
+    # Optional scroll / implementation hook for the slave
+    device_scroll: Optional[str] = None
+
+    # Anything else you add later (timing, flags, quirks, etc.)
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class DeviceConfig:
     """
     One peripheral/MMIO region description (from [Device.<name>]).
+
+    Example TOML:
+      [Device.usart1]
+      irq = "0-15:20-25:41"
+      ranges = ["0x40011000-0x40011FFF"]
+      description = "..."
+      scroll_config = " ... "
+      [[Device.usart1.handlers]] ...
     """
     description: str = ""
     irq: Optional[str] = None            # keep as raw string (e.g. "0-15:20-25:41")
@@ -120,6 +166,11 @@ class DeviceConfig:
     scroll_config: Optional[str] = None  # raw INI-like block string
     handlers: List[DeviceHandler] = field(default_factory=list)
 
+    slaves: List[SlaveDevice] = field(default_factory=list)
+
+    # Optional: room for future per-device knobs without schema changes
+    params: Dict[str, Any] = field(default_factory=dict)
+
 @dataclass
 class DeviceSection:
     """
@@ -127,7 +178,7 @@ class DeviceSection:
       - [Device.Models.*]     -> models
       - [Device.<devname>]    -> devices
     """
-    models: Dict[str, DeviceModelDefaults] = field(default_factory=dict)
+    models: Dict[ModelName, DeviceModelDefaults] = field(default_factory=dict)
     devices: Dict[str, DeviceConfig] = field(default_factory=dict)
 
 # =============================================================================
@@ -149,31 +200,4 @@ class Machine:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     cpus: List[CPUConfig] = field(default_factory=list)
     device: DeviceSection = field(default_factory=DeviceSection)
-
-"""
-TODO: Remove before the release
-Mental Model or Device Section
-machine.device.models = {
-  "passthrough": DeviceModelDefaults(params={"backend":"stlink"}),
-  "elder": DeviceModelDefaults(params={}),
-  ...
-}
-
-machine.device.devices = {
-  "usart1": DeviceConfig(
-      irq="0-15:20-25:41",
-      ranges=["0x40011000-0x40011FFF"],
-      description="Main USART ...",
-      scroll_config='[usart1]\ninternal_model = "uart1_model"\n',
-      handlers=[
-         DeviceHandler(model="qemu", enabled=False, type="stm32f2xx-usart", args="device chardev"),
-         DeviceHandler(model="elder", enabled=True, scroll="/scratch/.../gen.so"),
-         DeviceHandler(model="passthrough", enabled=False),
-      ],
-  ),
-  "unhandled_space": DeviceConfig(
-      ranges=[...],
-      handlers=[DeviceHandler(model="passthrough", enabled=True)]
-  )
-}
-"""
+    parsed_device: Dict = field(default_factory=dict)            #deliberatily kept because Fastdyn doesn't understand device type

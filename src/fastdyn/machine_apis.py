@@ -1,9 +1,9 @@
-from .machine import Machine, CPUConfig, VirtualInstruction, InstructionModifier
+from .machine import Machine, CPUConfig, MemoryConfig, VirtualInstruction, InstructionModifier, DeviceSection, DeviceModelDefaults, DeviceConfig, DeviceHandler, SlaveDevice
 import json
 import os
 from dataclasses import asdict
 from pathlib import Path
-from typing import List
+from typing import List, Tuple, Any, Dict, Optional
 
 from .utils import helper
 
@@ -107,6 +107,159 @@ def add_modifier_instruction(mod: InstructionModifier, cpu_config: CPUConfig) ->
     except (AttributeError, TypeError, ValueError) as e:
         print(f"Unable to add instruction modifier {mod!r}: {e}")
         return False
+
+# =============================================================================
+# Memory Instructions and Modifiers
+# =============================================================================
+
+def populate_cpu_config(memory: MemoryConfig, param, val):
+    if not hasattr(memory, param):
+        print(f"Unknown MemoryConfig field: {param}")
+        return False
+    try:
+        setattr(memory, param, val)
+        return True
+    except (AttributeError, TypeError, ValueError) as e:
+        print(f"Unable to set '{param}' to {val!r}: {e}")
+        return False
+
+# =============================================================================
+# Devices/Peripherals Information
+# This api transforms the DeviceSection to Fastdyn understandable device format
+# =============================================================================
+
+def compile_device_routing(
+    device_section: "DeviceSection",
+    machine: Machine,
+    *,
+    include_models: Optional[set[str]] = None,
+    check_scroll_paths: bool = True,
+) -> bool:
+    """
+    Transform DeviceSection (canonical schema) into model-centric routing JSON.
+
+    Returns:
+      (routing_json, builtin_qemu)
+
+    routing_json shape:
+      {
+        "<model>": {
+          "overall": [...],
+          "<devname>": {
+             "range": [...],
+             "irq": "...",
+             # for elder: "scroll": "...",
+             # optional: "slaves": {...}
+          },
+          "backend": <model_default_backend_or_None>
+        },
+        ...
+      }
+
+    builtin_qemu shape (optional utility):
+      {
+        "<qemu_type>": {"args": ...},
+        ...
+      }
+    """
+    routing: Dict[str, Any] = {}
+    builtin_qemu: Dict[str, Any] = {}
+
+    # Helper: model defaults like backend
+    def _model_backend(model: str):
+        md = device_section.models.get(model)
+        if md is None:
+            return None
+        return md.params.get("backend")
+
+    # -----------------------------
+    # Pass 1: group devices by enabled handler model
+    # -----------------------------
+    for dev_name, dev in device_section.devices.items():
+        # compile each enabled handler
+        for h in dev.handlers:
+            if not h.enabled:
+                continue
+
+            model = h.model
+
+            # QEMU builtins are separated
+            if model == "qemu":
+                if not h.type:
+                    # If enabled qemu handler lacks type, it's a config error
+                    raise ValueError(f"[Device.{dev_name}] qemu handler enabled but missing 'type'")
+                if h.type not in builtin_qemu:
+                    builtin_qemu[h.type] = {}
+                if h.args is not None:
+                    builtin_qemu[h.type]["args"] = h.args
+                continue
+
+            # optional filter
+            if include_models is not None and model not in include_models:
+                continue
+
+            # init model bucket
+            bucket = routing.setdefault(model, {"overall": []})
+
+            # overall ranges accumulate
+            bucket["overall"].extend(dev.ranges)
+
+            # per-device entry
+            entry = bucket.setdefault(dev_name, {})
+            entry["range"] = list(dev.ranges)
+            if dev.irq is not None:
+                entry["irq"] = dev.irq
+
+            # elder needs scroll
+            if model == "elder":
+                if not h.scroll:
+                    raise ValueError(f"[Device.{dev_name}] elder handler enabled but missing 'scroll'")
+                entry["scroll"] = h.scroll
+
+            #TODO: Add support for read_priority for differential testing in future
+
+    # add backend + dedup overall ranges
+    for model, bucket in routing.items():
+        bucket["overall"] = helper._dedup_preserve_order(bucket["overall"])
+        bucket["backend"] = _model_backend(model)
+
+    # -----------------------------
+    # Pass 2: attach slaves to every model they request (only if that model+dev exists)
+    # -----------------------------
+    for dev_name, dev in device_section.devices.items():
+        if not dev.slaves:
+            continue
+
+        for slave in dev.slaves:
+            for model in slave.model:
+                if include_models is not None and model not in include_models:
+                    continue
+
+                # attach only if that device is present under that model (i.e., model handler enabled)
+                if model not in routing or dev_name not in routing[model]:
+                    continue
+
+                routing[model][dev_name].setdefault("slaves", {})
+                slaves_out = routing[model][dev_name]["slaves"]
+
+                # Start from whatever the slave declared (cs_id/address/bus/etc.)
+                s_cfg: Dict[str, Any] = dict(slave.params)
+
+                # scroll-path check
+                if slave.device_scroll:
+                    if check_scroll_paths and os.path.exists(slave.device_scroll):
+                        s_cfg["scroll_path"] = slave.device_scroll
+                        s_cfg["is_scroll_path"] = True
+                    else:
+                        s_cfg["is_scroll_path"] = False
+                else:
+                    s_cfg["is_scroll_path"] = False
+
+                slaves_out[slave.device] = s_cfg
+
+    machine.parsed_device = routing # dont need builtin qemu for now
+
+    return True
 
 # =============================================================================
 # Machine registry

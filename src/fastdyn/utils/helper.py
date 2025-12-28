@@ -1,5 +1,8 @@
 import re
 from elftools.elf.elffile import ELFFile
+from typing import Iterable, Any, Dict, Union
+import json
+from pathlib import Path
 
 def parse_symbol(s: str):
     """
@@ -78,3 +81,27 @@ def elf_file_parser(elf_path: str) -> str:
 def is_elf(path: str) -> bool:
     with open(path, "rb") as f:
         return f.read(4) == b"\x7fELF"
+
+def _dedup_preserve_order(items: Iterable[str]) -> list[str]:
+    seen = set()
+    out = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+def write_dev_config_json(output_dir: Union[str, Path], data: Dict[str, Any]) -> Path:
+    """
+    Write `data` as pretty JSON to: <output_dir>/dev_config.json
+
+    Returns the Path to the written file.
+    """
+    out_dir = Path(output_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = out_dir / "dev_config.json"
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, sort_keys=True)
+
+    return out_path
