@@ -10,9 +10,6 @@ import sys
 
 from dotenv import load_dotenv
 
-
-from . import gen_config    #generate the files for the configs.
-from . import parse_config  #Parse the config
 from . import fastdyn_log
 from fastdyn.__init__ import __version__
 from . import fastdyn_config
@@ -30,30 +27,31 @@ fastdyn_log.setLogConfig()
 
 
 #build qemu command
-def build_qemu_cmd(config, dev_config_path, out_path):
+def build_qemu_cmd(machine_config, dev_config_path, out_path):
     """Builds the full qemu-system-arm command from the configuration."""
     #----------------------------------------QEMU & CPU configurations---------------------------------------
-    cpu = config.dev_config.cpu  #short-hand
-    cmd = [cpu.get('qemu_path')]
+    #TODO: Add support for multiple cpus in future
+    cpu = machine_config.cpus[0]  #short-hand
+    cmd = [cpu.qemu_path]
 
     cpu_configs = [
-        "-machine", f"{cpu['machine']},memory-backend=ram0",
-        "-cpu", cpu['cpu'],
-        "-kernel", cpu['binary'],
-        "-qmp", f"unix:{cpu['qmp_socket']},server,nowait",
-        "-d", cpu['log_options'],
-        "-D", cpu['log_file'],
-        "-monitor", f"tcp:127.0.0.1:{cpu['monitor_port']},server,nowait"
+        "-machine", f"{cpu.machine},memory-backend=ram0",
+        "-cpu", cpu.cpu,
+        "-kernel", cpu.binary,
+        "-qmp", f"unix:{cpu.qmp_socket},server,nowait",
+        "-d", cpu.log_options,
+        "-D", cpu.log_file,
+        "-monitor", f"tcp:127.0.0.1:{cpu.monitor_port},server,nowait"
     ]
 
-    if cpu.get('enable_gdb'):
+    if cpu.enable_gdb:
         log.info("GDB debugging enabled on Port 1234")
         cpu_configs.append('-s')
-    if cpu.get('stop_on_start'): cpu_configs.append('-S')
-    if cpu.get('semihosting'):
+    if cpu.stop_on_start: cpu_configs.append('-S')
+    if cpu.semihosting:
         cpu_configs.extend([
             "--semihosting",
-            "--semihosting-config",cpu.get('semihosting_config', "enable=on,target=native")
+            "--semihosting-config",cpu.semihosting_config
         ])
     cmd.extend(cpu_configs)
 
@@ -65,38 +63,39 @@ def build_qemu_cmd(config, dev_config_path, out_path):
 
     log.info(f"Virtual Instructions available at {virtuals_path}")
     with open(virtuals_path, 'w') as file:
-        file.writelines(config.virtual_instr)
+        file.writelines(cpu.virtuals)
 
     log.info(f"Modifier Instructions available at {modifiers_path}")
     with open(modifiers_path, 'w') as file:
-        file.writelines(config.modifier_instr)
+        file.writelines(cpu.modifiers)
 
     #----------------------------------------Memory Configurations------------------------------------------
-    memory = config.dev_config.memory   #short-hand
-    ram0_path = os.path.join(memory.get('shared_mem_path', '/dev/shm'), memory.get('main_ram_file'))
-    ram1_path = os.path.join(memory.get('shared_mem_path', '/dev/shm'), memory.get('shared_ram_file'))
+    memory = machine_config.memory   #short-hand
+    ram0_path = os.path.join(memory.shared_mem_path, memory.main_ram_file)
+    ram1_path = os.path.join(memory.shared_mem_path, memory.shared_ram_file)
 
     memory_configs = [
-        '-object', f"memory-backend-file,id=ram0,mem-path={ram0_path},size={memory.get('main_ram_size')},share=on",
-        '-object', f"memory-backend-file,id=ram1,mem-path={ram1_path},size={memory.get('shared_ram_size')},share=on",
+        '-object', f"memory-backend-file,id=ram0,mem-path={ram0_path},size={memory.main_ram_size},share=on",
+        '-object', f"memory-backend-file,id=ram1,mem-path={ram1_path},size={memory.shared_ram_size},share=on",
         '-global', 'cortexm-soc.shram_backend=ram1',
-        '-global', f'cortexm-soc.ram_baseaddr={memory.get("ram_base_addr")}',
-        '-global', f'cortexm-soc.shram_baseaddr={memory.get("shared_ram_base_addr")}',
+        '-global', f'cortexm-soc.ram_baseaddr={memory.ram_base_addr}',
+        '-global', f'cortexm-soc.shram_baseaddr={memory.shared_ram_base_addr}',
     ]
 
-    if memory.get("init_nsvtor"):
-        memory_configs.extend(['-global', f'armv7m.init-nsvtor={memory.get("init_nsvtor")}'])
+    #TODO: init_nsvtor will always be present, update the logic here
+    if memory.init_nsvtor:
+        memory_configs.extend(['-global', f'armv7m.init-nsvtor={memory.init_nsvtor}'])
     else:
-        if not helper.is_elf(cpu['binary']):
+        if not helper.is_elf(cpu.binary):
             raise ValueError("Not an ELF (raw dump/bin). Need init_nsvtor in the toml configuration.")
-        nsvtor_elf = helper.elf_file_parser(cpu['binary'])
+        nsvtor_elf = helper.elf_file_parser(cpu.binary)
         memory_configs.extend(['-global', f'armv7m.init-nsvtor={nsvtor_elf}'])
 
 
     cmd.extend(memory_configs)
 
     #----------------------------------------Plugins Configurations------------------------------------------
-    plugin_lib_path = cpu.get('plugin_library', './build/libfastdyn.so')
+    plugin_lib_path = cpu.plugin_library
 
     plugin_configs = [
         '--plugin',
@@ -105,9 +104,8 @@ def build_qemu_cmd(config, dev_config_path, out_path):
         f"{plugin_lib_path},dev={dev_config_path}",
         f'virtual={virtuals_path}',
         f'modifier={modifiers_path}',
-        f"coverage={cpu.get('coverage', False)}",
-        f"finline={cpu.get('finline', False)}"
-
+        f"coverage={cpu.coverage}",
+        f"finline={cpu.finline}"
     ]
 
     plugin_configs.extend([",".join(plugin_files)])
@@ -116,17 +114,18 @@ def build_qemu_cmd(config, dev_config_path, out_path):
     return cmd
 
 #Get the gdb command based on the user request
-def get_gdb_cmd(config, out_path):
+def get_gdb_cmd(machine_config, out_path):
     launch_gdb = False
-    cpu = config.dev_config.cpu  #short-hand
+    #TODO: Handle multiple cpus
+    cpu = machine_config.cpus[0]  #short-hand
     gdb_script_path = os.path.join(out_path, 'gdb_init.txt')
     with open(gdb_script_path, 'w') as f:
         f.write("target remote localhost:1234\n")
-    binary = cpu['binary']
+    binary = cpu.binary
     gdb_cmd = None
-    if cpu['enable_gdb']:
+    if cpu.enable_gdb:
         launch_gdb = True
-        if cpu.get('launch_gdb', True):
+        if cpu.launch_gdb:
             gdb_cmd = [
                 'xterm',
                 '-e',
@@ -138,14 +137,15 @@ def get_gdb_cmd(config, out_path):
     return launch_gdb, gdb_cmd, binary
 
 #This function is responsible for running the qemu command based on the inputs
-def run_qemu(config, out_path):
+def run_qemu(machine_config, out_path):
     #create json file for the device config
-    dev_config_path = gen_config._gen_dev_config(config, out_path)
+    dev_config_path = helper.write_dev_config_json(output_dir=out_path, data=machine_config.parsed_device)
     log.info(f"Custom Devices Configuration written to : {dev_config_path}")
 
-    cmd = build_qemu_cmd(config, dev_config_path, out_path)
+    #TODO: Add support for multiple cpus in future
+    cmd = build_qemu_cmd(machine_config, dev_config_path, out_path)
 
-    launch_gdb, gdb_cmd, binary = get_gdb_cmd(config, out_path)
+    launch_gdb, gdb_cmd, binary = get_gdb_cmd(machine_config, out_path)
 
     _start_execution(cmd, launch_gdb, gdb_cmd, binary)
 
@@ -202,7 +202,7 @@ def kill_qemu_process():
 @click.version_option(prog_name="Fastdyn Framework",version=__version__)
 def cli():
     # Load variables from .env
-    load_dotenv()
+    load_dotenv()   #TODO: Remove this
     log.info('****** Fastdyn Framework {0} *******'.format(__version__ ))
 
 
@@ -238,43 +238,8 @@ def run(config, map_file, work_dir):
     #We will handle multiple machines case in future
     machine  = fastdyn_config.parse_config("machine0", toml_config=config, map_file_path=map_file)
 
-    # #In future: For MCP, create a separate main file that will use the same APIs
-    # registered_machines: list[Machine] = []
-    # for i, config in enumerate(configs):
-    #     machine = machine_apis.create_machine(f"machine{i}")  #each config contains a single machine
-    #     registered_machines.append(machine)
-    #     #Parse each of the config
-    #     success = parse_config(toml_config=config, map_file=map_file)
-    #     if not success:
-    #         log.error("Unable to parse the configuration files")
-    #         sys.exit()  #TODO: Update the exit mechanism
-
-
-    # parse_config = fastdyn_config.ParseConfig()
-
-
-    # log.info("Parsing CMSIS-SVD")
-    # svd_file_map = svd_parser.discover_svd_files()
-
-    # config_obj = parse_config.Fastdyn_Config()  #generate the object for the config
-
-    # log.info(f"Parsing Config file: {config}")
-
-    # if map_file is not None:
-    #     log.info(f"Parsing Config file: {map_file}")
-    # else:
-    #     log.warning(f"Map Config file not found")
-
-    # config_obj.add_device_config(config, map_file, svd_file_map)
-
-    #Initial Verification before running
-    # Platform = config_obj.dev_config.cpu['platform']
-    # if Platform not in svd_file_map:
-    #     log.error(f'{Platform} not found in the SVD File Map')
-    #     sys.exit(1)
-
     run_qemu(
-        config=machine,
+        machine_config=machine,
         out_path=work_dir
     )
 
