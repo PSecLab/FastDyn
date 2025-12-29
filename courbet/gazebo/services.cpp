@@ -58,6 +58,12 @@ imu_data_t parse_imu_json(const std::string &input)
     imu.accel_y = accel[1].get<double>();
     imu.accel_z = accel[2].get<double>();
 
+    // add noise to gyros (+)
+    // noise from 0 to 0.001 rad/s
+    imu.gyro_x += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    imu.gyro_y += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    imu.gyro_z += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+
     // imu.gyro_x  = std::to_string(gyro[0].get<double>());
     // imu.gyro_y  = std::to_string(gyro[1].get<double>());
     // imu.gyro_z  = std::to_string(gyro[2].get<double>());
