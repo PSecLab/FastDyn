@@ -1,4 +1,4 @@
-#include <qemu-plugin.h>
+#include <qemu/qemu-plugin.h>
 #include <time.h>
 #include <utils.h>
 #include <device.h>

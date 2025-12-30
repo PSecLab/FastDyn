@@ -1,7 +1,7 @@
 #ifndef VIRTUALS_H
 #define VIRTUALS_H
 
-#include <qemu-plugin.h>
+#include <qemu/qemu-plugin.h>
 #include <stdint.h>
 #include "common.h"
 #include "config.h"

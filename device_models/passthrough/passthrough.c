@@ -114,7 +114,7 @@ static int irq_pending;
 
 static void* dev_thread_fn(void* arg) {
     (void)arg;
-    while(1);
+    // while(1);
     while (1) {
 #ifdef TEST_INTERRUPT_THREAD
         sleep(5);

@@ -22,7 +22,7 @@ cpu = "cortex-m7"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 platform = "STM32F7x9"
-binary = "boardrunner_examples/examples/STM32F769i-eval/UART/Firmwares/uart.elf"
+binary = "boardrunner/boardrunner_examples/examples/STM32F769i-eval/UART/Firmwares/uart.elf"
 
 # --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
@@ -35,7 +35,7 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-
+# finline = "/data/fastdyn/staticiomapper.io"
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
 # --- Plugin Logger Configuration ---

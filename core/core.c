@@ -27,7 +27,7 @@ int isdigit(int c);
 #include <stdio.h>
 #include <glib.h>
 
-#include <qemu-plugin.h>
+#include <qemu/qemu-plugin.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -481,7 +481,7 @@ static const char *rw_str(access_type_t t)
 {
     return (t == ACCESS_READ) ? "R" : "W";
 }
-#endif 
+#endif
 
 static size_t count;
 static access_t *accesses;
@@ -665,7 +665,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         }
 
 		//2.5 Inline IO
-		const access_t *a = find_access_by_pc(accesses, count, qemu_plugin_insn_vaddr(insn)); 
+		const access_t *a = find_access_by_pc(accesses, count, qemu_plugin_insn_vaddr(insn));
 		if (a) {
 			qemu_plugin_u64 entry_tmp;
 			// TODO: Get Device Memory

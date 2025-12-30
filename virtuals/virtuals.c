@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <glib.h>
 
-#include <qemu-plugin.h>
+#include <qemu/qemu-plugin.h>
 #include <sys/time.h>
 #include <stdint.h>
 #include <stdlib.h>

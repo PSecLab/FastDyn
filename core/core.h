@@ -1,7 +1,7 @@
 #ifndef CORE_H
 #define CORE_H
 
-#include <qemu-plugin.h>
+#include <qemu/qemu-plugin.h>
 #include "common.h"
 
 // Function declarations
