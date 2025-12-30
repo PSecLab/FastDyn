@@ -1,5 +1,7 @@
 #QEMU DIR PATHS
 option('qemu_path', type: 'string', value: '../../qemu', description: 'Path to the QEMU')
+#LIBHW DIR PATHS
+option('libhw_path', type: 'string', value: '../../../libhw', description: 'Path to LIBHW')
 
 #USER Libraries
 option('enable_libhw', type: 'boolean', value: false, description: 'Enable libhw support')

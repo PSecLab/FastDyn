@@ -48,12 +48,21 @@ if ENABLE_LIBGZ
 endif
 
 ENABLE_LIBHW = get_option('enable_libhw')
+LIBHW_DIR = get_option('libhw_path')
+
 if ENABLE_LIBHW
-libhw_dep = declare_dependency(
-  include_directories: include_directories('../../libhw/include'),
-  link_args: ['-L../../libhw/out', '-lhw', '-lstlink']
-)
-  deps +=libhw_dep
+  libhw_inc = include_directories(join_paths(LIBHW_DIR, 'include'))
+
+  libhw_dep = declare_dependency(
+    include_directories: libhw_inc,
+    link_args: [
+      '-L' + join_paths(LIBHW_DIR, 'out'),
+      '-lhw',
+      '-lstlink',
+    ],
+  )
+
+  deps += libhw_dep
 endif
 
 #Based on the configurations, generate config.h
@@ -74,9 +83,7 @@ configure_file(
 
 QEMU_DIR = get_option('qemu_path')
 qemu_include = include_directories(
-  join_paths(QEMU_DIR, 'include', 'qemu'),
   join_paths(QEMU_DIR, 'include')
-
 )
 
 # --- Project include dir

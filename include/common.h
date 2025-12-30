@@ -1,7 +1,7 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#include <qemu-plugin.h>
+#include <qemu/qemu-plugin.h>
 #include <stdint.h>
 
 // Constants needed by both core.c and virtuals.c
@@ -185,4 +185,4 @@ typedef struct {
 extern uint32_t qemu_get_register(int reg);
 extern void qemu_set_register(uint32_t value, int reg);
 
-#endif // COMMON_H 
+#endif // COMMON_H
