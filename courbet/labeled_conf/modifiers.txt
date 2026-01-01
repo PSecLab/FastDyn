@@ -84,4 +84,6 @@ _ZN9AP_Arming14pre_arm_checksEb r1 1
 0x80d8f9c r0 0
 _ZN11GCS_MAVLINK18check_payload_sizeEt r0 1
 _ZN11GCS_MAVLINK18check_payload_sizeEt r15 r14
+_ZNK17AP_InertialSensor23accel_calibrated_ok_allEv r0 1
+_ZNK17AP_InertialSensor23accel_calibrated_ok_allEv r15 r14
 
