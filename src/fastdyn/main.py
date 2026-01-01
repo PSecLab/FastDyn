@@ -19,11 +19,22 @@ from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 from .utils import helper
 from . import machine_apis
+from .fastdyn import Fastdyn
 
 from dataclasses import asdict
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
+
+#create a machine using toml config in case a package is being used
+def create_machine_toml(machine_name, toml_config, map_file_path):
+    fastdyn_obj = Fastdyn()
+
+    print(fastdyn_obj)
+
+
+    return fastdyn_obj
+
 
 
 #build qemu command
@@ -235,8 +246,10 @@ def run(config, map_file, work_dir):
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
 
-    #We will handle multiple machines case in future
-    machine  = fastdyn_config.parse_config("machine0", toml_config=config, map_file_path=map_file)
+    #parse the toml config
+
+    #create a machine using the parsed toml config
+    machine = create_machine_using_toml("machine0", toml_config=config, map_file_path=map_file)
 
     run_qemu(
         machine_config=machine,
