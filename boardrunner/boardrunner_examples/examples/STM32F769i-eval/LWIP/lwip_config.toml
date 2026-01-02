@@ -19,10 +19,10 @@ init_nsvtor = "0x08000000"
 arch = "arm"
 machine = "cortexm"
 cpu = "cortex-m7"
-plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
+plugin_library = "build/libfastdyn.so"
 # monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 platform = "STM32F7x9"
-binary = "/scratch/stm32_projects/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
+binary = "/home/hammad/work/side-channel/stm32/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
 # binary = "/scratch/Fastdyn/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
 # --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
