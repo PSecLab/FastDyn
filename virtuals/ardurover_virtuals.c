@@ -269,6 +269,11 @@ static const float wheel_radius = 0.069f; // meters
 /**
  * @brief Initialize wheel encoder parameters
  *
+ * @requirements
+ *
+ * layout:
+ *   TODO: Add layout requirements here
+ *
  * Called like this from virtuals.txt:
  *
  * <address/symbol> init_wheel_encoder
@@ -291,6 +296,10 @@ void init_wheel_encoder(unsigned int cpu_index, void *udata)
  *
  * This function reads the current position of the wheel encoders from Gazebo
  * and updates the corresponding fields in the ArduRover simulation.
+ *
+ * @requirements
+ * layout:
+ *   TODO: Add layout requirements here
  *
  * Called like this from virtuals.txt:
  *
@@ -698,9 +707,14 @@ magnetometer_calibration_t mag_cal = {
 };
 
 /**
- * Calibration no-op to write valid data and skip calibration
+ * @brief Calibration no-op to write valid data and skip calibration
  *
  * Must be called like this from virtuals.txt
+ *
+ * @requirements
+ *
+ * layout:
+ *   mag_cal: 0x2c (float[3])
  *
  * <address/symbol> compass_calibrate *
  */
@@ -768,6 +782,11 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
 
 /**
  * @brief Ensuring accurate offsets for our compass backend
+ *
+ * @requirements
+ *
+ * layout:
+ *   <unknown>: 0x48 (magnetometer_calibration_t)
  *
  * Called like this from virtuals.txt:
  *
@@ -1006,6 +1025,10 @@ static uint8_t sequence_number = 0;
 /**
  * @brief Send Mavlink Message to GCS
  *
+ * @requirements
+ * layout:
+ *   TODO: Add layout requirements here
+ *
  * Called like this from virtuals.txt:
  *
  * <address/symbol> gcs_send_mavlink_message *
@@ -1054,6 +1077,7 @@ void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
 
 /**
  * TODO: Put the address that this needs to be placed at
+ * TODO: Verify the offsets used below
  */
 void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
     uint32_t thread1 = qemu_get_register(ARM_V7M_R0);
@@ -1098,21 +1122,6 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
     // printf("LR: 0x%08x -> 0x%08x\n", ctx2.intctx.lr, ctx1.intctx.lr);
 
     printf("\n");
-}
-
-/**
- * @brief Initialize AHRS to use EKF3
- *
- * Called like this from virtuals.txt:
- *
- * <address/symbol> ap_ahrs_init
- */
-void ap_ahrs_init(unsigned int cpu_index, void *udata) {
-    uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
-    uint32_t offset = this_pointer + 562; // offset to ekf type
-    printf("Setting memory at offset %u to 2 (EKF3)\n", offset);
-    uint8_t ekf_type = 2; // EKF3
-    qemu_plugin_write_memory(offset, (uint8_t *)&ekf_type, sizeof(uint8_t));
 }
 
 
