@@ -18,6 +18,7 @@ static const char* read_priority_device_name = "elder";
 static struct timespec start_ts;
 static DeviceNode *device_lut[NUM_SLOTS] = {0};
 static DeviceNode *system_lut[SYSTEM_NUM_SLOTS] = {0};
+static DeviceNode *ram_lut[RAM_NUM_SLOTS] = {0};
 
 static inline DeviceNode **dev_select_lut(hwaddr addr) {
     switch (addr >> 28) { // top 4 bits
@@ -26,6 +27,8 @@ static inline DeviceNode **dev_select_lut(hwaddr addr) {
 			return device_lut;  // Peripheral MMIO
         case 0xE:
 			return system_lut;  // System Control Block
+		case 0x2:
+			return ram_lut; //RAM
         default:
 			return NULL;        // unknown region
     }
@@ -61,6 +64,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 #endif
     DeviceNode **lut = dev_select_lut(address);
     if (!lut) {
+
 #ifdef DEV_LOGGER
         utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled (Unknown Region): \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
                         sec, usec, address, size, size * 2, value, pc);

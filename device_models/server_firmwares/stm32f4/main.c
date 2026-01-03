@@ -324,5 +324,9 @@ int main() {
 #ifdef TRAIN_USART
 		usart_test();
 #endif
+		unsigned int * ram_baddr = 0x20020000;
+		for (int i =0; i< 0x100; i++) {
+				ram_baddr[i] = i;
+		}
 		while(1);
 }

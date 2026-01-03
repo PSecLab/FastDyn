@@ -124,7 +124,10 @@ typedef struct unimp_exporter {
 // System Control Block → system_lut
 #define SYSTEM_BASE 0xE0000000ULL
 #define SYSTEM_SIZE 0x10000000ULL
+#define RAM_BASE 0x20000000ULL
+#define RAM_SIZE 0x10000000ULL
 #define SYSTEM_NUM_SLOTS (SYSTEM_SIZE / SLOT_SIZE)
+#define RAM_NUM_SLOTS (RAM_SIZE / SLOT_SIZE)
 
 
 int dev_init(int argc, char ** argv);
