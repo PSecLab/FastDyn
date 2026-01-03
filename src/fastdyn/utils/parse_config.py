@@ -7,7 +7,7 @@ from . import helper
 from typing import Optional, Dict, Any, Iterable, Tuple
 import os
 from .. import fastdyn_log as fastdyn_log_conf
-from ..saved_machine import Machine, CPUConfig, VirtualInstruction, InstructionModifier, DeviceSection, DeviceModelDefaults, DeviceConfig, DeviceHandler, SlaveDevice
+from ..machine import Machine, CPUConfig, VirtualInstruction, InstructionModifier, DeviceSection, DeviceModelDefaults, DeviceConfig, DeviceHandler, SlaveDevice
 from .database import bus_rules
 from .database.bus_rules import BUS_RULES
 
