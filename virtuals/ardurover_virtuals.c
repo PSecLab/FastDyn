@@ -271,8 +271,15 @@ static const float wheel_radius = 0.069f; // meters
  *
  * @requirements
  *
- * layout:
- *   TODO: Add layout requirements here
+ * AP_WheelEncoder:
+ *   _type:
+ *     offset: 0x0
+ *     size: 0x2
+ *   _wheel_radius:
+ *     offset: 0x8
+ *     size: 0x8
+ *
+ * @end_requirements
  *
  * Called like this from virtuals.txt:
  *
@@ -282,8 +289,8 @@ void init_wheel_encoder(unsigned int cpu_index, void *udata)
 {
     // Set proper wheel radius for both wheels
     uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
-    qemu_plugin_write_memory(this_pointer + 0x18, (uint8_t *)&wheel_radius, sizeof(int));
-    qemu_plugin_write_memory(this_pointer + 0x1C, (uint8_t *)&wheel_radius, sizeof(float));
+    qemu_plugin_write_memory(this_pointer + 0x8, (uint8_t *)&wheel_radius, sizeof(int));
+    qemu_plugin_write_memory(this_pointer + 0xC, (uint8_t *)&wheel_radius, sizeof(float));
 
     // Set proper wheel type for both wheels
     uint8_t type = 1;
@@ -298,8 +305,17 @@ void init_wheel_encoder(unsigned int cpu_index, void *udata)
  * and updates the corresponding fields in the ArduRover simulation.
  *
  * @requirements
- * layout:
- *   TODO: Add layout requirements here
+ *
+ * AP_WheelEncoder_Backend:
+ *   _frontend:
+ *     offset: 0x4
+ *     size: 0x4
+ * AP_WheelEncoder:
+ *   drivers:
+ *     offset: 0x6c
+ *     size: 0x8
+ *
+ * @end_requirements
  *
  * Called like this from virtuals.txt:
  *
@@ -709,18 +725,22 @@ magnetometer_calibration_t mag_cal = {
 /**
  * @brief Calibration no-op to write valid data and skip calibration
  *
- * Must be called like this from virtuals.txt
- *
  * @requirements
  *
- * layout:
- *   mag_cal: 0x2c (float[3])
+ * AP_Compass_HMC5843:
+ *   _scaling:
+ *     offset: 0x2c
+ *     size: 0xc
+ *
+ * @end_requirements
+ *
+ * Must be called like this from virtuals.txt
  *
  * <address/symbol> compass_calibrate *
  */
 void compass_calibrate(unsigned int cpu_index, void *udata) {
     uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
-    uint32_t offset = this_pointer + 0x2c; // offset to mag_cal field
+    uint32_t offset = this_pointer + 0x2c; // offset to _scaling field
     float scaling[3] = {1.0f, 1.0f, 1.0f};
     qemu_plugin_write_memory(offset, (uint8_t *)scaling, sizeof(scaling));
 
@@ -783,10 +803,11 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
 /**
  * @brief Ensuring accurate offsets for our compass backend
  *
- * @requirements
  *
  * layout:
  *   <unknown>: 0x48 (magnetometer_calibration_t)
+ *
+ * TODO: Check removal.
  *
  * Called like this from virtuals.txt:
  *
@@ -1024,10 +1045,6 @@ static uint8_t sequence_number = 0;
 
 /**
  * @brief Send Mavlink Message to GCS
- *
- * @requirements
- * layout:
- *   TODO: Add layout requirements here
  *
  * Called like this from virtuals.txt:
  *
