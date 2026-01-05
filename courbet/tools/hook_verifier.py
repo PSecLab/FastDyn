@@ -23,13 +23,7 @@ will be able to verify that your hooks are still valid.
 import gdb
 import yaml
 import re
-
-green_text = "\033[92m"
-red_text = "\033[91m"
-yellow_text = "\033[93m"
-blue_text = "\033[94m"
-light_blue_text = "\033[96m"
-end_color = "\033[0m"
+from tools.utils import *
 
 # TODO: Add support for function parameters and return types. This will
 # make our verification more robust and provide more confidence to the
@@ -50,7 +44,7 @@ def get_offset_size(class_name: str, field_name: str):
             size = f.type.sizeof
             return offset, size
 
-    raise KeyError(f"[{red_text}FAIL{end_color}]     Field '{field_name}' not found in class '{class_name}'")
+    raise KeyError(f"[{RED_TEXT}FAIL{END_COLOR}]     Field '{field_name}' not found in class '{class_name}'")
 
 
 def injest_doxygen_requirements(virtuals_path: str) -> (bool, dict):
@@ -61,7 +55,7 @@ def injest_doxygen_requirements(virtuals_path: str) -> (bool, dict):
             lines = f.readlines()
     except FileNotFoundError:
         gdb.write(
-            f"[{red_text}FAIL{end_color}]     Could not open virtuals file at path: {virtuals_path}\n",
+            f"[{RED_TEXT}FAIL{END_COLOR}]     Could not open virtuals file at path: {virtuals_path}\n",
             gdb.STDERR,
         )
         return (False, requirements)
@@ -91,7 +85,7 @@ def injest_doxygen_requirements(virtuals_path: str) -> (bool, dict):
             parsed_requirements[idx] = yaml.safe_load(yaml_str)
         except yaml.YAMLError as e:
             gdb.write(
-                f"[{red_text}FAIL{end_color}]     YAML parse error in slice {idx}:\n{e}\n",
+                f"[{RED_TEXT}FAIL{END_COLOR}]     YAML parse error in slice {idx}:\n{e}\n",
                 gdb.STDERR,
             )
             parsed_requirements[idx] = None
@@ -116,13 +110,13 @@ def verify_layout(requirements):
             try:
                 actual_offset, actual_size = get_offset_size(struct, symbol)
             except KeyError as e:
-                gdb.write(f"[{red_text}FAIL{end_color}]     During verification: {e}\n", gdb.STDERR)
+                gdb.write(f"[{RED_TEXT}FAIL{END_COLOR}]     During verification: {e}\n", gdb.STDERR)
                 continue
 
             if expected_offset is not None and expected_size is not None:
                 if actual_offset != expected_offset:
                     gdb.write(
-                        f"[{red_text}FAIL{end_color}]     MISMATCH in {struct}.{symbol}: "
+                        f"[{RED_TEXT}FAIL{END_COLOR}]     MISMATCH in {struct}.{symbol}: "
                         f"expected offset 0x{expected_offset:x}, "
                         f"got 0x{actual_offset:x}\n",
                         gdb.STDERR,
@@ -131,7 +125,7 @@ def verify_layout(requirements):
 
                 if actual_size != expected_size:
                     gdb.write(
-                        f"[{red_text}FAIL{end_color}]     MISMATCH in {struct}.{symbol}: "
+                        f"[{RED_TEXT}FAIL{END_COLOR}]     MISMATCH in {struct}.{symbol}: "
                         f"expected size 0x{expected_size:x}, "
                         f"got 0x{actual_size:x}\n",
                         gdb.STDERR,
@@ -139,7 +133,7 @@ def verify_layout(requirements):
                     continue
 
                 gdb.write(
-                    f"[{green_text}VERIFIED{end_color}] MATCH in {struct}.{symbol}: "
+                    f"[{GREEN_TEXT}VERIFIED{END_COLOR}] MATCH in {struct}.{symbol}: "
                     f"offset 0x{actual_offset:x}, size 0x{actual_size:x}\n",
                 )
 
@@ -149,16 +143,16 @@ def entry(virtuals_path: str):
     gdb.write(
         "\n"
         "/**\n"
-        f" * {blue_text}@brief{end_color} Courbet Hook Verifier\n"
+        f" * {BLUE_TEXT}@brief{END_COLOR} Courbet Hook Verifier\n"
         " *\n"
         " * Verifies that the layout requirements specified in the Doxygen comments\n"
-        f" * of the {light_blue_text}{virtuals_path}{end_color} file match the actual compiled\n"
+        f" * of the {LIGHT_BLUE_TEXT}{virtuals_path}{END_COLOR} file match the actual compiled\n"
         " * binary layout.\n"
         " *\n"
         " *\n"
         " * To use this on your own hooks, modify your doxygen comments to include\n"
         " * the @requirements section as shown in the examples in\n"
-        f" * the {light_blue_text}virtual/ardurover_virtuals.c{end_color} file.\n"
+        f" * the {LIGHT_BLUE_TEXT}virtual/ardurover_virtuals.c{END_COLOR} file.\n"
         " */\n\n"
     )
 
@@ -170,7 +164,7 @@ def entry(virtuals_path: str):
 
     if not requirements:
         gdb.write(
-            f"[{yellow_text}WARNING{end_color}] No requirements found in virtuals file: {light_blue_text}{virtuals_path}{end_color}\n"
+            f"[{YELLOW_TEXT}WARNING{END_COLOR}] No requirements found in virtuals file: {LIGHT_BLUE_TEXT}{virtuals_path}{END_COLOR}\n"
         )
 
     for _, req in requirements.items():
@@ -189,7 +183,7 @@ class CourbetVerify(gdb.Command):
 
         if len(argv) != 1:
             gdb.write(
-                f"[{red_text}FAIL{end_color}]     Usage: courbet_verify <virtuals_file_path>\n",
+                f"[{RED_TEXT}FAIL{END_COLOR}]     Usage: courbet_verify <virtuals_file_path>\n",
                 gdb.STDERR,
             )
             return
