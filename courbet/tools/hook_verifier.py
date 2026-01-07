@@ -177,6 +177,7 @@ class CourbetVerify(gdb.Command):
 
     def __init__(self):
         super().__init__("courbet_verify", gdb.COMMAND_USER)
+        gdb.execute(f"set prompt ({BLUE_TEXT}courbet{END_COLOR}) ")
 
     def invoke(self, arg, _):
         argv = gdb.string_to_argv(arg)

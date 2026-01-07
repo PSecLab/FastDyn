@@ -102,7 +102,7 @@ cb_entry_t cb_registry[] = {
     // GPS
     { "gps_get_type_mavlink", gps_get_type_mavlink},
     // AHRS
-    { "ap_ahrs_init", ap_ahrs_init},
+    // { "ap_ahrs_init", ap_ahrs_init},
     // File System (Added for the flight logs)
     { "ap_fs_open", ap_fs_open},
     { "ap_fs_close", ap_fs_close},

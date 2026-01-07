@@ -255,11 +255,11 @@ void write_channel(unsigned int cpu_index, void *udata)
     {
         fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
-    // else if (pwm != 0 && pwm != 1500)
-    // {
-    //     // Uncomment for debugging non-center PWM values
-    //     printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
-    // }
+    if (pwm != 0 && pwm != 1500)
+    {
+        // Uncomment for debugging non-center PWM values
+        printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
+    }
 }
 
 // Wheel Encoder

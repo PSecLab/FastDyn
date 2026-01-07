@@ -1,0 +1,29 @@
+0x8005308 start_advancing_sim 
+0x80e75ac storage_read_block *
+0x80e764c storage_write_block *
+0x814f95c hrt_micros64 *
+0x80e7944 micros32 *
+0x8134b5c adc_voltage *
+0x8134b64 adc_voltage *
+0x81376a8 write_channel 
+0x80cc744 init_wheel_encoder 
+0x80ccc44 copy_wheel_encoder_state_to_frontend 
+0x81199bc ins_block_read *
+0x802d8b0 compass_calibrate *
+0x80284f8 compass_configure *
+0x802d6f4 compass_read_block *
+0x815147c chibiOS_tick_handler *
+0x8089338 create_gcs_mavlink_backend 
+0x8083d18 gcs_send_text 
+0x8083cd0 gcs_send_text 
+0x808b908 gcs_send_banner_once *
+0x803fca0 gcs_read *
+0x803fcc0 gcs_bytes_available *
+0x8085038 gcs_send_mavlink_message *
+0x815158a raise_periodic_irq 66
+0x80326b2 gps_get_type_mavlink 
+0x80bb28c ap_fs_read *
+0x80bb214 ap_fs_open *
+0x80bb2d4 ap_fs_fsync *
+0x80bb2b0 ap_fs_write *
+0x80bb270 ap_fs_close *

@@ -136,19 +136,18 @@ def preprocess(symbols_dict: dict[str, int], modifier_file: str, modifier_out: s
     # print(f"Output would be written to: {virtuals_out}")
 
 if __name__ == "__main__":
-    # if len(sys.argv) != 4:
-    #     print("Usage: python preprocess.py <map_file> <modifier_file> <virtuals_file>")
-    #     sys.exit(1)
+    if len(sys.argv) != 4:
+        print("Usage: python preprocess.py <map_file> <labeled_dir> <unlabeled_dir>")
+        sys.exit(1)
 
-    map_file = "rover_map.txt"
-    # map_file = "rover_v462_map.txt"
-    modifier_file = "labeled_conf/modifiers.txt"
-    modifier_out = "unlabeled_conf/modifiers.txt"
-    # modifier_out = "test_conf/modifiers.txt"
-    virtuals_file = "labeled_conf/virtuals.txt"
-    virtuals_out = "unlabeled_conf/virtuals.txt"
-    # virtuals_out = "test_conf/virtuals.txt"
+    map_file = sys.argv[1]
+    labeled_dir = sys.argv[2]
+    labeled_virtuals_file = f"{labeled_dir}/virtuals.txt"
+    labeled_modifier_file = f"{labeled_dir}/modifiers.txt"
+    unlabeled_dir = sys.argv[3]
+    unlabeled_virtuals_out = f"{unlabeled_dir}/virtuals.txt"
+    unlabeled_modifier_out = f"{unlabeled_dir}/modifiers.txt"
 
     symbols_dict = load_symbol_addresses(map_file)
 
-    preprocess(symbols_dict, modifier_file, modifier_out, virtuals_file, virtuals_out)
+    preprocess(symbols_dict, labeled_modifier_file, unlabeled_modifier_out, labeled_virtuals_file, unlabeled_virtuals_out)

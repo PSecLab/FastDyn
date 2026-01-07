@@ -21,8 +21,8 @@ _ZN7ChibiOS9Scheduler12_rcin_threadEPv r0 0
 _ZN7ChibiOS9Scheduler12_rcin_threadEPv r15 r14
 _ZN5Rover20radio_failsafe_checkEt r0 0
 _ZN5Rover20radio_failsafe_checkEt r15 r14
-_ZNK15AP_ExternalAHRS8get_portENS_15AvailableSensorE r0 -1
-_ZNK15AP_ExternalAHRS8get_portENS_15AvailableSensorE r15 r14
+_ZNK15AP_ExternalAHRS8get_portEv r0 -1
+_ZNK15AP_ExternalAHRS8get_portEv r15 r14
 _ZN7AP_Baro4initEv r0 0
 _ZN7AP_Baro4initEv r15 r14
 _ZN7AP_Baro9calibrateEb r0 0
