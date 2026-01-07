@@ -1,51 +1,51 @@
-use scirs2_optimize::global::{ 
-    BayesianOptimizationOptions,
-    BayesianOptimizer,
-    Space
-};
-use scirs2_optimize::prelude::Parameter;
+mod gz_state_parser;
 
-// Want the optimizer to converge towards this value
-const OPT_TARGET: f64 = 0.25;
-const INITIAL_POINTS: usize = 100;
-const LOWER_BOUND: f64 = -1.0;
-const UPPER_BOUND: f64 = 1.0;
+use protobuf::text_format::{ParseError, parse_from_str};
+use gz_msgs::{clock, gz_msgs10::{
+    any::Any, 
+    clock::Clock, 
+    empty::Empty, 
+    imu::IMU, 
+    magnetometer::Magnetometer, 
+    navsat::NavSat, 
+    pose_v::Pose_V,
+}, pose};
 
-fn my_ask_and_tell(bo: &mut BayesianOptimizer, iterations: usize) {
-    for i in 0..iterations {
-        let input = bo.ask();
-        let num_value = input[0]; //.clamp(LOWER_BOUND, UPPER_BOUND);
-        let robustness = f64::abs(OPT_TARGET - num_value);
-        println!("ITERATION {i}:");
-        println!("\tGot from optimizer: {num_value}");
-        println!("\tSimulated Robustness: {robustness}");
-        bo.tell(input, robustness); 
+fn example_proto_parsing(gz_data: &str) {
+    let clock_str: String = gz_state_parser::extract_block_from_gz_data(&gz_data, "clock");
+    let clock_proto: Clock = parse_from_str::<Clock>(&clock_str).unwrap();
+    let sim_sec: i64= clock_proto.sim.sec;
+    let sim_nsec: i32 = clock_proto.sim.nsec;
+    println!("Simulation time: {}.{} seconds", sim_sec, sim_nsec);
+
+    let imu_str: String = gz_state_parser::extract_block_from_gz_data(&gz_data, "imu");
+    let imu_proto: IMU = parse_from_str::<IMU>(&imu_str).unwrap();
+    let lin_acc_x: f64 = imu_proto.linear_acceleration.x;
+    let lin_acc_y: f64 = imu_proto.linear_acceleration.y;
+    let lin_acc_z: f64 = imu_proto.linear_acceleration.z;
+    println!("IMU Linear Acceleration: ");
+    println!("\tx: {lin_acc_x}");
+    println!("\ty: {lin_acc_y}");
+    println!("\tz: {lin_acc_z}");
+
+    let pose_str: String = gz_state_parser::extract_block_from_gz_data(&gz_data, "pose");
+    let pose_proto: Pose_V = parse_from_str::<Pose_V>(&pose_str).unwrap();
+    for (_i, pose) in pose_proto.pose.iter().enumerate() {
+        if pose.name == "vehicle" {
+            let orientation = &pose.orientation;
+            println!("Rover Orientation: ");
+            println!("\tx: {}", orientation.x);
+            println!("\ty: {}", orientation.y);
+            println!("\tz: {}", orientation.z);
+            println!("\tw: {}", orientation.w);
+        }
     }
 }
 
 fn main() {
-    
-    println!("EXPERIMENT DETAILS:");
-    println!("\tTarget input: {OPT_TARGET}");
-    println!("\tSearch bounds: ({LOWER_BOUND}, {UPPER_BOUND})");
-    println!("\tNumber of points to explore before optimization: {INITIAL_POINTS}");
-
-    // Define search space
-    let space = Space::new().add("Burger", Parameter::Real(LOWER_BOUND, UPPER_BOUND));
-
-    // Create optimizer options with more evaluations
-    let mut options = BayesianOptimizationOptions::default();
-    options.n_initial_points = INITIAL_POINTS;
-
-    // Create optimizer
-    let mut bo = BayesianOptimizer::new(space, Some(options));
-
-    println!("---------------------------------------------------");
-    println!("TRAINING OPTIMIZER WITH {INITIAL_POINTS} INITIAL POINTS...");
-    my_ask_and_tell(&mut bo, INITIAL_POINTS);
-    println!("---------------------------------------------------");
-    println!("What did the optimizer learn??");
-    println!("---------------------------------------------------");
-    my_ask_and_tell(&mut bo, 10);
-
-} 
+    // Order of blocks: clock, pose, navsat, imu, magnetometer
+    let gz_data: String = gz_state_parser::get_raw_gz_data();
+    println!("{}", gz_data);
+    println!("-----------------------------------");
+    example_proto_parsing(&gz_data);
+}
