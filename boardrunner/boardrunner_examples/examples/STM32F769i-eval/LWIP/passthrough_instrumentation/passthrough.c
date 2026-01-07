@@ -5,13 +5,14 @@
 #include <unistd.h>
 #include <time.h>
 #include <stdlib.h>
-
 #include "lwip_hook.c"
+
 
 // static hw_t *hw = NULL;
 
 // Global hardware handle and mutex
-static hw_t *hw = NULL;
+
+// static hw_t *hw = NULL;
 static pthread_t dev_thread;
 static pthread_mutex_t hw_mutex = PTHREAD_MUTEX_INITIALIZER;
 hwaddr buffer_base   = 0x20000000;
@@ -31,13 +32,18 @@ static uint64_t passthrough_read(void *opaque, hwaddr address, unsigned size, ui
         utils_die("HW handle not initialized");
     }
 
-    // RX hook via doorbell
+    // Doorbell hook (keep it)
     if (address == QEMU_DOORBELL_ADDR) {
-        /* pull any RX frames that arrived on the board into QEMU RAM */
-        int pulled = pull_rx_ready_once(hw);
-        (void)pulled; // optional: return pulled for debugging
+        int r = pull_rx_ready_drain(hw, RX_PULL_BUDGET_US);
+        if (r < 0) utils_die("RX pull failed");
         pthread_mutex_unlock(&hw_mutex);
         return 0;
+    }
+
+    // **Key hook**: before returning DMASR, pull RX frames so ISR sees them
+    if (address == REG_DMASR) {
+        int r = pull_rx_ready_drain(hw, RX_PULL_BUDGET_US);
+        if (r < 0) utils_die("RX pull failed");
     }
 
     int status = hw_read32(hw, address, &value_read);

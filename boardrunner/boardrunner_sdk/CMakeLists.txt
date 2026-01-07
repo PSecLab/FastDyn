@@ -2,12 +2,13 @@ cmake_minimum_required(VERSION 3.16)
 project(boardrunner_sdk C)
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Put outputs in the chosen build directory
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# External include dirs (like your Makefile -I...)
-set(FASTDYN_INCLUDE_DIR "" CACHE PATH "Path to shared include dir containing device.h")
+# External include dirs
+set(FASTDYN_INCLUDE_DIR "" CACHE PATH "Path to FastDyn include dir (must contain device.h)")
 set(QEMU_INCLUDE_DIR "" CACHE PATH "Path to QEMU include dir")
 
 if(NOT FASTDYN_INCLUDE_DIR)
@@ -15,10 +16,10 @@ if(NOT FASTDYN_INCLUDE_DIR)
 endif()
 
 if(NOT QEMU_INCLUDE_DIR)
-  message(FATAL_ERROR "FASTDYN_INCLUDE_DIR is required (must contain device.h)")
+  message(FATAL_ERROR "QEMU_INCLUDE_DIR is required")
 endif()
 
-# If you rely on glib (like your Makefile)
+# glib
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLIB REQUIRED glib-2.0)
 
@@ -40,14 +41,27 @@ target_include_directories(boardrunner_vio PUBLIC
   "${CMAKE_CURRENT_LIST_DIR}/include"
   ${GLIB_INCLUDE_DIRS}
   ${FASTDYN_INCLUDE_DIR}
+  "${QEMU_INCLUDE_DIR}"
 )
 
-if(QEMU_INCLUDE_DIR)
-  target_include_directories(boardrunner_vio PUBLIC "${QEMU_INCLUDE_DIR}")
+# Derive FastDyn root from FASTDYN_INCLUDE_DIR (expected: <FastDynRoot>/include)
+get_filename_component(FASTDYN_ROOT "${FASTDYN_INCLUDE_DIR}" DIRECTORY)
+set(FASTDYN_UTILS_C "${FASTDYN_ROOT}/utils/utils.c")
+
+if(NOT EXISTS "${FASTDYN_UTILS_C}")
+  message(FATAL_ERROR
+    "Expected FastDyn utils at: ${FASTDYN_UTILS_C}\n"
+    "Make sure FASTDYN_INCLUDE_DIR points to: <FastDynRoot>/include"
+  )
 endif()
+
+target_sources(boardrunner_vio PRIVATE "${FASTDYN_UTILS_C}")
 
 target_link_libraries(boardrunner_vio PRIVATE ${GLIB_LIBRARIES})
 target_link_directories(boardrunner_vio PRIVATE ${GLIB_LIBRARY_DIRS})
+
+# Fail fast if any symbol is unresolved (catch dlopen failures at build time)
+target_link_options(boardrunner_vio PRIVATE -Wl,--no-undefined)
 
 # ---------------------------
 # 2) Build ONE plugin: model.so
@@ -66,16 +80,13 @@ target_include_directories(model PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/include"
   ${GLIB_INCLUDE_DIRS}
   ${FASTDYN_INCLUDE_DIR}
+  "${QEMU_INCLUDE_DIR}"
 )
-
-if(QEMU_INCLUDE_DIR)
-  target_include_directories(model PRIVATE "${QEMU_INCLUDE_DIR}")
-endif()
 
 target_link_libraries(model PRIVATE boardrunner_vio ${GLIB_LIBRARIES})
 
-# mkdir -p build
-# cmake -S . -B build \
-#   -DFASTDYN_INCLUDE_DIR=/scratch/Fastdyn/FastDyn/include \
-#   -DQEMU_INCLUDE_DIR=/scratch/Fastdyn/FastDyn/qemu/include
-# cmake --build build -j
+# Usage:
+#   cmake -S . -B build \
+#     -DFASTDYN_INCLUDE_DIR=/path/to/FastDyn/include \
+#     -DQEMU_INCLUDE_DIR=/path/to/qemu/include
+#   cmake --build build -j

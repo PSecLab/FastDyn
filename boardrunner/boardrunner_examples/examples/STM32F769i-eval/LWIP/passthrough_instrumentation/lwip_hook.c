@@ -460,8 +460,6 @@ static int pull_tx_completion_wait(hw_t *hw, uint32_t timeout_us)
   return completed_total;
 }
 
-//-------------------------------------------------------RX Path Implementation----------------------------
-
 /* ---------- RX helpers ---------- */
 #define RX_OWN_BIT  (1u << 31)
 
@@ -485,55 +483,6 @@ static int copy_board_to_qemu(hw_t *hw, uint32_t addr, uint32_t len)
     off += chunk;
   }
   return 0;
-}
-
-/* ---- Pull RX: if board has OWN=0 but QEMU still has OWN=1, mirror desc + payload to QEMU ---- */
-static int pull_rx_ready_once(hw_t *hw)
-{
-  if (!g_eth.have_rx_base) return 0;
-
-  int pulled = 0;
-
-  for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
-    uint32_t desc_addr = ring_desc_addr(g_eth.rx_base, i);
-
-    /* QEMU-side quick check: if QEMU already sees OWN=0, nothing to do */
-    uint32_t q_desc0 = 0;
-    if (qemu_read32_le(desc_addr + 0, &q_desc0) != 0) continue;
-    if ((q_desc0 & RX_OWN_BIT) == 0) continue;
-
-    /* Board-side quick check */
-    uint32_t b_desc0 = 0;
-    if (hw_read32(hw, desc_addr + 0, &b_desc0) != 0) return -1;
-
-    /* Not ready yet (DMA still owns it) */
-    if (b_desc0 & RX_OWN_BIT) continue;
-
-    /* Read full descriptor from board */
-    uint32_t w[10];
-    if (board_read_desc_words(hw, desc_addr, w) != 0) return -1;
-
-    uint32_t desc0 = w[0];
-    uint32_t desc1 = w[1];
-    uint32_t buf1  = w[2];
-
-    /* Copy payload board->QEMU.
-       Safe rule: copy buffer1 size (clamped). lwIP uses HAL-provided length anyway. */
-    uint32_t to_copy = (uint32_t)rx_buf1_size_from_desc1(desc1);
-    if (to_copy == 0) to_copy = ETH_RX_BUF_SIZE;
-    if (to_copy > ETH_RX_BUF_SIZE) to_copy = ETH_RX_BUF_SIZE;
-
-    if (buf1 != 0 && to_copy != 0) {
-      if (copy_board_to_qemu(hw, buf1, to_copy) != 0) return -1;
-    }
-
-    /* Mirror descriptor board->QEMU, DESC0 last (so OWN=0 becomes visible last) */
-    if (qemu_write_desc_words_desc0_last(desc_addr, w) != 0) return -1;
-
-    pulled++;
-  }
-
-  return pulled;
 }
 
 /* ---- Push RX refill: if QEMU has OWN=1 but board still OWN=0, push desc to board (DESC0 last) ---- */
@@ -566,4 +515,77 @@ static int push_rx_refill_from_qemu(hw_t *hw)
   }
 
   return pushed;
+}
+
+#ifndef RX_PULL_BUDGET_US
+#define RX_PULL_BUDGET_US 2000u     // keep small so we don’t stall MMIO
+#endif
+
+static int pull_rx_ready_once(hw_t *hw)
+{
+  if (!g_eth.have_rx_base) return 0;
+
+  int pulled = 0;
+
+  for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
+    uint32_t desc_addr = ring_desc_addr(g_eth.rx_base, i);
+
+    // QEMU-side check: if QEMU already sees OWN=0, nothing to do
+    uint32_t q_desc0 = 0;
+    if (qemu_read32_le(desc_addr + 0, &q_desc0) != 0) continue;
+    if ((q_desc0 & RX_OWN_BIT) == 0) continue;
+
+    // Board-side check
+    uint32_t b_desc0 = 0;
+    if (hw_read32(hw, desc_addr + 0, &b_desc0) != 0) return -1;
+    if (b_desc0 & RX_OWN_BIT) continue; // still owned by DMA on board
+
+    // Read full descriptor from board
+    uint32_t w[10];
+    if (board_read_desc_words(hw, desc_addr, w) != 0) return -1;
+
+    const uint32_t desc0 = w[0];
+    const uint32_t desc1 = w[1];
+    const uint32_t buf1  = w[2];
+
+    // ---- SAFE copy length selection ----
+    // Prefer actual received frame length from DESC0
+    uint32_t frame_len = (uint32_t)rx_frame_len_from_desc0(desc0);
+
+    // Optional: cap by configured RX buf size in descriptor (if present)
+    uint32_t buf_sz = (uint32_t)rx_buf1_size_from_desc1(desc1);
+    if (buf_sz == 0 || buf_sz > ETH_RX_BUF_SIZE) buf_sz = ETH_RX_BUF_SIZE;
+
+    uint32_t to_copy = frame_len;
+    if (to_copy == 0 || to_copy > buf_sz) to_copy = buf_sz;   // conservative
+    if (to_copy > ETH_RX_BUF_SIZE) to_copy = ETH_RX_BUF_SIZE;
+
+    if (buf1 != 0 && to_copy != 0) {
+      if (copy_board_to_qemu(hw, buf1, to_copy) != 0) return -1;
+    }
+
+    // Mirror descriptor board->QEMU, DESC0 last (OWN=0 visible last)
+    if (qemu_write_desc_words_desc0_last(desc_addr, w) != 0) return -1;
+
+    pulled++;
+  }
+
+  return pulled;
+}
+
+static int pull_rx_ready_drain(hw_t *hw, uint32_t budget_us)
+{
+  const uint64_t t0 = now_us_monotonic();
+  int total = 0;
+
+  while (1) {
+    int n = pull_rx_ready_once(hw);
+    if (n < 0) return -1;
+    total += n;
+
+    if (n == 0) break;
+    if ((now_us_monotonic() - t0) >= (uint64_t)budget_us) break;
+  }
+
+  return total;
 }
