@@ -17,6 +17,7 @@
 #include <stdatomic.h>
 
 #define PROFILE_INS_READS 0
+#define PROFILE_COMPASS_READS 1
 
 // Global to track last sim time from QEMU
 _Atomic int64_t last_sim_time_ns = 0;
@@ -281,11 +282,11 @@ void write_channel(unsigned int cpu_index, void *udata)
     {
         fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
-    if (pwm != 0 && pwm != 1500)
-    {
-        // Uncomment for debugging non-center PWM values
-        printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
-    }
+    // if (pwm != 0 && pwm != 1500)
+    // {
+    //     // Uncomment for debugging non-center PWM values
+    //     printf("write_channel: Channel=%d, PWM=%d\n", chan, pwm);
+    // }
 }
 
 // Wheel Encoder
@@ -315,7 +316,7 @@ void init_wheel_encoder(unsigned int cpu_index, void *udata)
 {
     // Set proper wheel radius for both wheels
     uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
-    qemu_plugin_write_memory(this_pointer + 0x8, (uint8_t *)&wheel_radius, sizeof(int));
+    qemu_plugin_write_memory(this_pointer + 0x8, (uint8_t *)&wheel_radius, sizeof(float));
     qemu_plugin_write_memory(this_pointer + 0xC, (uint8_t *)&wheel_radius, sizeof(float));
 
     // Set proper wheel type for both wheels
@@ -455,7 +456,7 @@ void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
     // const char *msg = "Hello from GPS MAVLink!";
     uint8_t gps_type = 14; // Default to GPS_TYPE_MAVLINK
     qemu_set_register(gps_type, ARM_V7M_R6);
-    printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
+    // printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
     if (!requested_timer) {
         requested_timer = true;
         // // Request periodic timer every 100ms
@@ -586,7 +587,7 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
 #endif // PROFILE_INS_READS
 
         if (size < 14) {
-            printf("INS block read size too small: %u\n", size);
+            fprintf(stderr, "INS block read size too small: %u\n", size);
             qemu_set_register(0, ARM_V7M_R0); // failure
             qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
             return;
@@ -595,7 +596,7 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         imu_batch_t imu_batch;
         int success = get_imu_batch(&imu_batch);
         if (!success) {
-            printf("Failed to get IMU batch for INS block read\n");
+            fprintf(stderr, "Failed to get IMU batch for INS block read\n");
             qemu_set_register(0, ARM_V7M_R0); // failure
             qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
             return;
@@ -663,7 +664,7 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
         qemu_set_register(1, ARM_V7M_R0); // success
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
     } else {
-        printf("INS block read unknown register: 0x%X\n", reg);
+        fprintf(stderr, "INS block read unknown register: 0x%X\n", reg);
         qemu_set_register(0, ARM_V7M_R0); // failure
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
     }
@@ -775,6 +776,13 @@ void compass_calibrate(unsigned int cpu_index, void *udata) {
     qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
 }
 
+// variable for profiling compass reads
+// #if PROFILE_COMPASS_READS == 1
+static volatile double compass_total_elapsed_time_s = 0.0;
+static volatile double compass_last_time_s = 0.0;
+static volatile int compass_read_count = 0;
+// #endif // PROFILE_COMPASS_READS
+
 /**
  * Must be called like this from virtuals.txt
  *
@@ -787,7 +795,7 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
     (void)size; // unused
 
     if (reg != 0x03) {
-        printf("Compass read block unknown register: 0x%X\n", reg);
+        fprintf(stderr, "Compass read block unknown register: 0x%X\n", reg);
         qemu_set_register(0, ARM_V7M_R0); // failure
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
         return;
@@ -797,11 +805,29 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
     double mag_y = 0.0;
     double mag_z = 0.0;
     if (!get_mag_reading(&mag_x, &mag_y, &mag_z)) {
-        printf("Failed to get magnetometer reading from Gazebo\n");
+        fprintf(stderr, "Failed to get magnetometer reading from Gazebo\n");
         qemu_set_register(0, ARM_V7M_R0); // failure
         qemu_set_register(qemu_get_register(ARM_V7M_LR), ARM_V7M_PC); // return
         return;
     }
+
+// #if PROFILE_COMPASS_READS == 1
+    if (compass_read_count == 0) {
+        compass_last_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+    } else {
+        double current_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+        double elapsed_s = current_time_s - compass_last_time_s;
+        compass_total_elapsed_time_s += elapsed_s;
+        compass_last_time_s = current_time_s;
+        if (compass_read_count % 10 == 0) {
+            double average_interval_ms = (compass_total_elapsed_time_s / compass_read_count) * 1000.0;
+            double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
+            printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
+                   average_interval_ms, frequency_hz, compass_read_count);
+        }
+    }
+    compass_read_count++;
+// #endif // PROFILE_COMPASS_READS
 
     // printf("Magnetometer reading (Gauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_x, mag_y, mag_z);
     // yaw
@@ -915,7 +941,7 @@ void gcs_send_text(unsigned int cpu_index, void *udata) {
 
     buffer[255] = 0; // ensure null termination
 
-    printf("GCS Text: %s\n", buffer);
+    // printf("GCS Text: %s\n", buffer);
 }
 
 /**
@@ -1197,7 +1223,7 @@ void ap_fs_open(unsigned int cpu_index, void *udata) {
     memset(fname, 0, sizeof(fname));
     qemu_plugin_read_memory(fname_ptr, (uint8_t*)fname, sizeof(fname));
 
-    printf("Opening file: /root/rooney/FastDyn/courbet/flight_logs/%s\n", fname);
+    // printf("Opening file: /root/rooney/FastDyn/courbet/flight_logs/%s\n", fname);
 
     char path[256];
     snprintf(path, sizeof(path) + 41, "/root/rooney/FastDyn/courbet/flight_logs/%s", fname);
