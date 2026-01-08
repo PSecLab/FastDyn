@@ -135,11 +135,18 @@ void raiseirq(unsigned int cpu_index, void *udata) {
 
     // Convert string to integer (auto-detect base: 0x = hex, 0 = octal, else decimal)
     unsigned long num = strtoul(str, NULL, 0);
+
     qemu_plugin_raise_irq(num, false);
 }
 
 void kick_irq(void *opaque) {
     int irq_num = *((int *)opaque);
+
+#if ENABLE_LIBGZ
+    // update the sim time global in ardurover_virtuals.c
+    atomic_store(&last_sim_time_ns, (int64_t)qemu_plugin_get_virtual_timer());
+#endif
+
     qemu_plugin_raise_irq(irq_num, false);
 }
 

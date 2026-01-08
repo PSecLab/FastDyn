@@ -14,17 +14,31 @@
 #include <math.h>
 #include "mavlink_lib.h"
 #include <arpa/inet.h>
+#include <stdatomic.h>
 
 #define PROFILE_INS_READS 0
+
+// Global to track last sim time from QEMU
+_Atomic int64_t last_sim_time_ns = 0;
 
 static void catch_up(void *opaque)
 {
     (void) opaque;
 
-    double target_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+    int64_t last_seen = -1;
 
-    if (!advance_simulation(target_time_s)) {
-        fprintf(stderr, "advance_simulation failed in catch_up\n");
+    while (1) {
+        int64_t sim_ns = atomic_load(&last_sim_time_ns);
+
+        if (sim_ns != last_seen) {
+            double target_time_s = (double)sim_ns / 1e9;
+            if (!advance_simulation(target_time_s)) {
+                fprintf(stderr, "Failed to advance simulation to %.6f s\n", target_time_s);
+            }
+            last_seen = sim_ns;
+        }
+
+        usleep(1000);
     }
 }
 
@@ -37,8 +51,20 @@ static void catch_up(void *opaque)
  * <entry point> start_advancing_sim
  */
 void start_advancing_sim(unsigned int cpu_index, void *udata) {
-    // Start a periodic timer to advance the simulation
-    qemu_plugin_timer_new_period_ns(catch_up, NULL, 1e8);
+    (void) cpu_index;
+    (void) udata;
+    // TODO: Make this catch-up function it's own thread instead of using a timer
+    // that way it can run at a higher frequency if needed and won't cause missed
+    // timer events.
+    // qemu_plugin_timer_new_period_ns(catch_up, NULL, 1e8);
+
+    // start a thread to advance the sim
+    pthread_t advance_sim_thread;
+    if (pthread_create(&advance_sim_thread, NULL, (void *(*)(void *))catch_up, NULL) != 0) {
+        fprintf(stderr, "Failed to create advance simulation thread\n");
+    } else {
+        pthread_detach(advance_sim_thread);
+    }
 }
 
 // Storage
