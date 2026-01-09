@@ -11,6 +11,31 @@
 #define SHM_PATH "/tmp/iteration_count"
 extern int coverage;
 
+static uint32_t **p_observed_values = NULL;
+static size_t *p_observed_count = NULL;
+
+// Opaque handle from Rust
+typedef struct FuzzHandle FuzzHandle;
+
+// Create the fuzzer thread and return a handle
+FuzzHandle* fuzz_init(void);
+
+// Receive a 4‑byte input from Rust (blocks until available)
+// Returns 1 on success, 0 on failure
+uint32_t fuzz_receive_input(FuzzHandle* handle, uint32_t* out_input);
+
+// Send a list of PCs (each 4 bytes) back to Rust
+// Returns 1 on success, 0 on failure
+uint32_t fuzz_submit_pcs(FuzzHandle* handle, const uint32_t* pcs, uint32_t pcs_len);
+
+// Shut down the fuzzer and free the handle
+void fuzz_free(FuzzHandle* handle);
+
+static void vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
+{
+    // userdata is whatever you passed at registration time
+}
+
 void virt_assert(unsigned int cpu_index, void *udata)
 {
     if (!coverage) {
@@ -39,42 +64,12 @@ void virt_assert(unsigned int cpu_index, void *udata)
 
 }
 
-
-static uint64_t *get_iteration_fuzz_counter(void)
-{
-    int fd;
-    uint64_t *fuzz_counter;
-
-    fd = open(SHM_PATH, O_RDWR | O_CREAT, 0666);
-    if (fd < 0) {
-        perror("open");
-        return NULL;
-    }
-
-    // Ensure file is large enough for one 64-bit integer
-    if (ftruncate(fd, sizeof(uint64_t)) < 0) {
-        perror("ftruncate");
-        close(fd);
-        return NULL;
-    }
-
-    fuzz_counter = mmap(NULL, 2 *sizeof(uint64_t),
-                   PROT_READ | PROT_WRITE,
-                   MAP_SHARED, fd, 0);
-    close(fd); // mapping is now independent of fd
-
-    if (fuzz_counter == MAP_FAILED) {
-        perror("mmap");
-        return NULL;
-    }
-
-    return fuzz_counter;
-}
 int fuzzer_init_done = 0;
-uint64_t *fuzz_counter = NULL;
-uint64_t *input_counter = NULL;
 void anchor(unsigned int cpu_index, void *udata)
 {
+    // Reserve handle for fuzzer
+    static FuzzHandle* hFuzzer = NULL;
+
     // Currently reserving 0xDEADBEEF for a crash, we should have a better systems
     // For example, all exceptions?
     if (!coverage) {
@@ -82,22 +77,21 @@ void anchor(unsigned int cpu_index, void *udata)
     }
     if (!udata) return;
 
-	// Dump coverage 
-	reset_and_dump_values(NULL);
-
     if (!fuzzer_init_done) {
-        fuzz_counter = get_iteration_fuzz_counter();
-		input_counter = fuzz_counter+1;
-		*fuzz_counter = 0;
-		*input_counter =0;
-        fuzzer_init_done = 1;
-    } else {
-		*fuzz_counter = *fuzz_counter + 1;
-	}
+        hFuzzer = fuzz_init();
+        p_observed_values = get_pobserved_values();
+        p_observed_count = get_pobserved_count();
+	} else {
+        // Dump coverage, but only after an initial fuzz
+        if (!fuzz_submit_pcs(hFuzzer, *p_observed_values, *p_observed_count)) { 
+            utils_die("Rust side closed PC channel");
+        }
+        *p_observed_count = 0;
+    }
 
-	//Wait for next input
-	while (*input_counter <= *fuzz_counter);
-
+    if (!hFuzzer || !p_observed_values || !p_observed_count) {
+        utils_die("Failed initialization, or freed before finished");
+    }
 
     // 2- Fuzz
     const char *input_str = (const char *)udata;
@@ -117,34 +111,47 @@ void anchor(unsigned int cpu_index, void *udata)
 
     printf("[anchor] CPU %u, file: %s\n", cpu_index, filename);
 
-    // Read entire file
-	//TODO: The size of buf needs to be fixed
-	FILE *fp = fopen(filename, "rb");
-	if (!fp) {
-	    perror("fopen");
-	    exit(1);
-	}
+    uint32_t read_count;
+    if (!fuzz_receive_input(hFuzzer, &read_count)) {
+        utils_die("Fuzzer couldn't read input");
+        return;
+    }
 
-    size_t read_count = fread(buf, 1, 1024, fp);
-    fclose(fp);
-
+    printf("Reading %u inputs\n", read_count);
 
     int idx = 0;
-
     // Parse each number
     char *token = strtok(numbers, ",");
     while (token) {
         unsigned long value = strtoul(token, NULL, 0);
-        if (value < 100) {
-            qemu_set_register(*(uint32_t*)(buf +idx), value);
-        } else {
-            qemu_plugin_write_memory(value, (uint8_t *)&buf[idx], 4);
+        uint32_t fuzzed_input;
+        if (!fuzz_receive_input(hFuzzer, &fuzzed_input)) {
+            utils_die("Fuzzer couldn't read input");
+            return;
         }
-        idx +=4;
+        if (value < 100) {
+            qemu_set_register(fuzzed_input, value);
+        } else {
+            qemu_plugin_write_memory(value, fuzzed_input, 4);
+        }
+        idx +=1;
 		if (idx >= read_count) {
 				printf("[anchor] Not enough random bytes");
 				break;
 		}
         token = strtok(NULL, ",");
+        printf("idx %d\n", idx);
     }
+    // clear out unneeded input
+    while (idx < read_count) {
+        uint32_t temp;
+        if (!fuzz_receive_input(hFuzzer, &temp)) {
+            utils_die("Fuzzer couldn't read input");
+            return;
+        }
+
+        idx += 1;
+    }
+
+    printf("Done reading!\n");
 }

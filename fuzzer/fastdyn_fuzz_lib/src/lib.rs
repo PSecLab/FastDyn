@@ -14,11 +14,11 @@ use libafl::{
     events::SimpleEventManager,
     executors::{Executor, ExitKind, WithObservers},
     feedback_and_fast,
-    feedbacks::{CombinedFeedback, CrashFeedback, LogicFastAnd, MaxMapFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::RandPrintablesGenerator,
-    inputs::{HasTargetBytes, NopBytesConverter, ValueInput},
-    mutators::{BitFlipMutator, ByteDecMutator, BytesDeleteMutator, BytesInsertMutator, BytesRandInsertMutator, ByteRandMutator, BytesSetMutator, BytesSwapMutator, ByteFlipMutator, ByteIncMutator, havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
+    inputs::{HasTargetBytes, NopBytesConverter},
+    mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
     observers::StdMapObserver,
     schedulers::QueueScheduler,
     stages::{mutational::StdMutationalStage, AflStatsStage, CalibrationStage},
@@ -29,9 +29,10 @@ use libafl::{
 use std::fs::File;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write, BufReader};
-use std::ffi::c_void;
+use std::sync::mpsc::{Sender, Receiver, channel};
+use std::thread::JoinHandle;
 
-use libafl_bolts::{current_nanos, nonzero, rands::StdRand, tuples::{tuple_list, tuple_list_type}, AsSlice};
+use libafl_bolts::{current_nanos, nonzero, rands::StdRand, tuples::tuple_list, AsSlice};
 /// Coverage map with explicit assignments due to the lack of instrumentation
 static mut SIGNALS: [u8; 16] = [0; 16];
 static mut SIGNALS_PTR: *mut u8 = &raw mut SIGNALS as _;
@@ -50,82 +51,30 @@ fn signals_set(idx: usize) {
 const MAP_SIZE: usize = 65536; // same as AFL
 static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 
+pub struct FuzzHandleInternal {
+    pub input_rx: Receiver<u32>,        // C side receives inputs from Rust
+    pub pc_tx: Sender<Vec<u32>>,        // C side sends PCs back to Rust
+    pub thread: JoinHandle<()>,         // handle to the fuzzer thread
+}
 
-fn get_iteration_fuzz_counter() -> Result<(MmapMut, *mut u64, *mut u64), libafl::Error> {
-    let path = Path::new(SHM_PATH);
 
-    // Open or create the shared file
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&path)?;
-
-    // Ensure file is large enough for two 64-bit integers
-    file.set_len((2 * std::mem::size_of::<u64>()) as u64)?;
-
-    // Create shared writable mmap
-    let mut mmap = unsafe { MmapMut::map_mut(&file)? };
-
-    // Get raw pointers to the counters
-    let base = mmap.as_mut_ptr() as *mut u64;
-    let fuzz_counter = base;
-    let input_counter = unsafe { base.add(1) };
-
-    Ok((mmap, fuzz_counter, input_counter))
+#[repr(C)]
+pub struct FuzzHandle {
+    inner: *mut FuzzHandleInternal,
 }
 
 struct FastDynExecutor<S> {
     phantom: PhantomData<S>,
-	mmap: MmapMut,
-    fuzz_counter: *mut u64,
-    input_counter: *mut u64,
+    input_tx: Sender<u32>,
+    pc_rx: Receiver<Vec<u32>>,
 }
 
 impl<S> FastDynExecutor<S> {
-    pub fn new(_state: &S) -> Self {
-		let Ok((mmap, fuzz_counter, input_counter)) = get_iteration_fuzz_counter() else {
-				panic!("failed to initialize shared memory");
-		};
-		unsafe {
-            *input_counter = 0;
-        }
+    pub fn new(_state: &S, input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) -> Self {
         Self {
             phantom: PhantomData,
-			mmap,
-            fuzz_counter,
-            input_counter,
-        }
-    }
-
-	/// Increment the fuzz counter (number of total fuzz iterations)
-    pub fn inc_fuzz_counter(&mut self) {
-        unsafe {
-            *self.fuzz_counter += 1;
-        }
-    }
-
-    /// Increment the input counter (number of inputs processed in current iteration)
-    pub fn inc_input_counter(&mut self) {
-        unsafe {
-            *self.input_counter += 1;
-        }
-    }
-
-    /// Read the current fuzz counter
-    pub fn read_fuzz_counter(&self) -> u64 {
-        unsafe { *self.fuzz_counter }
-    }
-
-    /// Read the current input counter
-    pub fn read_input_counter(&self) -> u64 {
-        unsafe { *self.input_counter }
-    }
-
-    /// Reset both counters to 0
-    pub fn reset_counters(&mut self) {
-        unsafe {
-            *self.input_counter = 0;
+            input_tx,
+            pc_rx,
         }
     }
 }
@@ -147,41 +96,25 @@ where
 
         let target = input.target_bytes();
         let buf = target.as_slice();
+
+        // Number of 4-byte words
+        let count = (buf.len() + 3) / 4;
+
+        // Send count first
+        self.input_tx.send(count as u32).unwrap();
+        println!("We have {} values to send!", count);
+
+        // Send each 4-byte chunk
+        for chunk in buf.chunks(4) {
+            let mut padded = [0u8; 4];
+            padded[..chunk.len()].copy_from_slice(chunk);
+            let word = u32::from_le_bytes(padded);
+            self.input_tx.send(word).unwrap();
+        }
+
 //		println!("{:?}", buf);
 
-		// 1- Dump input for fastdyn
-		let mut file = File::create("/tmp/input_fastdyn")?;
-		file.write_all(buf)?;
-		
-
-		// Signal FastDyn
-		self.inc_input_counter();
-
-
-		// 2- Wait for fastdyn signal, veryslow but its fine
-		while(self.read_input_counter() > self.read_fuzz_counter()) {};
-		
-
-
-		// 3- Read coverage
-		// Open and read the file
-    	let file = File::open("/data/fastdyn/trace_log.bin")?;
-    	let mut reader = BufReader::new(file);
-
-	    // Read all bytes
-	    let mut data = Vec::new();
-		reader.read_to_end(&mut data).map_err(|e| libafl::Error::unknown(format!("read_to_end: {e}")))?;
-
-
-	    // Interpret as little-endian u32s
-	    if data.len() % 4 != 0 {
-	        eprintln!("Warning: file size ({}) not multiple of 4", data.len());
-	    }
-
-	    let pcs: Vec<u32> = data
-    	    .chunks_exact(4)
-        	.map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-	        .collect();
+        let pcs = self.pc_rx.recv().unwrap();
 
  //   	println!("Loaded {} PCs", pcs.len());
 
@@ -236,99 +169,7 @@ where
     }
 }
 
-/*  Ignore these, this was from trying to explicitly type all of the AFL objects to return, will remove once library works
-type FuzzInput = ValueInput<Vec<u8>>;
-type FuzzObserver = StdMapObserver<'static, u8, false>;
-type FuzzFeedback = MaxMapFeedback<FuzzObserver, FuzzObserver>;
-type FuzzObjective = CombinedFeedback<
-    CrashFeedback,
-    FuzzFeedback,
-    LogicFastAnd
->;
-type FuzzState = StdState<
-    InMemoryCorpus<FuzzInput>,
-    FuzzInput,
-    StdRand,
-    OnDiskCorpus<FuzzInput>
->;
-type FuzzExecutor = WithObservers<
-    FastDynExecutor<FuzzState>,  // E
-    FuzzInput,                   // I
-    (FuzzObserver,),             // OT
-    FuzzState                    // S
->;
-type FuzzScheduler = QueueScheduler;
-type FuzzFuzzer = StdFuzzer<
-    FuzzScheduler,   // CS
-    FuzzFeedback,    // F
-    FuzzInput,       // IC
-    FuzzInput,       // IF
-    FuzzObjective    // OF
->;
-type FuzzMgr = SimpleEventManager<
-    FuzzInput,                   // I
-    SimpleMonitor<fn(&str)>,     // MT
-    FuzzState                    // S
->;
-type FuzzStatsStage = AflStatsStage<
-    InMemoryCorpus<FuzzInput>,  // C
-    FuzzExecutor,               // E
-    FuzzMgr,                    // EM
-    FuzzInput,                  // I
-    FuzzObserver,               // O
-    FuzzState,                  // S
-    FuzzFuzzer                  // Z
->;
-type FuzzStages = tuple_list_type!(
-    CalibrationStage<
-        FuzzFeedback,    // C
-        FuzzExecutor,    // E
-        FuzzInput,       // I
-        FuzzObserver,    // O
-        (FuzzObserver,), // OT
-        FuzzState        // S
-    >,
-    StdMutationalStage<
-        FuzzExecutor,
-        FuzzMgr,
-        FuzzInput,
-        FuzzInput,
-        HavocScheduledMutator<tuple_list_type!(
-            BitFlipMutator,
-            ByteFlipMutator,
-            ByteIncMutator,
-            ByteDecMutator,
-            ByteRandMutator,
-            BytesDeleteMutator,
-            BytesInsertMutator,
-            BytesRandInsertMutator,
-            BytesSetMutator,
-            BytesSwapMutator
-        )>,
-        FuzzState,
-        FuzzFuzzer
-    >,
-    FuzzStatsStage
-);
-pub struct FastDynFuzzer {
-    pub fuzzer: FuzzFuzzer,
-    pub stages: FuzzStages,
-    pub executor: FuzzExecutor,
-    pub state: FuzzState,
-    pub mgr: FuzzMgr,
-}
-*/
-
-pub struct FastDynFuzzer {
-    pub fuzzer: StdFuzzer,
-    pub stages: (),
-    pub executor: FastDynExecutor,
-    pub state: StdState,
-    pub mgr: SimpleEventManager,
-}
-
-// Create fuzzer object
-fn build_fuzzer() -> FastDynFuzzer {
+pub fn fuzzer_thread_main(input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) {
     // Create an observation channel using the signals map
     let observer = unsafe { StdMapObserver::new("cvg", &mut CVG) };
 
@@ -397,7 +238,7 @@ fn build_fuzzer() -> FastDynFuzzer {
         .unwrap();
 
     // Create the executor for an in-process function with just one observer
-    let executor = FastDynExecutor::new(&state);
+    let executor = FastDynExecutor::new(&state, input_tx, pc_rx);
 
     let mut executor = WithObservers::new(executor, tuple_list!(observer));
 
@@ -417,32 +258,105 @@ fn build_fuzzer() -> FastDynFuzzer {
         stats_stage
     );
 
-    FastDynFuzzer {
-        fuzzer,
-        stages,
-        executor,
-        state,
-        mgr,
+    fuzzer
+        .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
+        .expect("Error in the fuzzing loop");
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_init() -> *mut FuzzHandle {
+    use std::sync::mpsc::channel;
+
+    // Channels for simple u32 / Vec<u32> communication
+    let (input_tx, input_rx) = channel::<u32>();          // Rust → C
+    let (pc_tx, pc_rx) = channel::<Vec<u32>>();           // C → Rust
+
+    // Spawn the fuzzer thread and move the correct ends into it
+    let thread = std::thread::spawn(move || {
+        fuzzer_thread_main(input_tx, pc_rx);
+    });
+
+    // Store the opposite ends for the C side
+    let internal = Box::new(FuzzHandleInternal {
+        input_rx,   // C receives input
+        pc_tx,      // C sends PCs
+        thread,
+    });
+
+    let handle = Box::new(FuzzHandle {
+        inner: Box::into_raw(internal),
+    });
+
+    Box::into_raw(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_receive_input(
+    handle_ptr: *mut FuzzHandle,
+    out_input: *mut u32,
+) -> u32 {
+    if handle_ptr.is_null() {
+        return 0;
+    }
+
+    let internal = unsafe { &mut *(*handle_ptr).inner };
+
+    // Block until the fuzzer thread sends an input
+    match internal.input_rx.recv() {
+        Ok(input) => {
+            unsafe {
+                *out_input = input;
+            }
+            1 // success
+        }
+        Err(_) => 0, // channel closed / error
     }
 }
 
-// Initialize the fuzzer, return a handle to C to use for fuzzing
 #[no_mangle]
-pub extern "C" fn fuzz_init() -> *mut FastDynFuzzer {
-    let fuzzer = Box::new(build_fuzzer());
-    Box::into_raw(fuzzer)
+pub extern "C" fn fuzz_submit_pcs(
+    handle_ptr: *mut FuzzHandle,
+    pcs_ptr: *const u32,
+    pcs_len: u32,
+) -> u32 {
+    if handle_ptr.is_null() {
+        return 0;
+    }
+
+    let internal = unsafe { &mut *(*handle_ptr).inner };
+
+    if pcs_ptr.is_null() {
+        return 0;
+    }
+
+    // Build Vec<u32> from C buffer
+    let slice = unsafe { std::slice::from_raw_parts(pcs_ptr, pcs_len as usize) };
+    let vec = slice.to_vec();
+
+    match internal.pc_tx.send(vec) {
+        Ok(_) => 1, // success
+        Err(_) => 0,
+    }
 }
 
-// Generate one input for C
+// AFL won't stop looping, so I think this will just freeze the program, but we shouldn't need to free, fuzzer should be lifetime
 #[no_mangle]
-pub extern "C" fn fuzz_one_c(ptr: *mut FastDynFuzzer) -> u32 {
-    let fuzz = unsafe { &mut *ptr };
+pub extern "C" fn fuzz_free(handle_ptr: *mut FuzzHandle) {
+    if handle_ptr.is_null() {
+        return;
+    }
 
-    // Run target once
-    fuzz.fuzzer
-        .fuzz_one(&mut fuzz.stages, &mut fuzz.executor, &mut fuzz.state, &mut fuzz.mgr)
-        .unwrap();
+    unsafe {
+        // Take ownership of the outer handle
+        let handle_box = Box::from_raw(handle_ptr);
+        // Take ownership of the internal data
+        let mut internal = Box::from_raw(handle_box.inner);
 
-    // Get the generated input back and return, simple to do once problem of interfacing with C is resolved
-    1
+        // Dropping pc_tx and input_rx will eventually cause the fuzzer thread to see closed channels.
+
+        // Join the fuzzer thread
+        let _ = internal.thread.join();
+        // `internal` is dropped here
+    }
 }
+

@@ -759,6 +759,13 @@ static uint32_t *g_observed_values = NULL; // Buffer for new values
 static size_t g_observed_count = 0;        // Number of values currently buffered
 static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
 
+uint32_t **get_pobserved_values() {
+    return &g_observed_values;
+}
+size_t *get_pobserved_count() {
+    return &g_observed_count;
+}
+
 void add_observed_value(uint32_t val) {
     if (g_observed_count >= g_observed_capacity) {
         // Grow the buffer (double the capacity, or start with initial size)
