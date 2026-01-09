@@ -759,6 +759,7 @@ static uint32_t *g_observed_values = NULL; // Buffer for new values
 static size_t g_observed_count = 0;        // Number of values currently buffered
 static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
 
+// These two functions are just for enabling sharing code coverage from virtuals/fuzz.c, once fuzzer is in a final spot a cleaner solution will be implemented
 uint32_t **get_pobserved_values() {
     return &g_observed_values;
 }
