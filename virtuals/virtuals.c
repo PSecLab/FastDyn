@@ -72,6 +72,7 @@ cb_entry_t cb_registry[] = {
     { "start_advancing_sim", start_advancing_sim},
     // chibios debugging
     { "chDbgContextSwitching", chDbgContextSwitching},
+    { "print_r1", print_r1},
     // storage
     { "storage_read_block", storage_read_block},
     { "storage_write_block", storage_write_block},

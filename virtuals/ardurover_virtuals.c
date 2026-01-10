@@ -704,8 +704,8 @@ HMC5843RawData convert_to_hmc5843(SimulatorMagnetometer sim_data) {
     // int mag_z_raw = -1 * temp_y;   // raw Y -> Z (negated)
 
     int mag_x_raw = temp_x;
-    int mag_y_raw = -1 * temp_y;
-    int mag_z_raw = -1 * temp_z;
+    int mag_y_raw = temp_y;
+    int mag_z_raw = temp_z;
 
     // Clamp to ±2048
     mag_x_raw = constrain_int16(mag_x_raw, -2048, 2047);
@@ -714,9 +714,9 @@ HMC5843RawData convert_to_hmc5843(SimulatorMagnetometer sim_data) {
 
     // y and z are negated because +z is up and +y is left from gazebo
     HMC5843RawData raw = {
-        .mag_x_raw = (int16_t)mag_x_raw,
-        .mag_y_raw = (int16_t)(-1 * mag_y_raw),
-        .mag_z_raw = (int16_t)(-1 * mag_z_raw)
+        .mag_x_raw = (int16_t)(-1 * mag_x_raw),
+        .mag_y_raw = (int16_t)(mag_y_raw),
+        .mag_z_raw = (int16_t)(mag_z_raw)
         // .mag_y_raw = (int16_t)(mag_y_raw),
         // .mag_z_raw = (int16_t)(mag_z_raw)
     };
@@ -822,8 +822,8 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
         if (compass_read_count % 10 == 0) {
             double average_interval_ms = (compass_total_elapsed_time_s / compass_read_count) * 1000.0;
             double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
-            // printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
-                //    average_interval_ms, frequency_hz, compass_read_count);
+            printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
+                   average_interval_ms, frequency_hz, compass_read_count);
         }
     }
     compass_read_count++;
@@ -1144,6 +1144,9 @@ void gcs_send_mavlink_message(unsigned int cpu_index, void *udata) {
     qemu_set_register(lr, ARM_V7M_PC);
 }
 
+int64_t last_switch_out_time_ns = 0;
+int64_t last_switch_in_time_ns = 0;
+
 /**
  * TODO: Put the address that this needs to be placed at
  * TODO: Verify the offsets used below
@@ -1169,7 +1172,17 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
 
     printf("Switching context: %s -> %s\n", thread2_name, thread1_name);
 
-    printf("\nRegisters before switch:\n");
+    if (strcmp(thread2_name, "I2C1") == 0) {
+        // switching out of I2C1 thread
+        last_switch_out_time_ns = qemu_plugin_get_virtual_timer();
+    } else if (strcmp(thread1_name, "I2C1") == 0) {
+        // switching into I2C1 thread
+        last_switch_in_time_ns = qemu_plugin_get_virtual_timer();
+        int64_t elapsed_ns = last_switch_in_time_ns - last_switch_out_time_ns;
+        printf("I2C1 thread was out for %ld us\n", elapsed_ns / 1000);
+    }
+
+    // printf("\nRegisters before switch:\n");
 
     // uint32_t thread1_ctx_offset = thread1 + 0xc;
     // uint32_t thread2_ctx_offset = thread2 + 0xc;
@@ -1191,6 +1204,11 @@ void chDbgContextSwitching(unsigned int cpu_index, void *udata) {
     // printf("LR: 0x%08x -> 0x%08x\n", ctx2.intctx.lr, ctx1.intctx.lr);
 
     printf("\n");
+}
+
+void print_r1(unsigned int cpu_index, void *udata) {
+    uint32_t r1 = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    printf("(Delay) R1: 0x%08X\n", r1);
 }
 
 
