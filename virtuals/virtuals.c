@@ -150,6 +150,15 @@ void kick_irq(void *opaque) {
     qemu_plugin_raise_irq(irq_num, false);
 }
 
+// void periodic_irq_func(void *arg) {
+//     int irq_num = *((int *)arg);
+
+//     while (1) {
+//         kick_irq((void *)&irq_num);
+//         usleep(100); // Sleep for 0.1 ms
+//     }
+// }
+
 void raise_periodic_irq(unsigned int cpu_index, void *udata) {
     // Interpret udata as a string
     const char *str = (const char *)udata;
@@ -161,6 +170,13 @@ void raise_periodic_irq(unsigned int cpu_index, void *udata) {
         irq_num = num;
     }
     qemu_plugin_timer_new_period_ns(kick_irq, (void *)&irq_num, 1e6); // every 1 ms
+    // create thread that raises irq every 1 ms
+    // pthread_t periodic_irq_thread;
+    // if (!pthread_create(&periodic_irq_thread, NULL, (void *(*)(void *))periodic_irq_func, (void *)&irq_num)) {
+    //     pthread_detach(periodic_irq_thread);
+    // } else {
+    //     fprintf(stderr, "Failed to create periodic IRQ thread\n");
+    // }
 }
 
 void pulseirq(unsigned int cpu_index, void *udata) {

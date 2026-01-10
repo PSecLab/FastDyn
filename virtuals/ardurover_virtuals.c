@@ -296,7 +296,7 @@ static const float wheel_radius = 0.069f; // meters
 /**
  * @brief Initialize wheel encoder parameters
  *
- * @requirements
+ * @requirements.init_wheel_encoder
  *
  * AP_WheelEncoder:
  *   _type:
@@ -331,7 +331,7 @@ void init_wheel_encoder(unsigned int cpu_index, void *udata)
  * This function reads the current position of the wheel encoders from Gazebo
  * and updates the corresponding fields in the ArduRover simulation.
  *
- * @requirements
+ * @requirements.copy_wheel_encoder_state_to_frontend
  *
  * AP_WheelEncoder_Backend:
  *   _frontend:
@@ -752,7 +752,7 @@ magnetometer_calibration_t mag_cal = {
 /**
  * @brief Calibration no-op to write valid data and skip calibration
  *
- * @requirements
+ * @requirements.compass_calibrate
  *
  * AP_Compass_HMC5843:
  *   _scaling:
@@ -822,8 +822,8 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
         if (compass_read_count % 10 == 0) {
             double average_interval_ms = (compass_total_elapsed_time_s / compass_read_count) * 1000.0;
             double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
-            printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
-                   average_interval_ms, frequency_hz, compass_read_count);
+            // printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
+                //    average_interval_ms, frequency_hz, compass_read_count);
         }
     }
     compass_read_count++;
