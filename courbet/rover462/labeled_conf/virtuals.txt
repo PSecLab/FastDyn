@@ -27,3 +27,5 @@ _ZN13AP_Filesystem4openEPKcib ap_fs_open *
 _ZN13AP_Filesystem5fsyncEi ap_fs_fsync *
 _ZN13AP_Filesystem5writeEiPKvm ap_fs_write *
 _ZN13AP_Filesystem5closeEi ap_fs_close *
+__port_switch chDbgContextSwitching
+0x08143f9a print_r1

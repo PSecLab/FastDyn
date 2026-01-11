@@ -278,6 +278,19 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
     // Hardcoded GPS week (replace with real computation if desired)
     uint16_t gps_week = 15;
 
+    // print gps yaw for debugging
+    // fprintf(stderr, "[GPS_YAW]: %.2f degrees\n", gps->yaw_deg);
+
+    // calculate yaw from velocity components
+    float yaw_rad = atan2f(gps->velocity_e, gps->velocity_n);
+    float yaw_deg = yaw_rad * (180.0f / 3.14159265f);
+    if (yaw_deg < 0) {
+        yaw_deg += 360.0f;
+    }
+
+    // print calculated yaw
+    fprintf(stderr, "[CALCULATED_YAW]: %.2f degrees\n", yaw_deg);
+
     // printf("[GPS_YAW]: %.2f degrees\n", gps->yaw_deg);
 
     // Pack the MAVLink GPS_INPUT message (21 arguments)
@@ -303,7 +316,7 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
         0.0f,                              // horiz_accuracy
         0.0f,                              // vert_accuracy
         gps->satellites_visible,           // satellites_visible
-        (int)(gps->yaw_deg * 100)          // yaw in centi-degrees
+        (int)(yaw_deg * 100)          // yaw in centi-degrees
         // 100                                // 1 degree fixed yaw for testing
         // 2200                               // yaw in centi-degrees (fixed to 2200 for testing)
     );

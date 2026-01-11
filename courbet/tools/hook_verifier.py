@@ -47,7 +47,7 @@ def get_offset_size(class_name: str, field_name: str):
     raise KeyError(f"[{RED_TEXT}FAIL{END_COLOR}]     Field '{field_name}' not found in class '{class_name}'")
 
 
-def injest_doxygen_requirements(virtuals_path: str) -> (bool, dict):
+def injest_doxygen_requirements(virtuals_path: str, virtuals_txt_file: str) -> (bool, dict):
     """Injest Doxygen requirements for verification of slice-based execution"""
     requirements = {}
     try:
@@ -65,6 +65,18 @@ def injest_doxygen_requirements(virtuals_path: str) -> (bool, dict):
     for line in lines:
         line = line.strip()
         if line.startswith("* @requirements"):
+            # Extract the requirement name if present "* @requirements.<name>"
+            name = line[len("* @requirements."):].strip()
+            print(f"Found requirements section: {name}")
+            relevant = False
+            with open(virtuals_txt_file, 'r') as txt_file:
+                for txt_line in txt_file:
+                    if name in txt_line:
+                        relevant = True
+                        break
+            if not relevant:
+                print(f"Skipping irrelevant requirements section: {name}")
+                continue
             inside_requirements = True
             requirements[index] = []
         elif line.startswith("* @end_requirements"):
@@ -139,7 +151,7 @@ def verify_layout(requirements):
 
 
 
-def entry(virtuals_path: str):
+def entry(virtuals_path: str, virtuals_txt_file: str):
     gdb.write(
         "\n"
         "/**\n"
@@ -156,7 +168,7 @@ def entry(virtuals_path: str):
         " */\n\n"
     )
 
-    success, requirements = injest_doxygen_requirements(virtuals_path=virtuals_path)
+    success, requirements = injest_doxygen_requirements(virtuals_path=virtuals_path, virtuals_txt_file=virtuals_txt_file)
 
     if not success:
         gdb.write("\n")
@@ -182,13 +194,13 @@ class CourbetVerify(gdb.Command):
     def invoke(self, arg, _):
         argv = gdb.string_to_argv(arg)
 
-        if len(argv) != 1:
+        if len(argv) != 2:
             gdb.write(
-                f"[{RED_TEXT}FAIL{END_COLOR}]     Usage: courbet_verify <virtuals_file_path>\n",
+                f"[{RED_TEXT}FAIL{END_COLOR}]     Usage: courbet_verify <virtuals_file_path> <virtuals_txt_file_path>\n",
                 gdb.STDERR,
             )
             return
 
-        entry(argv[0])
+        entry(argv[0], argv[1])
 
 CourbetVerify()
