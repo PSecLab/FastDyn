@@ -48,12 +48,12 @@ logger_content = """
 
 [[CPU.virtuals]]
 at = "0x8003940"
-instruction = “anchor”
+instruction = "anchor"
 args = ["/tmp/input_fastdyn:0x0"]
 
 [[CPU.virtuals]]
 at = "0x800395e"
-instruction = “assert”
+instruction = "assert"
 args = ["*0x8003940"]
 
 

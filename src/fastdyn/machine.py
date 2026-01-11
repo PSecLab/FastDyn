@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Union
 import uuid
 
 
@@ -10,7 +10,7 @@ import uuid
 @dataclass
 class VirtualInstruction:
     """Synthetic instruction injected at a concrete instruction address."""
-    at: int
+    at: Union[int, str]
     instruction: str
     args: List[str] = field(default_factory=list)
 
@@ -18,7 +18,7 @@ class VirtualInstruction:
 @dataclass
 class InstructionModifier:
     """Runtime instruction-level patch."""
-    at: int
+    at: Union[int, str]
     patch: str
 
 

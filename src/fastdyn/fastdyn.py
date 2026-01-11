@@ -5,19 +5,29 @@ See test/fastdyn_package/example.py
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Tuple, Any, Dict, Optional
-import os, pathlib
+from typing import Any, Dict, Optional, Tuple, Union, Sequence
+import os, sys, pathlib
 import subprocess
+import logging
 
 from . import qemu_target
 from .utils import helper
+
+from . import fastdyn_log as fastdyn_log_conf
+from .utils import parse_config as parse_helper
+
+from .machine import VirtualInstruction
+
+log = logging.getLogger(__name__)
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
+
 
 class Fastdyn:
     def __init__(self):
         self.machines = {}
 
-    def create_machine(self, machine_name):
-        machine = Machine(machine_name)
+    def create_machine(self, machine_name, platform):
+        machine = Machine(machine_name, platform)
         self.machines[machine_name] = machine
 
         return machine
@@ -39,18 +49,22 @@ class Fastdyn:
         qemu_target.kill_qemu_process()
 
 class Machine:
-    def __init__(self, machine_name):
+    def __init__(self, machine_name, platform_name):
         self.id: str = field(default_factory=lambda: str(uuid.uuid4()))
         self.name: Optional[str] = machine_name
         self.cpus = []
         self.memories = {}
         self.devices = {}
         self.models = {}
+        self.platform = platform_name
+
+        #optional params -- useful for svd
+        self.irq_map = {}
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
-    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, platform):
-        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, platform)
+    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor):
+        cpu = CPU(arch, machine, cpu, binary, init_nsvtor)
         self.cpus.append(cpu)
         return cpu
 
@@ -85,16 +99,21 @@ class Machine:
     def list_devices(self):
         pass
 
+    def add_cmsis_svd(self, cmsis_svd):
+        fastdyn_log.info("Parsing the passed directory path for the CMSIS SVD")
+        svd, is_svd_file = parse_helper.discover_svd_files(cmsis_svd)
+        if not is_svd_file:
+                svd_device = parse_helper.get_svd_device(svd, self.platform)
 
+        fastdyn_log.info("Creating IRQ Map using the CMSIS SVD")
+        irq_map = parse_helper.create_svd_irq_map(svd_device)
 
+        #add to each cpu for easy access in cpu
+        self.irq_map = irq_map
+        for cpu in self.cpus:
+            cpu.irq_map = irq_map
 
-@dataclass
-class VirtualInstruction:
-    """Synthetic instruction injected at a concrete instruction address."""
-    at: int
-    instruction: str
-    args: List[str] = field(default_factory=list)
-
+        return True
 
 @dataclass
 class InstructionModifier:
@@ -103,14 +122,13 @@ class InstructionModifier:
     patch: str
 
 class CPU:
-    def __init__(self, arch, machine, cpu, binary, init_nsvtor, platform):
+    def __init__(self, arch, machine, cpu, binary, init_nsvtor):
         """One CPU instance belonging to a machine."""
         self.arch = arch
         self.machine = machine
         self.cpu = cpu
         self.binary = binary
         self.init_nsvtor: int = init_nsvtor
-        self.platform = platform
 
         self.qemu_path: str = "qemu-system-arm"
 
@@ -139,72 +157,53 @@ class CPU:
                                             # level = DEBUG
                                             # output = stderr
                                             """
+        self.symbol_dict = None
+        self.irq_map = None
 
+    def add_virtual_instruction(self, vi: Union["VirtualInstruction", str, Sequence[Union["VirtualInstruction", str]]]) -> bool:
+        items = vi if isinstance(vi, (list, tuple)) else [vi]
 
-    def add_virtual_instruction(self, vi: VirtualInstruction) -> bool:
-        field_name = "virtuals"
+        out: list[str] = []
+        for item in items:
+            ok, parsed = parse_helper.parse_vi(item)
+            if not ok or parsed is None:
+                fastdyn_log.error("Unable to parse Virtual Instruction")
+                return False
 
-        if not hasattr(self, field_name):
-            print(f"Unknown CPUConfig field: {field_name}")
-            return False
+            try:
+                resolved = parse_helper.resolve_vi(parsed, symbol_map=self.symbol_dict, irq_map=self.irq_map)
+            except Exception as e:
+                fastdyn_log.error(f"Unable to resolve Virtual Instruction: {e}")
+                return False
 
-        try:
-            lst = getattr(self, field_name)
+            out.append(parse_helper.vi_to_string(resolved))
 
-            # initialize if needed
-            if lst is None:
-                lst = []
-                setattr(self, field_name, lst)
+        self.virtuals.extend(out)
+        return True
 
-            if not isinstance(lst, list):
-                raise ValueError(f"CPUConfig.{field_name} is not a list (got {type(lst)})")
+    def add_modifier(
+        self,
+        mod: Union["InstructionModifier", str, Sequence[Union["InstructionModifier", str]]]
+    ) -> bool:
+        items = mod if isinstance(mod, (list, tuple)) else [mod]
 
-            # build: "at instruction args"
-            at_str = hex(vi.at) if isinstance(vi.at, int) else str(vi.at)
+        out: list[str] = []
+        for item in items:
+            ok, parsed = parse_helper.parse_mod(item)
+            if not ok or parsed is None:
+                fastdyn_log.error("Unable to parse Instruction Modifier")
+                return False
 
-            args = vi.args if vi.args else []
-            args_str = " ".join(str(a) for a in args).strip()
+            try:
+                resolved = parse_helper.resolve_mod(parsed, symbol_map=self.symbol_dict)
+            except Exception as e:
+                fastdyn_log.error(f"Unable to resolve Instruction Modifier: {e}")
+                return False
 
-            line = f"{at_str} {vi.instruction}"
-            if args_str:
-                line += f" {args_str}"
+            out.append(parse_helper.mod_to_string(resolved))
 
-            lst.append(line)
-            return True
-
-        except (AttributeError, TypeError, ValueError) as e:
-            raise ValueError(f"Unable to add virtual instruction {vi!r}: {e}")
-
-    def add_modifier(self, mod: InstructionModifier) -> bool:
-        field_name = "modifiers"
-
-        if not hasattr(self, field_name):
-            print(f"Unknown CPUConfig field: {field_name}")
-            return False
-
-        try:
-            lst = getattr(self, field_name)
-
-            # initialize if needed
-            if lst is None:
-                lst = []
-                setattr(self, field_name, lst)
-
-            if not isinstance(lst, list):
-                raise ValueError(f"CPUConfig.{field_name} is not a list (got {type(lst)})")
-
-            # build: "at patch"
-            at_str = hex(mod.at) if isinstance(mod.at, int) else str(mod.at)
-            patch_str = str(mod.patch).strip()
-
-            line = f"{at_str} {patch_str}" if patch_str else f"{at_str}"
-
-            lst.append(line)
-            return True
-
-        except (AttributeError, TypeError, ValueError) as e:
-            raise ValueError(f"Unable to add instruction modifier {mod!r}: {e}")
-
+        self.modifiers.extend(out)
+        return True
 
     def update_cpu_param(self, param, val):
         if not hasattr(self, param):
@@ -216,6 +215,16 @@ class CPU:
         except (AttributeError, TypeError, ValueError) as e:
             print(f"Unable to set '{param}' to {val!r}: {e}")
             return False
+
+    def add_map_file(self, map_file):
+        #parse the map file to create a symbol lookup
+        if os.path.exists(map_file):
+            fastdyn_log.info(f"Parsing Config file: {map_file}")
+            self.symbol_dict = parse_helper.load_symbol_addresses(map_file)
+        else:
+            fastdyn_log.error(f"Map file Path not found")
+            return False
+        return True
 
 @dataclass
 class DeviceHandler:

@@ -19,6 +19,7 @@ from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 from .utils import helper
 from . import machine_apis
+from .fastdyn import Fastdyn
 
 from dataclasses import asdict
 

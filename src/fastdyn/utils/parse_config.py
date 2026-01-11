@@ -4,12 +4,14 @@ import tomli
 import sys
 
 from . import helper
-from typing import Optional, Dict, Any, Iterable, Tuple
-import os
+from typing import Optional, Dict, Any, Iterable, Tuple, Union
+import os, sys
+import re
 from .. import fastdyn_log as fastdyn_log_conf
 from ..machine import Machine, CPUConfig, VirtualInstruction, InstructionModifier, DeviceSection, DeviceModelDefaults, DeviceConfig, DeviceHandler, SlaveDevice
 from .database import bus_rules
 from .database.bus_rules import BUS_RULES
+from cmsis_svd.parser import SVDParser
 
 
 log = logging.getLogger(__name__)
@@ -151,35 +153,6 @@ def convert_config_file(input_lines: list[str], symbols_dict: Optional[dict]) ->
         output_lines.append(final_line)
 
     return output_lines
-
-
-def create_svd_irq_map(svd_device):
-    name_map = {}
-    for peripheral in svd_device.peripherals:
-        if peripheral.interrupts:
-            for interrupt in peripheral.interrupts:
-                # The key is the interrupt name, the value is the number
-                name_map[interrupt.name] = interrupt.value
-    return name_map
-
-def load_symbol_addresses(filename: str) -> dict[str, int]:
-    """
-    Reads a file with lines of format: symbol:address
-    and returns a dictionary mapping symbol -> address.
-    """
-    symbols = {}
-    with open(filename, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line or ":" not in line:
-                continue
-            symbol, address = line.split(":", 1)  # split only once
-            address = int(address.strip(), 16)
-            # check if address is thumb (odd)
-            if address & 1:
-                address -= 1  # make even
-            symbols[symbol.strip()] = address
-    return symbols
 
 def validate_slave_params(
     *,
@@ -390,3 +363,415 @@ def parse_devices_info(toml_config: Dict[str, Any]) -> "DeviceSection":
         out.devices[str(dev_name)] = cfg
 
     return out
+
+'''
+Helper functions for symbol parsing
+'''
+def load_symbol_addresses(filename: str) -> dict[str, int]:
+    """
+    Reads a file with lines of format: symbol:address
+    and returns a dictionary mapping symbol -> address.
+    """
+    symbols = {}
+    with open(filename, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            symbol, address = line.split(":", 1)  # split only once
+            address = int(address.strip(), 16)
+            # check if address is thumb (odd)
+            if address & 1:
+                address -= 1  # make even
+            symbols[symbol.strip()] = address
+    return symbols
+
+'''
+Helper functions to parse the CMSIS-SVD
+'''
+
+def discover_svd_files(svd_path: str):
+    """
+    Discover SVD files from a user-provided path.
+
+    Args:
+        svd_path: Path to either:
+            - a single .svd file, or
+            - a directory to recursively search for .svd files
+
+    Returns:
+        svd_map: dict[str, str] mapping device_name -> absolute path to .svd
+    """
+    if not svd_path:
+        fastdyn_log.error("No SVD path provided.")
+        sys.exit(1)
+
+    svd_path = os.path.expanduser(svd_path)
+    svd_path = os.path.abspath(svd_path)
+
+    if not os.path.exists(svd_path):
+        fastdyn_log.error(f"SVD path does not exist: {svd_path}")
+        sys.exit(1)
+
+    is_file = False
+    svd_map = {}
+
+    # Case 1: user provided a single .svd file
+    if os.path.isfile(svd_path):
+        if not svd_path.lower().endswith(".svd"):
+            fastdyn_log.error(f"Provided file is not an .svd: {svd_path}")
+            sys.exit(1)
+
+        device_name = os.path.splitext(os.path.basename(svd_path))[0]
+        svd_map[device_name] = svd_path
+        fastdyn_log.info("Discovered 1 SVD file (single-file mode).")
+        is_file = True
+        return svd_map, is_file
+
+    # Case 2: user provided a directory; recursively find .svd files
+    if not os.path.isdir(svd_path):
+        fastdyn_log.error(f"SVD path is neither a file nor a directory: {svd_path}")
+        sys.exit(1)
+
+    for root, _, files in os.walk(svd_path):
+        for filename in files:
+            if filename.lower().endswith(".svd"):
+                device_name = os.path.splitext(filename)[0]
+                full_path = os.path.join(root, filename)
+
+                if device_name in svd_map:
+                    fastdyn_log.debug(
+                        f"Duplicate device name '{device_name}': "
+                        f"keeping '{svd_map[device_name]}', ignoring '{full_path}'."
+                    )
+                    continue
+
+                svd_map[device_name] = os.path.abspath(full_path)
+
+    fastdyn_log.info(f"Automatically discovered {len(svd_map)} SVD files under: {svd_path}")
+    return svd_map, is_file
+
+def get_svd_device(svd_file_map, platform):
+    parser = SVDParser.for_xml_file(svd_file_map[platform])
+    svd_device = parser.get_device()
+    return svd_device
+
+def create_svd_irq_map(svd_device):
+    name_map = {}
+    for peripheral in svd_device.peripherals:
+        if peripheral.interrupts:
+            for interrupt in peripheral.interrupts:
+                # The key is the interrupt name, the value is the number
+                name_map[interrupt.name] = interrupt.value
+    return name_map
+
+'''
+Helper functions to parse the Virtual Instructions
+'''
+
+def parse_vi(vi) -> Tuple[bool, Optional["VirtualInstruction"]]:
+    """
+    Accepts either:
+      - a string formatted as: "<at> <instruction> [args...]"
+        where <at> can be a symbol, decimal, or hex (with/without 0x)
+      - a VirtualInstruction object
+
+    Returns:
+      (ok, VirtualInstruction | None)
+    """
+    if isinstance(vi, VirtualInstruction):
+        return True, vi
+
+    if not isinstance(vi, str):
+        fastdyn_log.error(f"Only string and VirtualInstruction format accepted (got {type(vi).__name__})")
+        return False, None
+
+    s = vi.strip()
+    if not s:
+        return False, None
+
+    parts = s.split()
+    if len(parts) < 2:
+        fastdyn_log.error(f"Invalid VI line (need: '<at> <instruction> [args...]'): {vi!r}")
+        return False, None
+
+    at_tok, instr = parts[0], parts[1]
+    args = parts[2:]
+
+    tok = at_tok.strip()
+    at_val: Union[int, str]
+    if tok.lower().startswith("0x"):
+        try:
+            at_val = int(tok, 16)
+        except ValueError:
+            at_val = tok
+    elif tok.isdigit():
+        at_val = int(tok, 10)
+    elif re.fullmatch(r"[0-9a-fA-F]+", tok):  # hex without 0x
+        try:
+            at_val = int(tok, 16)
+        except ValueError:
+            at_val = tok
+    else:
+        at_val = tok
+
+    return True, VirtualInstruction(at=at_val, instruction=instr, args=args)
+
+def resolve_vi(vi: VirtualInstruction,
+               irq_map: Dict[str, Any],
+               symbol_map: Dict[str, Any]) -> "VirtualInstruction":
+    """
+    Resolve a VirtualInstruction using irq_map and symbol_map.
+
+    Rules:
+      - at:
+          * if int: keep
+          * if number-ish string (0x.. / decimal / bare-hex): convert to int
+          * else: resolve via symbol_map (supports sym+/-offset), else raise KeyError
+          * if resolved from symbol_map: clear Thumb bit (addr&1 -> addr-1) before applying offset
+      - args:
+          * if looks like pointer/mem/reg: keep
+          * else: try irq_map exact match -> numeric string
+          * else: try symbol_map (supports sym+/-offset) -> hex string
+          * else: keep as-is
+      - raise_irq:
+          * first arg must be number-ish after resolution, else raise ValueError
+      - returns: new VirtualInstruction
+    """
+    sym_off_re = re.compile(r"^(.+?)([+-])(0x[0-9a-fA-F]+|\d+)$")
+    hex_noprefix_re = re.compile(r"^[0-9a-fA-F]+$")
+    reg_re = re.compile(r"^(r([0-9]|1[0-5])|sp|lr|pc|xpsr|apsr|ipsr|epsr)$", re.IGNORECASE)
+
+    def is_numberish(tok: str) -> bool:
+        t = tok.strip()
+        if not t:
+            return False
+        if t.lower().startswith("0x"):
+            return True
+        if t.isdigit():
+            return True
+        # treat bare hex as number (matches your earlier parsing behavior)
+        return bool(hex_noprefix_re.fullmatch(t))
+
+    def to_int(tok: str) -> int:
+        t = tok.strip()
+        if t.lower().startswith("0x"):
+            return int(t, 16)
+        if t.isdigit():
+            return int(t, 10)
+        # bare hex
+        return int(t, 16)
+
+    def parse_symbol_offset(tok: str):
+        """
+        Returns (symbol, offset_int) if tok looks like sym(+/-)offset, else (tok, 0).
+        """
+        t = tok.strip()
+        m = sym_off_re.fullmatch(t)
+        if not m:
+            return t, 0
+        sym = m.group(1).strip()
+        sign = m.group(2)
+        off = int(m.group(3), 0)
+        return sym, (off if sign == "+" else -off)
+
+    def normalize_map_value(v: Any) -> int:
+        # symbol_map/irq_map may store ints or numeric strings
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            return int(v, 0)  # supports "0x.." and decimal
+        return int(v)
+
+    # --- resolve at ---
+    if isinstance(vi.at, int):
+        resolved_at = vi.at
+    else:
+        at_tok = str(vi.at).strip()
+        if not at_tok:
+            raise KeyError("Unresolved VI.at: empty token")
+
+        if is_numberish(at_tok):
+            resolved_at = to_int(at_tok)
+        else:
+            sym, off = parse_symbol_offset(at_tok)
+            if sym not in symbol_map:
+                raise KeyError(f"Unresolved VI.at symbol: {sym!r} (from {at_tok!r})")
+            base = normalize_map_value(symbol_map[sym])
+            if base & 1:  # thumb bit fix
+                base -= 1
+            resolved_at = base + off
+
+    # --- resolve args ---
+    resolved_args = []
+    for arg in (vi.args or []):
+        a = str(arg).strip()
+        if not a:
+            continue
+
+        # pass-through for pointers/memory/reg-like
+        if ("*" in a) or ("[" in a) or ("]" in a) or reg_re.fullmatch(a):
+            resolved_args.append(a)
+            continue
+
+        # irq_map first
+        if a in irq_map:
+            resolved_args.append(str(normalize_map_value(irq_map[a])))
+            continue
+
+        # already numeric -> keep as-is
+        if is_numberish(a):
+            resolved_args.append(a)
+            continue
+
+        # symbol_map (support sym+/-offset)
+        sym, off = parse_symbol_offset(a)
+        if sym in symbol_map:
+            base = normalize_map_value(symbol_map[sym])
+            resolved_args.append(hex(base + off))
+        else:
+            resolved_args.append(a)  # leave unchanged
+
+    # --- instruction-specific validation ---
+    if vi.instruction == "raise_irq" and resolved_args:
+        if not is_numberish(resolved_args[0]):
+            raise ValueError(f"Invalid IRQ for raise_irq: {resolved_args[0]!r}")
+
+    return VirtualInstruction(at=resolved_at, instruction=vi.instruction, args=resolved_args)
+
+def vi_to_string(vi: "VirtualInstruction") -> str:
+    """
+    Convert a VirtualInstruction to: "<at> <instruction> [args...]"
+
+    - at: int -> hex (0x...), str -> as-is
+    - args: joined with spaces
+    """
+    at_str = f"0x{vi.at:x}" if isinstance(vi.at, int) else str(vi.at)
+    args_str = " ".join(str(a) for a in (vi.args or []))
+    return f"{at_str} {vi.instruction}" + (f" {args_str}" if args_str else "")
+
+'''
+Helper Functions for Modifiers
+'''
+def parse_mod(mod) -> Tuple[bool, Optional["InstructionModifier"]]:
+    """
+    Accepts:
+      - string: "<at> <patch...>"
+      - InstructionModifier-like object: has .at and .patch (even if from another module)
+
+    Returns:
+      (ok, InstructionModifier | None)
+    """
+    # Duck-typed InstructionModifier
+    if hasattr(mod, "at") and hasattr(mod, "patch"):
+        try:
+            patch = str(mod.patch).strip()
+            return True, InstructionModifier(at=mod.at, patch=patch)
+        except Exception as e:
+            fastdyn_log.error(f"Unable to convert InstructionModifier-like object: {e}")
+            return False, None
+
+    if not isinstance(mod, str):
+        fastdyn_log.error(f"Only string and InstructionModifier format accepted (got {type(mod).__name__})")
+        return False, None
+
+    s = mod.strip()
+    if not s:
+        return False, None
+
+    parts = s.split()
+    if len(parts) < 2:
+        fastdyn_log.error(f"Invalid modifier line (need: '<at> <patch...>'): {mod!r}")
+        return False, None
+
+    at_tok = parts[0]
+    patch_str = " ".join(parts[1:]).strip()
+    return True, InstructionModifier(at=at_tok, patch=patch_str)
+
+def resolve_mod(mod: "InstructionModifier", *, symbol_map: Dict[str, Any]) -> "InstructionModifier":
+    sym_off_re = re.compile(r"^(.+?)([+-])(0x[0-9a-fA-F]+|\d+)$")
+    hex_noprefix_re = re.compile(r"^[0-9a-fA-F]+$")
+
+    def is_numberish(tok: str) -> bool:
+        t = tok.strip()
+        if not t:
+            return False
+        if t.lower().startswith("0x"):
+            return True
+        if re.fullmatch(r"[+-]?\d+", t):  # handles -1, +1
+            return True
+        return bool(hex_noprefix_re.fullmatch(t))  # bare-hex
+
+    def to_int(tok: str) -> int:
+        t = tok.strip()
+        if t.lower().startswith("0x"):
+            return int(t, 16)
+        if re.fullmatch(r"[+-]?\d+", t):
+            return int(t, 10)
+        return int(t, 16)
+
+    def parse_symbol_offset(tok: str):
+        t = tok.strip()
+        m = sym_off_re.fullmatch(t)
+        if not m:
+            return t, 0
+        sym = m.group(1).strip()
+        sign = m.group(2)
+        off = int(m.group(3), 0)
+        return sym, (off if sign == "+" else -off)
+
+    def normalize_map_value(v: Any) -> int:
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str):
+            return int(v, 0)
+        return int(v)
+
+    # --- resolve at ---
+    if isinstance(mod.at, int):
+        resolved_at = mod.at
+    else:
+        at_tok = str(mod.at).strip()
+        if not at_tok:
+            raise KeyError("Unresolved modifier.at: empty token")
+
+        if is_numberish(at_tok):
+            resolved_at = to_int(at_tok)
+        else:
+            sym, off = parse_symbol_offset(at_tok)
+            if sym not in symbol_map:
+                raise KeyError(f"Unresolved modifier.at symbol: {sym!r} (from {at_tok!r})")
+            base = normalize_map_value(symbol_map[sym])
+            if base & 1:
+                base -= 1
+            resolved_at = base + off
+
+    # --- resolve patch rhs (only if rhs is symbol-like) ---
+    patch = (mod.patch or "").strip()
+    toks = patch.split()
+    if len(toks) < 2:
+        return InstructionModifier(at=resolved_at, patch=patch)
+
+    lhs, rhs = toks[0], toks[1]
+    rest = toks[2:]
+
+    rhs_s = rhs.strip()
+
+    # passthrough: pointer/memory/register/number
+    if ("*" in rhs_s) or ("[" in rhs_s) or ("]" in rhs_s) or helper.is_cortexm_register(rhs_s) or is_numberish(rhs_s):
+        new_patch = " ".join([lhs, rhs] + rest).strip()
+        return InstructionModifier(at=resolved_at, patch=new_patch)
+
+    # symbol resolve (supports sym+/-offset)
+    sym, off = parse_symbol_offset(rhs_s)
+    if sym in symbol_map:
+        base = normalize_map_value(symbol_map[sym])
+        rhs = hex(base + off)
+
+    new_patch = " ".join([lhs, rhs] + rest).strip()
+    return InstructionModifier(at=resolved_at, patch=new_patch)
+
+def mod_to_string(mod: "InstructionModifier") -> str:
+    at_str = f"0x{mod.at:x}" if isinstance(mod.at, int) else str(mod.at)
+    patch_str = (mod.patch or "").strip()
+    return f"{at_str} {patch_str}" if patch_str else at_str
