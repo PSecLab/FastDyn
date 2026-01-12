@@ -759,12 +759,13 @@ static uint32_t *g_observed_values = NULL; // Buffer for new values
 static size_t g_observed_count = 0;        // Number of values currently buffered
 static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
 
-// These two functions are just for enabling sharing code coverage from virtuals/fuzz.c, once fuzzer is in a final spot a cleaner solution will be implemented
-uint32_t **get_pobserved_values() {
-    return &g_observed_values;
-}
-size_t *get_pobserved_count() {
-    return &g_observed_count;
+// Send a list of PCs (each 4 bytes) back to Rust
+// Returns 1 on success, 0 on failure
+uint32_t fuzz_submit_pcs(void *handle, const uint32_t* pcs, uint32_t pcs_len);
+uint32_t dump_trace_info(void *hFuzz) {
+    uint32_t ret = fuzz_submit_pcs(hFuzz, g_observed_values, g_observed_count);
+    g_observed_count = 0;
+    return ret;
 }
 
 void add_observed_value(uint32_t val) {
