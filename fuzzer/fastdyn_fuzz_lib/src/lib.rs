@@ -40,8 +40,6 @@ static mut SIGNALS_PTR: *mut u8 = &raw mut SIGNALS as _;
 #[allow(static_mut_refs)] // only a problem in nightly
 static SIGNALS_LEN: usize = unsafe { SIGNALS.len() };
 
-const SHM_PATH: &str = "/tmp/iteration_count";
-
 /// Assign a signal to the signals map
 fn signals_set(idx: usize) {
     unsafe { write(SIGNALS_PTR.add(idx), 1) };
@@ -102,7 +100,6 @@ where
 
         // Send count first
         self.input_tx.send(count as u32).unwrap();
-        println!("We have {} values to send!", count);
 
         // Send each 4-byte chunk
         for chunk in buf.chunks(4) {

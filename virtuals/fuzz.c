@@ -8,28 +8,17 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 
-#define SHM_PATH "/tmp/iteration_count"
 extern int coverage;
 
-static uint32_t **p_observed_values = NULL;
-static size_t *p_observed_count = NULL;
-
-// Opaque handle from Rust
-typedef struct FuzzHandle FuzzHandle;
-
 // Create the fuzzer thread and return a handle
-FuzzHandle* fuzz_init(void);
+void *fuzz_init(void);
 
 // Receive a 4‑byte input from Rust (blocks until available)
 // Returns 1 on success, 0 on failure
-uint32_t fuzz_receive_input(FuzzHandle* handle, uint32_t* out_input);
-
-// Send a list of PCs (each 4 bytes) back to Rust
-// Returns 1 on success, 0 on failure
-uint32_t fuzz_submit_pcs(FuzzHandle* handle, const uint32_t* pcs, uint32_t pcs_len);
+uint32_t fuzz_receive_input(void *handle, uint32_t *out_input);
 
 // Shut down the fuzzer and free the handle
-void fuzz_free(FuzzHandle* handle);
+void fuzz_free(void *handle);
 
 static void vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
 {
@@ -68,7 +57,7 @@ int fuzzer_init_done = 0;
 void anchor(unsigned int cpu_index, void *udata)
 {
     // Reserve handle for fuzzer
-    static FuzzHandle* hFuzzer = NULL;
+    static void *hFuzzer = NULL;
 
     // Currently reserving 0xDEADBEEF for a crash, we should have a better systems
     // For example, all exceptions?
@@ -79,17 +68,15 @@ void anchor(unsigned int cpu_index, void *udata)
 
     if (!fuzzer_init_done) {
         hFuzzer = fuzz_init();
-        p_observed_values = get_pobserved_values();
-        p_observed_count = get_pobserved_count();
+        fuzzer_init_done = true;
 	} else {
         // Dump coverage, but only after an initial fuzz
-        if (!fuzz_submit_pcs(hFuzzer, *p_observed_values, *p_observed_count)) { 
+        if (!dump_trace_info(hFuzzer)) { 
             utils_die("Rust side closed PC channel");
         }
-        *p_observed_count = 0;
     }
 
-    if (!hFuzzer || !p_observed_values || !p_observed_count) {
+    if (!hFuzzer) {
         utils_die("Failed initialization, or freed before finished");
     }
 
@@ -117,8 +104,6 @@ void anchor(unsigned int cpu_index, void *udata)
         return;
     }
 
-    printf("Reading %u inputs\n", read_count);
-
     int idx = 0;
     // Parse each number
     char *token = strtok(numbers, ",");
@@ -140,7 +125,6 @@ void anchor(unsigned int cpu_index, void *udata)
 				break;
 		}
         token = strtok(NULL, ",");
-        printf("idx %d\n", idx);
     }
     // clear out unneeded input
     while (idx < read_count) {
@@ -152,6 +136,4 @@ void anchor(unsigned int cpu_index, void *udata)
 
         idx += 1;
     }
-
-    printf("Done reading!\n");
 }
