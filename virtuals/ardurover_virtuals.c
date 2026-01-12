@@ -1211,6 +1211,17 @@ void print_r1(unsigned int cpu_index, void *udata) {
     printf("(Delay) R1: 0x%08X\n", r1);
 }
 
+void ignore_cpu_failsafe_disarm(unsigned int cpu_index, void *udata) {
+    // simply return from function
+    uint32_t r1 = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    if (r1 == 6) { // 6 is the code for CPU failsafe disarm
+        fprintf(stderr, "Ignoring CPU failsafe disarm call\n");
+        qemu_set_register(1, ARM_V7M_R0); // return success
+        uint32_t lr = qemu_get_register(ARM_V7M_LR);
+        qemu_set_register(lr, ARM_V7M_PC);
+    }
+}
+
 
 /*
 AP File System Hooks for the AP_Logger_File Backend
