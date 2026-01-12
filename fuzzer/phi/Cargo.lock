@@ -46,7 +46,7 @@ dependencies = [
  "num-traits",
  "paste",
  "rand_xoshiro",
- "thiserror",
+ "thiserror 2.0.17",
  "web-time",
 ]
 
@@ -61,7 +61,7 @@ dependencies = [
  "num-complex",
  "num-integer",
  "num-traits",
- "thiserror",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -264,6 +264,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "gz-msgs"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a307301470367904a0fc611b08d3e61d96b40ed523c7bde42781bcd2d3a91188"
+dependencies = [
+ "gz-msgs-common",
+ "pkg-config",
+ "protobuf",
+]
+
+[[package]]
+name = "gz-msgs-common"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ce7ee2be2c8aaf0f696e0fe05ec5b9fdadebde0377ee01ccdfb88acf0de1998"
+dependencies = [
+ "gz-msgs-derive",
+ "protobuf",
+]
+
+[[package]]
+name = "gz-msgs-derive"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef27b8317bd65f3b358b07842f75e1fb8a4e04c9939a48bb554bc65699114ee4"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "gz-transport"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3b167d28adc11f39396af2f838e5519be4787eaafdd2c577e637f11799f91e9"
+dependencies = [
+ "crossbeam-channel",
+ "gz-msgs-common",
+ "gz-transport-sys",
+ "log",
+]
+
+[[package]]
+name = "gz-transport-sys"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "710b9ce79555a3fd3b0b21ae1dbaeba1b49366e0d9a278d1974c1c59d36599b4"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,7 +415,7 @@ dependencies = [
  "katexit",
  "lapack-sys",
  "num-traits",
- "thiserror",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -471,7 +524,7 @@ dependencies = [
  "num-complex",
  "num-traits",
  "rand 0.8.5",
- "thiserror",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -556,6 +609,9 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 name = "optifuzz"
 version = "0.1.0"
 dependencies = [
+ "gz-msgs",
+ "gz-transport",
+ "protobuf",
  "scirs2-core",
  "scirs2-optimize",
 ]
@@ -565,6 +621,12 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "portable-atomic"
@@ -597,6 +659,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee95bc4ef87b8d5ba32e8b7714ccc834865276eab0aed5c9958d00ec45f49e8"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "protobuf"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d65a1d4ddae7d8b5de68153b48f6aa3bba8cb002b243dbdbc55a5afbc98f99f4"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -815,7 +897,7 @@ dependencies = [
  "serde",
  "serde_json",
  "statrs",
- "thiserror",
+ "thiserror 2.0.17",
  "uuid",
  "wide",
 ]
@@ -832,7 +914,7 @@ dependencies = [
  "num_cpus",
  "scirs2-core",
  "serde",
- "thiserror",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -848,7 +930,7 @@ dependencies = [
  "scirs2-stats",
  "serde",
  "statrs",
- "thiserror",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -862,7 +944,7 @@ dependencies = [
  "num_cpus",
  "scirs2-core",
  "sprs",
- "thiserror",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -883,7 +965,7 @@ dependencies = [
  "serde_json",
  "special",
  "statrs",
- "thiserror",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -1001,11 +1083,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.17",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
