@@ -13,6 +13,11 @@
 /* Required for Elder model */
 #define DEV_LOGGER
 
+typedef struct AddrRange {
+    uint64_t start;
+    uint64_t end;   // inclusive
+} AddrRange;
+
 // I2C Model related info start
 typedef struct {
     int address;      //address of current slave device
@@ -46,9 +51,10 @@ typedef struct {
 typedef struct {
     char* name;
     char* scroll_path;
-    char** ranges;
+    AddrRange* ranges;
     int range_count;
-    char* irq;
+    uint16_t *irqs;
+    int irq_count;
     I2CDevices I2Cdevices;
     SPIDevices SPIdetails;
 } DeviceModels;
@@ -57,7 +63,7 @@ typedef struct {
 typedef struct {
     char* name;
     char* backend;
-    char** overall_ranges;
+    AddrRange* overall_ranges;
     int overall_range_count;
 
     DeviceModels* devices; // Dynamic array of device models

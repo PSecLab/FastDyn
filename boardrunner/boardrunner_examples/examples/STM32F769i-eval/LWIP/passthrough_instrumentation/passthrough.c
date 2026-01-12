@@ -212,19 +212,20 @@ static int passthrough_init(ConfigSection* model_info) {
     //Register the device models for the interrupts registered by the user.
     //Find if any of the device wants to register an IRQ
     //Just register for the first occuring irq numbers by any device
-    for (int i=0; i< model_info->device_count; i++) {
-        DeviceModels* d = &model_info->devices[i];
-        if (d->irq[0]) {
-        int int_nums;   //number of interrupts registered by the user
+    for (int di = 0; di < model_info->device_count; di++) {
+        DeviceModels* d = &model_info->devices[di];
 
-        //0-10:20-25 -> 0 to 10 and 20 to 25 interrupts supported
-        int *int_lst = utils_parse_interrupt_ranges(d->irq, &int_nums);
-
-        for (int i =0; i < int_nums; i++) {
-            dev_register_interrupt_device_model(int_lst[i], &passthrough_model_def);
+        if (d->irq_count > 0 && d->irqs) {
+            for (int j = 0; j < d->irq_count; j++) {
+                dev_register_interrupt_device_model((int)d->irqs[j], &passthrough_model_def);
             }
         }
+
+        // You had this break before (meaning: only first device’s IRQs are registered).
+        // Keep it only if that's intentional; otherwise remove it.
         break;
     }
+
+
     return 0;
 }

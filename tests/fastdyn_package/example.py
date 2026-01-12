@@ -1,3 +1,4 @@
+import sys
 from fastdyn.fastdyn import *
 
 
@@ -80,33 +81,30 @@ cpu0.add_modifier(mod_list)
 
 print(cpu0.modifiers)
 
-print(cpu0.modifiers)
-import sys;sys.exit(1)
+#Add Memories to the machine
 
+#Required: First add the main memory and then any other memory! : goes to -machine ... memory-backend=<id>
+machine0.add_memory(memory_name="main",
+                    memory_id = "ram0",
+                    memory_start = "0x20000000",
+                    memory_size="512M",
+                    memory_type="SRAM",
+                    backend      = "file",          # file | ram | memfd
+                    memory_file="/dev/shm/my_m4_ram3",
+                    share = True,
+                    )
 
-modifier0 = InstructionModifier(at=0x80000000, patch="r0 1")
+machine0.add_memory(memory_name="region1",
+                    memory_id = "ram1",
+                    memory_start = "0x30000000",
+                    memory_size="512K",
+                    memory_type="SRAM",
+                    backend      = "file",          # file | ram | memfd
+                    memory_file="/dev/shm/my_m4_ram",
+                    share = True,
+                    )
 
-# cpu0.add_modifier(modifier0)
-
-#Add a memory to the machine
-main_ram_size = "512M"
-shared_ram_size = "512K"
-ram_base_addr = "0x20000000"
-shared_ram_base_addr = "0x30000000"
-
-machine0.add_memory(memory_name="ram0",
-                memory_start = ram_base_addr,
-                memory_size=main_ram_size,
-                memory_type="SRAM",
-                memory_file="/dev/shm/my_m4_ram3"
-                )
-
-machine0.add_memory(memory_name="ram1",
-                memory_start = shared_ram_base_addr,
-                memory_size=shared_ram_size,
-                memory_type="SRAM",
-                memory_file="/dev/shm/my_m4_ram"
-                )
+print(machine0.memories)
 
 #TODO: Define functions like list_machines, list_cpus to remove this
 for machine in fastdyn.machines:
@@ -122,8 +120,36 @@ machine0.add_model(name ="passthrough", backend = "stlink")
 
 #Attach devices to the machine
 uart0 = machine0.add_device("uart")
-uart0.add_ranges(["0x40011000-0x40011FFF"])
-uart0.add_irq_ranges("0-15:20-25:53")
+#Device ranges can be added using two options
+#Option 1: Pass start and end of the range
+uart0.add_ranges(
+    start = "0x40000000",
+    end = "0x40010FFF"      #you can pass both integer or str for these options
+    )
+#Option 2: Pass start and size of the range
+uart0.add_ranges(
+    start = "0x40000000",
+    size = "4KB"      #you can pass KB, MB, GB
+    )
+
+print(uart0.supported_ranges)
+
+
+#IRQs can be added using three options:
+#option 1: Adding a single irq
+uart0.add_irq(1)        #this will add this irq to the uart device
+
+#option 2: Adding multiple irqs
+uart0.add_irq([2, 15])  #this will add irqs from 2 to 15 (inclusive)
+uart0.add_irq([20, 25])  #this will add irqs from 20 to 25 (inclusive)
+uart0.add_irq(53)        #this will add this irq  to the uart device
+
+#option 3: works only if you have given the cmsis svd file above else will throw an error
+uart0.add_irq("UART7")
+
+print(uart0.irq_range)
+sys.exit(1)
+
 uart0.add_handler(
     name="qemu",
     type="stm32f2xx-usart",
@@ -140,6 +166,8 @@ uart0.add_handler(
     scroll="/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
 )
 
+sys.exit(1)
+
 remaining_range = machine0.add_device("unhandled")
 remaining_range.add_ranges(["0x40000000-0x40010FFF", "0x40012000-0xE00FFFFF", "0xE0000000-0xEFFFFFFF"])
 remaining_range.add_irq_ranges("0-15:20-25:53")
@@ -149,5 +177,8 @@ remaining_range.add_handler(
 )
 
 print("Starting Fastdyn")
+
+sys.exit(1)
+
 fastdyn.run("machine0", out_path="/home/hammad/work/rehosting/FastDyn/fastdyn_work")               #run fastdyn machine that you want to run
 fastdyn.shutdown()          #shutdown fastdyn machine :: Wont work rn, just press CTRL+C in terminal

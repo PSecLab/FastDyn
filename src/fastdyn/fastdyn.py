@@ -64,17 +64,21 @@ class Machine:
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
     def add_cpu(self, arch, machine, cpu, binary, init_nsvtor):
-        cpu = CPU(arch, machine, cpu, binary, init_nsvtor)
+        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, self) #pass parent for easy referencing to objs like irq_map
         self.cpus.append(cpu)
         return cpu
 
-    def add_memory(self, memory_name, memory_start, memory_size, memory_type, memory_file):
+    def add_memory(self, memory_name, memory_id, memory_start, memory_size, memory_type, backend, memory_file, share=True):
         if memory_name in self.memories:
             raise KeyError(f"Unable to create a memory with name {memory_name}. Create a memory with a different name")
 
-        memory = Memory(memory_name)
+        #initial check to make sure main memory is added before optional rams
+        if memory_name != "main" and len(self.memories) == 0:
+            raise KeyError(f"Unable to create memory {memory_name}. First Create main memory")
 
-        if not memory.validate_and_add_memory(memory_start, memory_size, memory_type, memory_file):
+        memory = Memory(memory_name, memory_id)
+
+        if not memory.validate_and_add_memory(memory_start, memory_size, memory_type, backend, memory_file, share):
             raise ValueError(f"Unable to Create Memory: {memory_name}")
 
         self.memories[memory_name] = memory
@@ -83,7 +87,7 @@ class Machine:
     def add_device(self, name):
         if name in self.devices:
             raise ValueError(f"Device with name {name} already attached")
-        device = Device(name)
+        device = Device(name, self) #pass parent for easy referencing to objs like irq_map
         self.devices[name] = device
 
         return device
@@ -106,12 +110,7 @@ class Machine:
                 svd_device = parse_helper.get_svd_device(svd, self.platform)
 
         fastdyn_log.info("Creating IRQ Map using the CMSIS SVD")
-        irq_map = parse_helper.create_svd_irq_map(svd_device)
-
-        #add to each cpu for easy access in cpu
-        self.irq_map = irq_map
-        for cpu in self.cpus:
-            cpu.irq_map = irq_map
+        self.irq_map = parse_helper.create_svd_irq_map(svd_device)
 
         return True
 
@@ -122,13 +121,14 @@ class InstructionModifier:
     patch: str
 
 class CPU:
-    def __init__(self, arch, machine, cpu, binary, init_nsvtor):
+    def __init__(self, arch, machine, cpu, binary, init_nsvtor, machine_obj):
         """One CPU instance belonging to a machine."""
         self.arch = arch
         self.machine = machine
         self.cpu = cpu
         self.binary = binary
         self.init_nsvtor: int = init_nsvtor
+        self.machine_obj = machine_obj
 
         self.qemu_path: str = "qemu-system-arm"
 
@@ -158,7 +158,6 @@ class CPU:
                                             # output = stderr
                                             """
         self.symbol_dict = None
-        self.irq_map = None
 
     def add_virtual_instruction(self, vi: Union["VirtualInstruction", str, Sequence[Union["VirtualInstruction", str]]]) -> bool:
         items = vi if isinstance(vi, (list, tuple)) else [vi]
@@ -171,7 +170,7 @@ class CPU:
                 return False
 
             try:
-                resolved = parse_helper.resolve_vi(parsed, symbol_map=self.symbol_dict, irq_map=self.irq_map)
+                resolved = parse_helper.resolve_vi(parsed, symbol_map=self.symbol_dict, irq_map=self.machine_obj.irq_map)
             except Exception as e:
                 fastdyn_log.error(f"Unable to resolve Virtual Instruction: {e}")
                 return False
@@ -235,15 +234,76 @@ class DeviceHandler:
     scroll: Optional[str] = None         # path to .so (your example uses this for elder)
 
 class Device:
-    def __init__(self, name):
+    def __init__(self, name, machine_obj):
         self.device_name = name
+        self.machine_obj = machine_obj
         self.supported_ranges = []
         self.handlers = []
-        self.irq_range = ""
-
-    def add_ranges(self, ranges):
+        self.irq_range = []
         #here just add ranges and validate them before running qemu (transformation step)
-        self.supported_ranges = ranges
+
+    def add_ranges(self, start, end=None, size=None):
+        """
+        Add a supported MMIO range for this device.
+
+        Accepts:
+        - start/end as int or str (hex like "0x40000000" or decimal like "1073741824")
+        - size as int (bytes) or str with suffix: "B", "K"/"KB", "M"/"MB", "G"/"GB" (binary units, i.e., 1KB=1024B)
+
+        Stores ranges internally as inclusive [start, end] integers.
+        """
+        import re
+
+        def _parse_addr(x):
+            if isinstance(x, int):
+                return x
+            if isinstance(x, str):
+                return int(x.strip().lower(), 0)  # base=0 supports 0x.. and decimals
+            raise TypeError(f"Address must be int or str, got {type(x)}")
+
+        def _parse_size(x):
+            if isinstance(x, int):
+                if x < 0:
+                    raise ValueError("size must be >= 0")
+                return x
+            if not isinstance(x, str):
+                raise TypeError(f"size must be int or str, got {type(x)}")
+
+            s = x.strip().lower()
+            m = re.fullmatch(r"(\d+)\s*(b|kb|k|mb|m|gb|g)?", s)
+            if not m:
+                raise ValueError(f"Invalid size string: {x!r} (examples: '512K', '4MB', '1024')")
+
+            val = int(m.group(1))
+            unit = m.group(2) or "b"
+            scale = {
+                "b": 1,
+                "k": 1024, "kb": 1024,
+                "m": 1024**2, "mb": 1024**2,
+                "g": 1024**3, "gb": 1024**3,
+            }[unit]
+            return val * scale
+
+        if start is None:
+            raise TypeError("start must not be None")
+        if (end is None) == (size is None):
+            raise TypeError("Provide exactly one of: end or size")
+
+        start_i = _parse_addr(start)
+
+        if end is not None:
+            end_i = _parse_addr(end)
+        else:
+            size_i = _parse_size(size)
+            if size_i <= 0:
+                raise ValueError("size must be > 0")
+            end_i = start_i + size_i - 1  # inclusive end
+
+        if end_i < start_i:
+            raise ValueError(f"Invalid range: end ({hex(end_i)}) < start ({hex(start_i)})")
+
+        # store as inclusive integer range
+        self.supported_ranges.append([start_i, end_i])
         return True
 
     def add_handler(self, name, enabled=True, args=None, scroll=None, type=None):
@@ -257,26 +317,121 @@ class Device:
         self.handlers.append(handler_obj)
         return True
 
-    def add_irq_ranges(self, irq_range=""):
-        self.irq_range = irq_range
+    def add_irq(self, irq):
+        """
+        Add IRQ(s) for this device.
+
+        Supported inputs:
+        - int: 53
+        - str: "53", "0x35"  (numeric)
+        - str: "USART1_IRQn" (symbol; resolved via machine_obj.irq_map)
+        - [start, end]: inclusive range, where start/end can be int/str/symbol
+
+        Behavior:
+        - self.irq_range is a flat list of ints
+        - add_irq(1) -> [1]
+        - add_irq([2, 4]) -> extends with [2,3,4]
+        - avoids duplicates (keeps list clean), keeps sorted ascending
+        """
+        def _resolve_one(x) -> int:
+            # int directly
+            if isinstance(x, int):
+                return x
+
+            # strings: numeric first, then symbol lookup
+            if isinstance(x, str):
+                s = x.strip()
+                # numeric? (supports "53" and "0x35")
+                try:
+                    return int(s, 0)
+                except ValueError:
+                    pass
+
+                # symbol: require irq_map only in this case
+                irq_map = getattr(self.machine_obj, "irq_map", None)
+                if not irq_map:
+                    raise RuntimeError(
+                        "IRQ symbol provided but machine_obj.irq_map is empty/unset. "
+                        "Call machine.add_cmsis_svd(...) before using symbolic IRQ names."
+                    )
+
+                # support both {name->num} and {num->name}
+                if s in irq_map and isinstance(irq_map[s], int):
+                    return int(irq_map[s])
+
+                for k, v in irq_map.items():
+                    if v == s and isinstance(k, int):
+                        return int(k)
+
+                raise KeyError(f"IRQ symbol {s!r} not found in machine_obj.irq_map")
+
+            raise TypeError(f"IRQ must be int, str, or a 2-item [start,end] list; got {type(x)}")
+
+        # ensure storage exists
+        if not hasattr(self, "irq_range") or self.irq_range is None:
+            self.irq_range = []
+
+        # internal dedup set (optional but keeps list clean and fast)
+        irq_set = set(self.irq_range)
+
+        def _add_value(v: int):
+            if v < 0:
+                raise ValueError("IRQ numbers must be >= 0")
+            if v not in irq_set:
+                self.irq_range.append(v)
+                irq_set.add(v)
+
+        # parse input
+        if isinstance(irq, (int, str)):
+            _add_value(_resolve_one(irq))
+
+        elif isinstance(irq, (list, tuple)):
+            if len(irq) != 2:
+                raise TypeError("IRQ range must be a 2-item list/tuple like [start, end]")
+            start = _resolve_one(irq[0])
+            end   = _resolve_one(irq[1])
+
+            if start < 0 or end < 0:
+                raise ValueError("IRQ numbers must be >= 0")
+            if end < start:
+                raise ValueError(f"Invalid IRQ range: end ({end}) < start ({start})")
+
+            for v in range(start, end + 1):
+                _add_value(v)
+
+        else:
+            raise TypeError(f"IRQ must be int/str or a 2-item [start,end] list; got {type(irq)}")
+
+        # keep deterministic order
+        self.irq_range.sort()
         return True
+
 
 class MemoryType(Enum):
     SRAM = "SRAM"
     MMIO = "MMIO"
     FLASH = "FLASH"
 
+class BackendType(Enum):
+    FILE = "FILE"
+    RAM = "RAM"
+    MEMFD = "MEMFD"
+
 class Memory:
-    def __init__(self, memory_name):
+    def __init__(self, memory_name, memory_id):
         self.memory_name: str = memory_name
+        self.memory_id: str = memory_id
         self.memory_start: str = ""
         self.memory_size: str = ""
+        self.memory_backend: BackendType
         self.memory_file: str = ""
         self.memory_type: MemoryType
+        self.memory_share: bool = True
 
-    def validate_and_add_memory(self, start, size, mem_type, memory_file):
+    def validate_and_add_memory(self, start, size, mem_type, mem_backend, memory_file, share):
         self.memory_start = start
         self.memory_size = size
+        self.memory_share = share
         if isinstance(mem_type, str):
             try:
                 self.memory_type = MemoryType[mem_type.upper()]
@@ -285,6 +440,15 @@ class Memory:
                 raise ValueError(f"Unknown memory type {mem_type!r}. Valid: {valid}")
         elif not isinstance(mem_type, MemoryType):
             raise TypeError(f"mem_type must be MemoryType or str, got {type(mem_type).__name__}")
+
+        if isinstance(mem_backend, str):
+            try:
+                self.mem_backend = BackendType[mem_backend.upper()]
+            except KeyError:
+                valid = ", ".join([m.name for m in BackendType])
+                raise ValueError(f"Unknown backend type {mem_backend!r}. Valid: {valid}")
+        elif not isinstance(mem_backend, BackendType):
+            raise TypeError(f"mem_type must be MemoryType or str, got {type(mem_backend).__name__}")
 
         if not os.path.exists(memory_file):
             raise ValueError(f"memory file: {memory_file} does not exist")

@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "device.h"
 
 #define DEBUG_FILE
 
@@ -33,6 +34,31 @@ char *utils_get_arg(const char *key, int argc, char **argv);
 
 int utils_init(int argc, char ** argv);
 
-void utils_parse_ranges(int range_count, char **overall_ranges, Range *ranges);
+void utils_parse_ranges(int range_count, const AddrRange *overall_ranges, Range *ranges);
 int* utils_parse_interrupt_ranges(const char *s, int *int_nums);
 #endif // UTILS_H
+
+// {
+//     "passthrough": {
+//         "backend": "stlink",
+//         "gpiog": {
+//             "irq": "0-100",
+//             "range": [
+//                 "0x40021800-0x40021BFF"
+//             ]
+//         },
+//         "overall": [
+//             "0x40021800-0x40021BFF",
+//             "0x40000000-0x400217FF",
+//             "0x40021C00-0xE00FFFFF",
+//             "0xE0000000-0xEFFFFFFF"
+//         ],
+//         "unhandled_space": {
+//             "range": [
+//                 "0x40000000-0x400217FF",
+//                 "0x40021C00-0xE00FFFFF",
+//                 "0xE0000000-0xEFFFFFFF"
+//             ]
+//         }
+//     }
+// }

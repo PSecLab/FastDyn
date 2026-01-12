@@ -537,6 +537,14 @@ static int parse_line(const char *line, access_t *out)
     return 1;
 }
 
+static int arg_is_disabled(const char *s) {
+    if (!s || !*s) return 1;
+    return (strcasecmp(s, "none") == 0 ||
+            strcasecmp(s, "null") == 0 ||
+            strcasecmp(s, "false") == 0 ||
+            strcmp(s, "0") == 0);
+}
+
 access_t *parse_access_file(const char *path, size_t *count)
 {
     FILE *f = fopen(path, "r");
@@ -927,21 +935,23 @@ static int core_parse_arguments(int argc, char ** argv) {
     }
 
 	filename = utils_get_arg("finline", argc, argv);
-    if (filename) {
+    if (!arg_is_disabled(filename)) {
         accesses = parse_access_file(filename, &count);
     }
 
 	//Filename should really be value
-	filename = utils_get_arg("coverage", argc, argv);
-	if (filename && strcmp(filename, "True") == 0) {
-			coverage =1;
+    filename = utils_get_arg("coverage", argc, argv);
+    if (!arg_is_disabled(filename) &&
+        (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
 
-			// Create a new thread
-		    if (pthread_create(&thread, NULL, tracer, NULL) != 0) {
-        		perror("Failed to create thread");
-		        exit(1);
-		    }
-	}
+        coverage = 1;
+        if (pthread_create(&thread, NULL, tracer, NULL) != 0) {
+            perror("Failed to create thread");
+            exit(1);
+        }
+    } else {
+        coverage = 0;
+    }
 
     filename = utils_get_arg("logger", argc, argv);
     if (filename) {

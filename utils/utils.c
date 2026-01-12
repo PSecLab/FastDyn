@@ -41,15 +41,25 @@ int utils_init(int argc, char** argv) {
 	return 0;
 }
 
-void utils_parse_ranges(int range_count, char **overall_ranges, Range *ranges) {
-    char buffer[256];
-    for (int i=0; i<range_count; i++) {
-        strncpy(buffer, overall_ranges[i], sizeof(buffer));
-        char *dash = strchr(buffer, '-');
-        if (dash){
-            ranges[i].start = strtoul(buffer, NULL, 0); // auto-detect hex with 0x
-            ranges[i].end   = strtoul(dash+1, NULL, 0);
+void utils_parse_ranges(int range_count, const AddrRange *overall_ranges, Range *ranges) {
+    if (!ranges) return;
+    if (range_count <= 0 || !overall_ranges) return;
+
+    for (int i = 0; i < range_count; i++) {
+        uint64_t start = overall_ranges[i].start;
+        uint64_t end   = overall_ranges[i].end;
+
+        // Optional safety: normalize/validate
+        if (end < start) {
+            // You can choose to swap, skip, or hard-fail.
+            // Swapping is often safer than silently zeroing.
+            uint64_t tmp = start;
+            start = end;
+            end = tmp;
         }
+
+        ranges[i].start = start;
+        ranges[i].end   = end;
     }
 }
 
