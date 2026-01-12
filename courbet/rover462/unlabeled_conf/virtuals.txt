@@ -27,5 +27,4 @@
 0x80bb2d4 ap_fs_fsync *
 0x80bb2b0 ap_fs_write *
 0x80bb270 ap_fs_close *
-0x8005424 chDbgContextSwitching 
-0x08143f9a print_r1 
+0x8010cdc ignore_cpu_failsafe_disarm *
