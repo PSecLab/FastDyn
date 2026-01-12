@@ -1,8 +1,13 @@
+'''
+One of the supported targets by Fastdyn
+'''
+
+
 import os, shutil
-from .utils import helper
+from ..utils import helper
 import subprocess
 
-from . import fastdyn_log as fastdyn_log_conf
+from .. import fastdyn_log as fastdyn_log_conf
 import logging
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
@@ -35,7 +40,6 @@ def build_qemu_cmd(machine_config, dev_config_path, out_path):
             "--semihosting-config",cpu.semihosting_config
         ])
 
-    #TODO: init_nsvtor will always be present, update the logic here
     if cpu.init_nsvtor:
         cpu_configs.extend(['-global', f'armv7m.init-nsvtor={cpu.init_nsvtor}'])
     else:
@@ -61,39 +65,29 @@ def build_qemu_cmd(machine_config, dev_config_path, out_path):
         file.writelines(cpu.modifiers)
 
     #----------------------------------------Memory Configurations------------------------------------------
-    # memory = machine_config.memories   #short-hand
-    # print(memory)
-    # ram0_path = os.path.join(memory.shared_mem_path, memory.main_ram_file)
-    # ram1_path = os.path.join(memory.shared_mem_path, memory.shared_ram_file)
-
-    # memory_configs = [
-    #     '-object', f"memory-backend-file,id=ram0,mem-path={ram0_path},size={memory.main_ram_size},share=on",
-    #     '-object', f"memory-backend-file,id=ram1,mem-path={ram1_path},size={memory.shared_ram_size},share=on",
-    #     '-global', 'cortexm-soc.shram_backend=ram1',
-    #     '-global', f'cortexm-soc.ram_baseaddr={memory.ram_base_addr}',
-    #     '-global', f'cortexm-soc.shram_baseaddr={memory.shared_ram_base_addr}',
-    # ]
+    #main memory is mandatory and others are optional and can be of any number
     memory_config = []
     memories = machine_config.memories   #short-hand
-    for memory in memories:
-        curr_mem = memories[memory]
-        # print(machine_config.memories[memory].memory_type)
-        curr_config = [
-            '-object', f"memory-backend-file,id={curr_mem.memory_name},mem-path={curr_mem.memory_file},size={curr_mem.memory_size},share=on",
-        ]
-        memory_config.extend(curr_config)
-        extra_config = []
-        if curr_mem.memory_name == "ram0":
-            extra_config = [
-            '-global', f'{cpu.machine}-soc.ram_baseaddr={curr_mem.memory_start}',
-            ]
-        elif curr_mem.memory_name == "ram1":
-            extra_config = [
-            '-global', f'{cpu.machine}-soc.shram_backend={curr_mem.memory_name}',
-            '-global', f'{cpu.machine}-soc.shram_baseaddr={curr_mem.memory_start}',
-            ]
 
-        memory_config.extend(extra_config)
+    #add main memory config in the qemu command
+    main_memory = memories.pop('main')
+    main_memory_config = [
+        '-object', f"memory-backend-file,id={main_memory.memory_id},mem-path={main_memory.memory_file},size={main_memory.memory_size},share=on", '-global',  f'{cpu.machine}-soc.ram_baseaddr0={main_memory.memory_start}'
+    ]
+    memory_config.extend(main_memory_config)
+
+# qemu-system-arm -machine cortexm,memory-backend=ram0 -cpu cortex-m4 -kernel boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf -qmp unix:/tmp/qmp.sock,server,nowait -d in_asm,op -D qemu.log -monitor tcp:127.0.0.1:5555,server,nowait --semihosting --semihosting-config enable=on,target=native -object memory-backend-file,id=ram0,mem-path=/dev/shm/my_m4_ram3,size=512M,share=on -object memory-backend-file,id=ram1,mem-path=/dev/shm/my_m4_ram,size=512K,share=on -global cortexm-soc.ram_backend1=ram1 -global cortexm-soc.ram_baseaddr0=0x20000000 -global cortexm-soc.ram_baseaddr1=0x30000000 -global armv7m.init-nsvtor=0x08000000 --plugin build/libfastdyn.so,dev=/home/hammad/work/rehosting/FastDyn/fastdyn_work/dev_config.json,virtual=/home/hammad/work/rehosting/FastDyn/fastdyn_work/virtuals/virtuals.txt,modifier=/home/hammad/work/rehosting/FastDyn/fastdyn_work/virtuals/modifiers.txt,coverage=False,finline=None
+
+    #add rest of the memory if present
+    for idx, memory in enumerate(memories):
+        curr_mem = memories[memory]
+        curr_config = [
+            '-object', f"memory-backend-file,id={curr_mem.memory_id},mem-path={curr_mem.memory_file},size={curr_mem.memory_size},share=on",
+            '-global', f"{cpu.machine}-soc.ram_baseaddr{idx+1}={curr_mem.memory_start}",
+            '-global', f'{cpu.machine}-soc.ram_backend{idx+1}={curr_mem.memory_id}',
+        ]
+
+        memory_config.extend(curr_config)
 
     cmd.extend(memory_config)
 

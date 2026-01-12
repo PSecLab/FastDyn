@@ -10,7 +10,6 @@ import os, sys, pathlib
 import subprocess
 import logging
 
-from . import qemu_target
 from .utils import helper
 
 from . import fastdyn_log as fastdyn_log_conf
@@ -21,6 +20,8 @@ from .machine import VirtualInstruction
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
+#supported targets
+from .targets import qemu_target
 
 class Fastdyn:
     def __init__(self):
@@ -32,18 +33,19 @@ class Fastdyn:
 
         return machine
 
-    def run(self, machine_name, out_path=None):
+    def run(self, target, machine_name, out_path=None):
         #before running resolve the device models for each machine
         machine = self.machines[machine_name]
-        compile_device_routing(machine.devices, machine.parsed_device, models=machine.models)
-        #write device config to the json file
+        compile_device_routing(machine.devices, machine.parsed_device, models=machine.models) #return value will be written to machine.parsed_device
 
-        qemu_cmd, gdb_cmd, launch_gdb, binary = qemu_target.setup_qemu(
-            machine,
-            out_path
-        )
+        if target.lower() == "qemu":
+            #write device config to the json file
+            qemu_cmd, gdb_cmd, launch_gdb, binary = qemu_target.setup_qemu(
+                machine,
+                out_path
+            )
 
-        qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
+            qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
 
     def shutdown(self):
         qemu_target.kill_qemu_process()
@@ -443,7 +445,7 @@ class Memory:
 
         if isinstance(mem_backend, str):
             try:
-                self.mem_backend = BackendType[mem_backend.upper()]
+                self.memory_backend = BackendType[mem_backend.upper()]
             except KeyError:
                 valid = ", ".join([m.name for m in BackendType])
                 raise ValueError(f"Unknown backend type {mem_backend!r}. Valid: {valid}")

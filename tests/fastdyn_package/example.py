@@ -180,5 +180,7 @@ print("Starting Fastdyn")
 
 sys.exit(1)
 
-fastdyn.run("machine0", out_path="/home/hammad/work/rehosting/FastDyn/fastdyn_work")               #run fastdyn machine that you want to run
+fastdyn.run(target="qemu",
+            machine="machine0",
+            out_path="/home/hammad/work/rehosting/FastDyn/fastdyn_work")               #run fastdyn machine that you want to run
 fastdyn.shutdown()          #shutdown fastdyn machine :: Wont work rn, just press CTRL+C in terminal

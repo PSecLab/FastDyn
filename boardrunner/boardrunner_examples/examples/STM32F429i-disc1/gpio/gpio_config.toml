@@ -42,7 +42,7 @@ machine = "cortexm"
 cpu = "cortex-m4"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-platform = "STM32F469"
+platform = "STM32F429"
 binary = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
 
 # --- Debugging, Control, and Logging ---
