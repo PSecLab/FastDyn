@@ -82,6 +82,7 @@ configure_file(
   configuration : {
     'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
     'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0,
+    'ENABLE_LIBFUZZ' : ENABLE_LIBFUZZ ? 1 : 0,
     'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0,
     'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0,
     'ENABLE_LIBDEV' : ENABLE_LIBDEV ? 1:0,
@@ -110,7 +111,6 @@ srcs += files(
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
-  'virtuals/fuzz.c',
   'libs/ring_buffer.c',
   'libs/mavlink_lib.c',
 )
@@ -136,6 +136,12 @@ if ENABLE_LIBHW
   'device_models/elder/elder.c',
   'device_models/elder/device_config.c',
   'device_models/elder/inih/ini.c'
+  )
+endif
+
+if ENABLE_LIBFUZZ
+  srcs += files(
+    'virtuals/fuzz.c',
   )
 endif
 

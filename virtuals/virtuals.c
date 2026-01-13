@@ -62,8 +62,10 @@ cb_entry_t cb_registry[] = {
     { "debug_log", debug_log},
     { "raise_periodic_irq", raise_periodic_irq},
     //Fuzzing specific
+#if ENABLE_LIBFUZZ
     { "anchor", anchor},
     { "assert", virt_assert},
+#endif
 #if ENABLE_LIBPY
     { "fastdyn_callback", fastdyn_callback},
 #endif
