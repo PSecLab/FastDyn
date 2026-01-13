@@ -206,13 +206,14 @@ int get_navsat_reading(gps_data_t *gps_data) {
         return 0;
     }
 
-    gz::msgs::Float yaw_rads;
-    if (!request_service("/get_yaw_reading", yaw_rads)) {
-        return 0;
-    }
+    // gz::msgs::Float yaw_rads;
+    // if (!request_service("/get_yaw_reading", yaw_rads)) {
+    //     return 0;
+    // }
 
     // convert radians to degrees
-    float yaw_deg = yaw_rads.data() * 180.0 / M_PI;
+    // TODO: fully remove but for now keep yaw as 0.0f
+    float yaw_deg = 0.0f;
 
     gps_data_t data;
     data.lat = response.latitude_deg();

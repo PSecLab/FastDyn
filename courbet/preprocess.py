@@ -136,17 +136,16 @@ def preprocess(symbols_dict: dict[str, int], modifier_file: str, modifier_out: s
     # print(f"Output would be written to: {virtuals_out}")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python preprocess.py <map_file> <labeled_dir> <unlabeled_dir>")
+    if len(sys.argv) != 3:
+        print("Usage: python preprocess.py <map_file> <vehicle_dir>")
         sys.exit(1)
 
     map_file = sys.argv[1]
-    labeled_dir = sys.argv[2]
-    labeled_virtuals_file = f"{labeled_dir}/virtuals.txt"
-    labeled_modifier_file = f"{labeled_dir}/modifiers.txt"
-    unlabeled_dir = sys.argv[3]
-    unlabeled_virtuals_out = f"{unlabeled_dir}/virtuals.txt"
-    unlabeled_modifier_out = f"{unlabeled_dir}/modifiers.txt"
+    vehicle_dir = sys.argv[2]
+    labeled_virtuals_file = f"{vehicle_dir}/labeled_conf/virtuals.txt"
+    labeled_modifier_file = f"{vehicle_dir}/labeled_conf/modifiers.txt"
+    unlabeled_virtuals_out = f"{vehicle_dir}/unlabeled_conf/virtuals.txt"
+    unlabeled_modifier_out = f"{vehicle_dir}/unlabeled_conf/modifiers.txt"
 
     symbols_dict = load_symbol_addresses(map_file)
 

@@ -20,7 +20,7 @@ touch \
   "$NAME/unlabeled_conf/modifiers.txt" \
   "$NAME/unlabeled_conf/virtuals.txt"
 
-cp labeled_conf/modifiers.txt "$NAME/labeled_conf/modifiers.txt"
-cp labeled_conf/virtuals.txt "$NAME/labeled_conf/virtuals.txt"
+cp rover462/labeled_conf/modifiers.txt "$NAME/labeled_conf/modifiers.txt"
+cp rover462/labeled_conf/virtuals.txt "$NAME/labeled_conf/virtuals.txt"
 
 echo "Created configuration tree for '$NAME'"

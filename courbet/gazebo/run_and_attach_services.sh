@@ -16,15 +16,21 @@ if [ "$VEHICLE_TYPE" != "rover" ] && [ "$VEHICLE_TYPE" != "copter" ] && [ "$VEHI
     exit 1
 fi
 
+MODEL_NAME=""
+
 # Start Gazebo with the specified world file
 if [ "$VEHICLE_TYPE" == "copter" ]; then
     gz sim -r r1_rover_runway.sdf &
+    MODEL_NAME="gs_drone"
 elif [ "$VEHICLE_TYPE" == "rover" ]; then
     gz sim -r r1_rover_runway.sdf &
+    MODEL_NAME="r1_rover"
 elif [ "$VEHICLE_TYPE" == "boat" ]; then
     echo "Boat world not yet implemented"
 elif [ "$VEHICLE_TYPE" == "plane" ]; then
     gz sim -r vtail_runway.sdf &
+    # gz sim -r skywalker_x8_runway.sdf &
+    MODEL_NAME="vtail_plane"
 else
     echo "Error: Unsupported vehicle type '$VEHICLE_TYPE'"
     exit 1
@@ -36,7 +42,7 @@ sleep 5  # Wait for Gazebo to initialize
 # Attach the ArduRover services to the Gazebo simulation
 # Assuming the services are compiled and available as executables in build directory
 cd build
-./services
+./services "$MODEL_NAME"
 SERVICES_PID=$!
 echo "Started ArduRover services with PID $SERVICES_PID"
 sleep 5  # Wait for services to initialize
