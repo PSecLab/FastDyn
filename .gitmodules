@@ -7,3 +7,6 @@
 [submodule "submodules/SITL_Models"]
 	path = submodules/SITL_Models
 	url = https://github.com/michaelprooney/SITL_Models.git
+[submodule "third_party/cmsis-svd-data"]
+	path = third_party/cmsis-svd-data
+	url = https://github.com/cmsis-svd/cmsis-svd-data.git

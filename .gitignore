@@ -1,6 +1,5 @@
 docs/html/
 out/
-cmsis-svd-data
 *__pycache__*
 cscope*
 Doxyfile.bak
