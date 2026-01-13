@@ -7,44 +7,28 @@
 id = "ram0"
 base_address = "0x20000000"
 memory_size  = "512M"
+memory_type  = "SRAM"
 backend      = "file"          # file | ram | memfd
 memory_file  = "/dev/shm/my_m4_ram3"
 share        = true
 prealloc     = false
 
-[[Memory.banks]]   # optional banks: go to -global cortexm-soc.ram_backendN / ram_baseaddrN
+[[Memory.ram1]]   # optional banks: go to -global cortexm-soc.ram_backendN / ram_baseaddrN
 id = "ram1"
 index = 1
 base_address = "0x30000000"
 memory_size  = "512K"
+memory_type  = "SRAM"
 backend      = "file"
 memory_file  = "/dev/shm/my_m4_ram"
 share        = true
 prealloc     = false
 
-# add as many as you want, for example!
-# [[Memory.banks]]
-# id = "ram2"
-# index = 2
-# base_address = "0x30080000"
-# memory_size  = "256K"
-# backend      = "file"
-# memory_file  = "/dev/shm/my_m4_ram2"
-# share        = true
-
 # ==============================================================================
 #                                CPU Configuration
 # ==============================================================================
-[CPU]
-# --- Core Emulation & Plugin Settings ---
-arch = "arm"
-machine = "cortexm"
-cpu = "cortex-m4"
-plugin_library = "build/libfastdyn.so"
-monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
+[Machine]
 platform = "STM32F429"
-binary = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
-
 # --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
 enable_gdb = false
@@ -56,7 +40,20 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
+coverage=false
+finline='None'
+
+[CPU]
+[[CPU.cpu0]]
+# --- Core Emulation & Plugin Settings ---
+arch = "arm"
+machine = "cortexm"
+cpu = "cortex-m4"
+plugin_library = "build/libfastdyn.so"
+monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
+binary = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
 init_nsvtor = "0x08000000"
+map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
 
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
@@ -64,24 +61,6 @@ logger_content = """
 # level = DEBUG
 # output = stderr
 """
-
-# --- Virtual Instructions (Structured) ---
-# Each block defines a single virtual instruction to be registered.
-# [[CPU.virtuals]]
-# at = "main+8"
-# instruction = "raiseirq"
-# args = ["TIM1_BRK_TIM9"]
-
-# # --- Instruction Modifiers (Structured) ---
-# # Each block defines a runtime binary patch using a high-level representation.
-# [[CPU.modifiers]]
-# at = "main+2"
-# patch = "r2 <- r3"
-
-# [[CPU.modifiers]]
-# at = "main+4"
-# patch = "r15 <- r14"
-
 
 # ==============================================================================
 #                              Device Configuration
@@ -102,32 +81,13 @@ logger_content = """
 [Device.Models.unhandled]
     # This model explicitly marks memory as unhandled.
 
-# qemu-system-arm -machine cortexm,memory-backend=ram0 -cpu cortex-m4 -kernel boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf -qmp unix:/tmp/qmp.sock,server,nowait -d in_asm,op -D qemu.log -monitor tcp:127.0.0.1:5555,server,nowait --semihosting --semihosting-config enable=on,target=native -object memory-backend-file,id=ram0,mem-path=/dev/shm/my_m4_ram3,size=512M,share=on -object memory-backend-file,id=ram1,mem-path=/dev/shm/my_m4_ram,size=512K,share=on -global cortexm-soc.ram_backend1=ram1 -global cortexm-soc.ram_baseaddr0=0x20000000 -global cortexm-soc.ram_baseaddr1=0x30000000 -global armv7m.init-nsvtor=0x08000000 --plugin build/libfastdyn.so,dev=/home/hammad/work/rehosting/FastDyn/fastdyn_work/dev_config.json,virtual=/home/hammad/work/rehosting/FastDyn/fastdyn_work/virtuals/virtuals.txt,modifier=/home/hammad/work/rehosting/FastDyn/fastdyn_work/virtuals/modifiers.txt,coverage=False,finline=None
-
-# qemu-system-arm -machine cortexm,memory-backend=ram0 -cpu cortex-m4 -kernel boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf -qmp unix:/tmp/qmp.sock,server,nowait -d in_asm,op -D qemu.log -monitor tcp:127.0.0.1:5555,server,nowait --semihosting --semihosting-config enable=on,target=native
-
-# -object memory-backend-file,
-# id=ram0,
-# mem-path=/dev/shm/my_m4_ram3,
-# size=512M,share=on
-# -object memory-backend-file,
-# id=ram1,mem-path=/dev/shm/my_m4_ram,
-# size=512K,share=on
-# -global cortexm-soc.ram_backend1=ram1
-# -global cortexm-soc.ram_baseaddr0=0x20000000
-# -global cortexm-soc.ram_baseaddr1=0x30000000
-
-# -global armv7m.init-nsvtor=0x08000000 --plugin build/libfastdyn.so,dev=/home/hammad/work/rehosting/FastDyn/fastdyn_work/dev_config.json,virtual=/home/hammad/work/rehosting/FastDyn/fastdyn_work/virtuals/virtuals.txt,modifier=/home/hammad/work/rehosting/FastDyn/fastdyn_work/virtuals/modifiers.txt,coverage=False,finline=None
-
-# /data/qemu/build/qemu-system-arm -machine cortexm,memory-backend=ram0 -cpu cortex-m7 -kernel /home/faculty/abk6349/data/fastdyn/device_models/server_firmwares/stm32f4/build/RTOSDemo.axf -qmp unix:/tmp/qmp.sock,server,nowait -d in_asm,op -D qemu.log -monitor tcp:127.0.0.1:5555,server,nowait -s -S --semihosting --semihosting-config enable=on,target=native -object memory-backend-file,id=ram0,mem-path=/dev/shm/my_m4_ram3,size=128K,share=on -object memory-backend-file,id=ram1,mem-path=/dev/shm/my_m4_ramx,size=256K,share=on -object memory-backend-file,id=ram2,mem-path=/dev/shm/my_m4_ram,size=512K,share=on -global cortexm-soc.ram_backend1=ram1 -global cortexm-soc.ram_backend2=ram2 -global cortexm-soc.ram_baseaddr0=0x20000000 -global cortexm-soc.ram_baseaddr1=0x20020400 -global cortexm-soc.ram_baseaddr2=0x30000000 -global armv7m.init-nsvtor=0x08000000 --plugin /data/fastdyn/build/libfastdyn.so,dev=/data/fastdyn/fastdyn_work/dev_config.json,virtual=/data/fastdyn/fastdyn_work/virtuals/virtuals.txt,modifier=/data/fastdyn/fastdyn_work/virtuals/modifiers.txt,coverage=False,finline=None
-
 # --- Peripheral Definitions ---
 # Each peripheral gets its own sub-table. If it uses the elder model,
 # its specific scroll configuration is defined directly within it.
 [Device.gpiog]
     # ranges = ["0x40000000-0x40010FFF"]
-    ranges = ["0x40021800-0x40021BFF"]
-    irq = "0-100"
+    ranges = [["0x40021800", "0x40021BFF"]]
+
     description = "GPIO Port G for general-purpose I/O."
     read_priority = "elder"  #only the read from elder model is considered.
     # The configuration for this specific device when handled by the elder model.
@@ -145,7 +105,8 @@ logger_content = """
         enabled = true
 
 [Device.unhandled_space]
-    ranges = ["0x40000000-0x400217FF","0x40021C00-0xE00FFFFF", "0xE0000000-0xEFFFFFFF"]
+    ranges = [["0x40000000", "0x400217FF"],["0x40021C00", "0xE00FFFFF"], ["0xE0000000", "0xEFFFFFFF"]]
+
     description = "Memory regions that are explicitly not handled by any model."
 
     [[Device.unhandled_space.handlers]]

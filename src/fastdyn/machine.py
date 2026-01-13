@@ -1,7 +1,7 @@
+#Right now this file is useless, just kept it in case needed for MCP
 from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict, Union
 import uuid
-
 
 # =============================================================================
 # CPU sub-structures

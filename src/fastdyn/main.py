@@ -8,202 +8,23 @@ import subprocess
 import signal
 import sys
 
-from dotenv import load_dotenv
-
 from . import fastdyn_log
 from fastdyn.__init__ import __version__
-from . import fastdyn_config
 # from .machine import Machine, CPUConfig, VirtualInstruction, InstructionModifier
 from .verifier import verifier as verify             #contains the verification framework
 from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 from .utils import helper
-from . import machine_apis
-from .fastdyn import Fastdyn
+from . import toml_parser
 
 from dataclasses import asdict
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
 
-
-#build qemu command
-def build_qemu_cmd(machine_config, dev_config_path, out_path):
-    """Builds the full qemu-system-arm command from the configuration."""
-    #----------------------------------------QEMU & CPU configurations---------------------------------------
-    #TODO: Add support for multiple cpus in future
-    cpu = machine_config.cpus[0]  #short-hand
-    cmd = [cpu.qemu_path]
-
-    cpu_configs = [
-        "-machine", f"{cpu.machine},memory-backend=ram0",
-        "-cpu", cpu.cpu,
-        "-kernel", cpu.binary,
-        "-qmp", f"unix:{cpu.qmp_socket},server,nowait",
-        "-d", cpu.log_options,
-        "-D", cpu.log_file,
-        "-monitor", f"tcp:127.0.0.1:{cpu.monitor_port},server,nowait"
-    ]
-
-    if cpu.enable_gdb:
-        log.info("GDB debugging enabled on Port 1234")
-        cpu_configs.append('-s')
-    if cpu.stop_on_start: cpu_configs.append('-S')
-    if cpu.semihosting:
-        cpu_configs.extend([
-            "--semihosting",
-            "--semihosting-config",cpu.semihosting_config
-        ])
-    cmd.extend(cpu_configs)
-
-    #----------------------------------------Virtual & Modifier Instructions------------------------------------------
-    virtuals_dir = os.path.join(out_path, 'virtuals')
-    os.makedirs(virtuals_dir)
-    virtuals_path = os.path.join(virtuals_dir, 'virtuals.txt')
-    modifiers_path = os.path.join(virtuals_dir, 'modifiers.txt')
-
-    log.info(f"Virtual Instructions available at {virtuals_path}")
-    with open(virtuals_path, 'w') as file:
-        file.writelines(cpu.virtuals)
-
-    log.info(f"Modifier Instructions available at {modifiers_path}")
-    with open(modifiers_path, 'w') as file:
-        file.writelines(cpu.modifiers)
-
-    #----------------------------------------Memory Configurations------------------------------------------
-    memory = machine_config.memory   #short-hand
-    ram0_path = os.path.join(memory.shared_mem_path, memory.main_ram_file)
-    ram1_path = os.path.join(memory.shared_mem_path, memory.shared_ram_file)
-
-    memory_configs = [
-        '-object', f"memory-backend-file,id=ram0,mem-path={ram0_path},size={memory.main_ram_size},share=on",
-        '-object', f"memory-backend-file,id=ram1,mem-path={ram1_path},size={memory.shared_ram_size},share=on",
-        '-global', 'cortexm-soc.shram_backend=ram1',
-        '-global', f'cortexm-soc.ram_baseaddr={memory.ram_base_addr}',
-        '-global', f'cortexm-soc.shram_baseaddr={memory.shared_ram_base_addr}',
-    ]
-
-    #TODO: init_nsvtor will always be present, update the logic here
-    if memory.init_nsvtor:
-        memory_configs.extend(['-global', f'armv7m.init-nsvtor={memory.init_nsvtor}'])
-    else:
-        if not helper.is_elf(cpu.binary):
-            raise ValueError("Not an ELF (raw dump/bin). Need init_nsvtor in the toml configuration.")
-        nsvtor_elf = helper.elf_file_parser(cpu.binary)
-        memory_configs.extend(['-global', f'armv7m.init-nsvtor={nsvtor_elf}'])
-
-
-    cmd.extend(memory_configs)
-
-    #----------------------------------------Plugins Configurations------------------------------------------
-    plugin_lib_path = cpu.plugin_library
-
-    plugin_configs = [
-        '--plugin',
-    ]
-    plugin_files = [
-        f"{plugin_lib_path},dev={dev_config_path}",
-        f'virtual={virtuals_path}',
-        f'modifier={modifiers_path}',
-        f"coverage={cpu.coverage}",
-        f"finline={cpu.finline}"
-    ]
-
-    plugin_configs.extend([",".join(plugin_files)])
-    cmd.extend(plugin_configs)
-
-    return cmd
-
-#Get the gdb command based on the user request
-def get_gdb_cmd(machine_config, out_path):
-    launch_gdb = False
-    #TODO: Handle multiple cpus
-    cpu = machine_config.cpus[0]  #short-hand
-    gdb_script_path = os.path.join(out_path, 'gdb_init.txt')
-    with open(gdb_script_path, 'w') as f:
-        f.write("target remote localhost:1234\n")
-    binary = cpu.binary
-    gdb_cmd = None
-    if cpu.enable_gdb:
-        launch_gdb = True
-        if cpu.launch_gdb:
-            gdb_cmd = [
-                'xterm',
-                '-e',
-                f"gdb-multiarch -x {gdb_script_path} {binary}"
-            ]
-        else:
-            gdb_cmd = None
-
-    return launch_gdb, gdb_cmd, binary
-
-#This function is responsible for running the qemu command based on the inputs
-def run_qemu(machine_config, out_path):
-    #create json file for the device config
-    dev_config_path = helper.write_dev_config_json(output_dir=out_path, data=machine_config.parsed_device)
-    log.info(f"Custom Devices Configuration written to : {dev_config_path}")
-
-    #TODO: Add support for multiple cpus in future
-    cmd = build_qemu_cmd(machine_config, dev_config_path, out_path)
-
-    launch_gdb, gdb_cmd, binary = get_gdb_cmd(machine_config, out_path)
-
-    _start_execution(cmd, launch_gdb, gdb_cmd, binary)
-
-def _start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
-    """
-    Starts the actual execution of qemu,
-    peripheral server with handlers to enable clean
-    exiting
-    """
-    log.info("Running the following QEMU command:")
-    print(" ".join(qemu_cmd))
-    kill_qemu_process()
-    qemu_proc = subprocess.Popen(qemu_cmd)
-    log.info("Letting QEMU Run")
-
-    if launch_gdb:
-        if gdb_cmd is not None:
-            subprocess.Popen(gdb_cmd)
-        else:
-            log.info(f'Connect by running: gdb-multiarch {binary}')
-
-    try:
-        qemu_proc.wait()
-    except KeyboardInterrupt:
-        kill_qemu_process()
-
-def kill_qemu_process():
-    PORT = 5555
-
-    def get_pids_using_port(port):
-        try:
-            result = subprocess.check_output(["lsof", "-ti", f"tcp:{port}"])
-            pids = result.decode().strip().split('\n')
-            return [int(pid) for pid in pids if pid.strip()]
-        except subprocess.CalledProcessError:
-            return []
-
-    def kill_pids(pids):
-        for pid in pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-                subprocess.run(["stty", "sane"])
-            except ProcessLookupError:
-                print(f"PID {pid} not found (may already be terminated)")
-            except Exception as e:
-                print(f"Failed to kill PID {pid}: {e}")
-
-    pids = get_pids_using_port(PORT)
-    if pids:
-        kill_pids(pids)
-
-
 @click.group()
 @click.version_option(prog_name="Fastdyn Framework",version=__version__)
 def cli():
-    # Load variables from .env
-    load_dotenv()   #TODO: Remove this
     log.info('****** Fastdyn Framework {0} *******'.format(__version__ ))
 
 
@@ -236,13 +57,15 @@ def run(config, map_file, work_dir):
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
 
-    #We will handle multiple machines case in future
-    machine  = fastdyn_config.parse_config("machine0", toml_config=config, map_file_path=map_file)
+    #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
+    fastdyn_handle = toml_parser.parser(machine_name="machine0",toml_config=config, svd_path="third_party/cmsis-svd-data")
 
-    run_qemu(
-        machine_config=machine,
-        out_path=work_dir
-    )
+    #run all the machines requested by the user
+    for idx, machine in enumerate(fastdyn_handle.machines):
+        fastdyn_handle.run(machine_name=f"machine{idx}",
+                           target="qemu",
+                           out_path=work_dir
+                           )
 
 @cli.command(
     'generate',

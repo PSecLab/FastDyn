@@ -48,17 +48,31 @@ class Fastdyn:
             qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
 
     def shutdown(self):
-        qemu_target.kill_qemu_process()
+        qemu_target.kill_qemu_process(port='5555')
+
+class QemuTargetOpts:
+    def __init__(self):
+        #initialize with default values
+        self.qemu_path: str = "qemu-system-arm"
+        self.finline: Optional[str] = None
+        self.coverage: bool = False
+        self.enable_gdb: bool = False
+        self.stop_on_start: bool = False
+        self.launch_gdb: bool = False
+        self.semihosting: bool = True
+        self.semihosting_config: str = "enable=on,target=native"
+        self.monitor_port: Optional[int] = 5555
+        self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
 
 class Machine:
     def __init__(self, machine_name, platform_name):
-        self.id: str = field(default_factory=lambda: str(uuid.uuid4()))
         self.name: Optional[str] = machine_name
         self.cpus = []
         self.memories = {}
         self.devices = {}
         self.models = {}
         self.platform = platform_name
+        self.qemu_target_opts = QemuTargetOpts()
 
         #optional params -- useful for svd
         self.irq_map = {}
@@ -132,22 +146,8 @@ class CPU:
         self.init_nsvtor: int = init_nsvtor
         self.machine_obj = machine_obj
 
-        self.qemu_path: str = "qemu-system-arm"
-
-        #initialize with default values
-        self.finline: Optional[str] = None
-        self.coverage: bool = False
-
         self.plugin_library: Optional[str] = "build/libfastdyn.so"
         self.monitor_elf: Optional[str] = None
-
-        self.enable_gdb: bool = False
-        self.stop_on_start: bool = False
-        self.launch_gdb: bool = False
-        self.semihosting: bool = True
-        self.semihosting_config: str = "enable=on,target=native"
-        self.monitor_port: Optional[int] = 5555
-        self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
 
         self.log_file: Optional[str] = "qemu.log"
         self.log_options: Optional[str] = "in_asm,op"

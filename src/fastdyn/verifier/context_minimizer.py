@@ -13,7 +13,7 @@ from scipy.stats import entropy as calculate_entropy
 from cmsis_svd.parser import SVDParser
 
 from .. import fastdyn_log as fastdyn_log_conf
-from ..utils import svd_parser
+from ..utils import parse_config as svd_parser
 
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()

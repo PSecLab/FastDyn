@@ -17,143 +17,6 @@ from cmsis_svd.parser import SVDParser
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
-def toml_parser(config_path):
-    try:
-        with open(config_path, "rb") as f:
-            parsed_config = tomli.load(f)
-    except FileNotFoundError:
-        fastdyn_log.error(f"The file '{config_path}' was not found.")
-    except tomli.TOMLDecodeError as e:
-        fastdyn_log.error(f"Error: Failed to parse TOML file '{config_path}': {e}")
-
-    return parsed_config
-
-def parse_vi_and_modifiers(config, irq_map, symbols_dict):
-    cpu_conf = config.get('CPU', {})
-
-    virtual_instr_lines = []
-    modifier_instr_lines = []
-
-    virtuals = cpu_conf.get('virtuals', [])
-    if virtuals:
-        virtuals_ir = []
-        for virt in virtuals:
-            args_str = " ".join(virt.get('args', []))
-            if (virt.get('instruction') == "raise_irq"):
-                if args_str in irq_map:
-                    args_str = str(irq_map[args_str])
-                else:
-                    # check if it's already a number
-                    if not args_str.isdigit():
-                        log.error("Invalid Interrupt for IRQ")
-                        sys.exit()
-            virtuals_ir.append(f"{virt.get('at')} {virt.get('instruction')} {args_str}\n")
-        virtual_instr_lines = convert_config_file(virtuals_ir, symbols_dict)
-
-    modifiers = cpu_conf.get('modifiers', [])
-    if modifiers:
-        modifiers_ir = []
-        for mod in modifiers:
-            lhs, rhs = helper.extract_regs(mod.get('patch'))
-            modifiers_ir.append(f"{mod.get('at')} {lhs} {rhs}\n")
-        modifier_instr_lines = convert_config_file(modifiers_ir, symbols_dict)
-
-    virtual_instr: list[VirtualInstruction] = []
-    for line in virtual_instr_lines:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split()
-        # expected: <at> <instruction> [args...]
-        at_s = parts[0]
-        instr = parts[1] if len(parts) > 1 else ""
-        args = parts[2:] if len(parts) > 2 else []
-        at = int(at_s, 0)  # handles "0x..." or decimal
-        virtual_instr.append(VirtualInstruction(at=at, instruction=instr, args=args))
-
-    modifier_instr: list[InstructionModifier] = []
-    for line in modifier_instr_lines:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split()
-        # expected: <at> <lhs> <rhs>
-        # you may have only 2 tokens in some cases; handle gracefully
-        at_s = parts[0]
-        at = int(at_s, 0)
-        lhs = parts[1] if len(parts) > 1 else ""
-        rhs = parts[2] if len(parts) > 2 else ""
-        patch = f"{lhs} {rhs}".strip()
-        modifier_instr.append(InstructionModifier(at=at, patch=patch))
-
-    # return both lists (or whatever your caller expects)
-    return virtual_instr, modifier_instr
-
-def convert_config_file(input_lines: list[str], symbols_dict: Optional[dict]) -> list[str]:
-    """
-    Converts configuration file content by resolving symbols and returns a list of processed lines.
-
-    Args:
-        input_lines: A list of strings, where each string is a line from the input file.
-
-    Returns:
-        A list of processed and converted strings. Returns an empty list if a symbol
-        cannot be found.
-    """
-    output_lines = []
-    for line in input_lines:
-        line = line.strip()
-        if not line or line.startswith("#"):  # Ignore empty lines and comments
-            continue
-
-        tokens = line.split()
-        if not tokens:
-            continue
-
-        # --- Process first token (could be a symbol) ---
-        first_token = tokens[0]
-        if helper.is_number(first_token) == "none":
-            symbol, offset = helper.parse_symbol(first_token)
-            if symbols_dict is not None and symbol in symbols_dict:
-                resolved_address = symbols_dict[symbol]
-                if resolved_address & 1:  # if thumb address, make it even
-                    resolved_address -= 1
-                first_token = hex(resolved_address + offset)
-            else:
-                fastdyn_log.warn(f"Symbol '{symbol}' from token '{tokens[0]}' not found in symbols dictionary.")
-                return []  # Return empty list on failure
-
-        # --- Process second token ---
-        second_token = tokens[1]
-
-        # --- Process third token (if it exists and could be a symbol) ---
-        third_token = None
-        if len(tokens) > 2:
-            third_token = tokens[2]
-            # Pass through if it looks like a memory access, pointer, or register
-            if "*" in third_token or "[" in third_token or "]" in third_token or helper.is_cortexm_register(third_token):
-                pass
-            elif helper.is_number(third_token) == "none":
-                symbol, offset = helper.parse_symbol(third_token) # parse symbol and offset
-                if symbols_dict is not None and symbol in symbols_dict:
-                    # Here we assume offset is 0 for the third token if it's just a symbol
-                    if offset != 0:
-                            fastdyn_log.warn(f"Offset for third token '{third_token}' is not supported. Treating as symbol only.")
-                    third_token = hex(symbols_dict[symbol])
-                else:
-                    fastdyn_log.warn(f"Symbol '{symbol}' from token '{third_token}' not found in symbols dictionary.")
-                    return []  # Return empty list on failure
-
-        # --- Construct the output line ---
-        final_line = f"{first_token} {second_token}"
-        if third_token:
-            final_line += f" {third_token}\n"
-        else:
-            final_line += f"\n"
-        output_lines.append(final_line)
-
-    return output_lines
-
 def validate_slave_params(
     *,
     parent_device: str,
@@ -517,7 +380,7 @@ def parse_vi(vi) -> Tuple[bool, Optional["VirtualInstruction"]]:
 
     return True, VirtualInstruction(at=at_val, instruction=instr, args=args)
 
-def resolve_vi(vi: VirtualInstruction,
+def resolve_vi(vi: "VirtualInstruction",
                irq_map: Dict[str, Any],
                symbol_map: Dict[str, Any]) -> "VirtualInstruction":
     """
@@ -527,13 +390,18 @@ def resolve_vi(vi: VirtualInstruction,
       - at:
           * if int: keep
           * if number-ish string (0x.. / decimal / bare-hex): convert to int
+          * supports leading '*' (e.g., "*main" or "*0x8000") by stripping '*' then resolving
           * else: resolve via symbol_map (supports sym+/-offset), else raise KeyError
           * if resolved from symbol_map: clear Thumb bit (addr&1 -> addr-1) before applying offset
       - args:
-          * if looks like pointer/mem/reg: keep
-          * else: try irq_map exact match -> numeric string
-          * else: try symbol_map (supports sym+/-offset) -> hex string
-          * else: keep as-is
+          * leading '*' deref is supported: "*sym", "*sym+4", "**sym", "*0x1000" etc.
+            - resolve the inner token via irq_map / numeric / symbol_map when possible, then reattach '*'
+          * bracketed memory expressions and registers are passed through unchanged (e.g., "[r0]", "sp")
+          * otherwise:
+              - try irq_map exact match -> numeric string
+              - else if numeric -> keep as-is
+              - else try symbol_map (supports sym+/-offset) -> hex string
+              - else keep as-is
       - raise_irq:
           * first arg must be number-ish after resolution, else raise ValueError
       - returns: new VirtualInstruction
@@ -541,17 +409,23 @@ def resolve_vi(vi: VirtualInstruction,
     sym_off_re = re.compile(r"^(.+?)([+-])(0x[0-9a-fA-F]+|\d+)$")
     hex_noprefix_re = re.compile(r"^[0-9a-fA-F]+$")
     reg_re = re.compile(r"^(r([0-9]|1[0-5])|sp|lr|pc|xpsr|apsr|ipsr|epsr)$", re.IGNORECASE)
+    deref_re = re.compile(r"^(\*+)\s*(.+)$")
 
     def is_numberish(tok: str) -> bool:
         t = tok.strip()
         if not t:
             return False
-        if t.lower().startswith("0x"):
-            return True
-        if t.isdigit():
-            return True
-        # treat bare hex as number (matches your earlier parsing behavior)
-        return bool(hex_noprefix_re.fullmatch(t))
+        try:
+            if t.lower().startswith("0x") or t.isdigit():
+                int(t, 0)
+                return True
+        except ValueError:
+            return False
+        # bare hex
+        try:
+            return bool(hex_noprefix_re.fullmatch(t)) and int(t, 16) >= 0
+        except ValueError:
+            return False
 
     def to_int(tok: str) -> int:
         t = tok.strip()
@@ -576,12 +450,42 @@ def resolve_vi(vi: VirtualInstruction,
         return sym, (off if sign == "+" else -off)
 
     def normalize_map_value(v: Any) -> int:
-        # symbol_map/irq_map may store ints or numeric strings
+        # symbol_map/irq_map may store ints or numeric strings (including bare hex)
         if isinstance(v, int):
             return v
         if isinstance(v, str):
-            return int(v, 0)  # supports "0x.." and decimal
+            s = v.strip()
+            if not s:
+                raise ValueError("empty numeric string in map")
+            if s.lower().startswith("0x") or s.isdigit():
+                return int(s, 0)
+            # bare hex like "800395e"
+            return int(s, 16)
         return int(v)
+
+    def try_resolve_simple(tok: str, *, thumb_fix: bool = False) -> Optional[str]:
+        """
+        Resolve a single token into a numeric string if possible.
+        Order: irq_map -> numeric -> symbol_map(sym+/-off)
+        """
+        t = tok.strip()
+        if not t:
+            return None
+
+        if t in irq_map:
+            return str(normalize_map_value(irq_map[t]))
+
+        if is_numberish(t):
+            return t  # keep formatting as provided
+
+        sym, off = parse_symbol_offset(t)
+        if sym in symbol_map:
+            base = normalize_map_value(symbol_map[sym])
+            if thumb_fix and (base & 1):
+                base -= 1
+            return hex(base + off)
+
+        return None
 
     # --- resolve at ---
     if isinstance(vi.at, int):
@@ -591,12 +495,18 @@ def resolve_vi(vi: VirtualInstruction,
         if not at_tok:
             raise KeyError("Unresolved VI.at: empty token")
 
+        # support gdb-ish "*main" / "*0x8000" by stripping leading '*'
+        while at_tok.startswith("*"):
+            at_tok = at_tok[1:].lstrip()
+        if not at_tok:
+            raise KeyError("Unresolved VI.at: only '*' provided")
+
         if is_numberish(at_tok):
             resolved_at = to_int(at_tok)
         else:
             sym, off = parse_symbol_offset(at_tok)
             if sym not in symbol_map:
-                raise KeyError(f"Unresolved VI.at symbol: {sym!r} (from {at_tok!r})")
+                raise KeyError(f"Unresolved VI.at symbol: {sym!r} (from {str(vi.at)!r})")
             base = normalize_map_value(symbol_map[sym])
             if base & 1:  # thumb bit fix
                 base -= 1
@@ -609,28 +519,43 @@ def resolve_vi(vi: VirtualInstruction,
         if not a:
             continue
 
-        # pass-through for pointers/memory/reg-like
-        if ("*" in a) or ("[" in a) or ("]" in a) or reg_re.fullmatch(a):
+        # 1) Handle leading deref like *main, **foo+4, *0x8000
+        m = deref_re.fullmatch(a)
+        if m:
+            stars, inner = m.group(1), m.group(2).strip()
+            inner_res = try_resolve_simple(inner, thumb_fix=True)
+            if inner_res is not None:
+                resolved_args.append(stars + inner_res)
+                continue
+            # if we can't resolve inner, fall through (and likely pass-through)
+
+        # 2) Pass-through for bracketed memory expressions and registers
+        if ("[" in a) or ("]" in a) or reg_re.fullmatch(a):
             resolved_args.append(a)
             continue
 
-        # irq_map first
+        # 3) If it still contains '*' somewhere (complex expression), don't touch it
+        if "*" in a:
+            resolved_args.append(a)
+            continue
+
+        # 4) irq_map first
         if a in irq_map:
             resolved_args.append(str(normalize_map_value(irq_map[a])))
             continue
 
-        # already numeric -> keep as-is
+        # 5) numeric -> keep
         if is_numberish(a):
             resolved_args.append(a)
             continue
 
-        # symbol_map (support sym+/-offset)
+        # 6) symbol_map (sym+/-offset)
         sym, off = parse_symbol_offset(a)
         if sym in symbol_map:
             base = normalize_map_value(symbol_map[sym])
             resolved_args.append(hex(base + off))
         else:
-            resolved_args.append(a)  # leave unchanged
+            resolved_args.append(a)
 
     # --- instruction-specific validation ---
     if vi.instruction == "raise_irq" and resolved_args:
@@ -691,6 +616,8 @@ def parse_mod(mod) -> Tuple[bool, Optional["InstructionModifier"]]:
 def resolve_mod(mod: "InstructionModifier", *, symbol_map: Dict[str, Any]) -> "InstructionModifier":
     sym_off_re = re.compile(r"^(.+?)([+-])(0x[0-9a-fA-F]+|\d+)$")
     hex_noprefix_re = re.compile(r"^[0-9a-fA-F]+$")
+    # Parse patterns like: "r15 <- main", "pc = foo+4", etc.
+    patch_re = re.compile(r"^(?P<lhs>\S+)\s*(?P<op><-|=|:=|->)\s*(?P<rhs>\S+)(?P<rest>.*)$")
 
     def is_numberish(tok: str) -> bool:
         t = tok.strip()
@@ -698,9 +625,9 @@ def resolve_mod(mod: "InstructionModifier", *, symbol_map: Dict[str, Any]) -> "I
             return False
         if t.lower().startswith("0x"):
             return True
-        if re.fullmatch(r"[+-]?\d+", t):  # handles -1, +1
+        if re.fullmatch(r"[+-]?\d+", t):  # -1, +1, 123
             return True
-        return bool(hex_noprefix_re.fullmatch(t))  # bare-hex
+        return bool(hex_noprefix_re.fullmatch(t))  # bare hex
 
     def to_int(tok: str) -> int:
         t = tok.strip()
@@ -708,7 +635,7 @@ def resolve_mod(mod: "InstructionModifier", *, symbol_map: Dict[str, Any]) -> "I
             return int(t, 16)
         if re.fullmatch(r"[+-]?\d+", t):
             return int(t, 10)
-        return int(t, 16)
+        return int(t, 16)  # bare hex
 
     def parse_symbol_offset(tok: str):
         t = tok.strip()
@@ -724,7 +651,14 @@ def resolve_mod(mod: "InstructionModifier", *, symbol_map: Dict[str, Any]) -> "I
         if isinstance(v, int):
             return v
         if isinstance(v, str):
-            return int(v, 0)
+            s = v.strip()
+            if not s:
+                raise ValueError("empty numeric string in symbol_map")
+            if s.lower().startswith("0x") or re.fullmatch(r"[+-]?\d+", s):
+                return int(s, 0)
+            if hex_noprefix_re.fullmatch(s):
+                return int(s, 16)
+            return int(s, 0)  # last try
         return int(v)
 
     # --- resolve at ---
@@ -746,20 +680,33 @@ def resolve_mod(mod: "InstructionModifier", *, symbol_map: Dict[str, Any]) -> "I
                 base -= 1
             resolved_at = base + off
 
-    # --- resolve patch rhs (only if rhs is symbol-like) ---
+    # --- resolve patch ---
     patch = (mod.patch or "").strip()
-    toks = patch.split()
-    if len(toks) < 2:
+    if not patch:
         return InstructionModifier(at=resolved_at, patch=patch)
 
-    lhs, rhs = toks[0], toks[1]
-    rest = toks[2:]
+    m = patch_re.fullmatch(patch)
+    if m:
+        lhs = m.group("lhs")
+        op = m.group("op")
+        rhs = m.group("rhs")
+        rest = m.group("rest").strip()
+        rest_toks = rest.split() if rest else []
+    else:
+        # fallback: keep old behavior if there's no operator
+        toks = patch.split()
+        if len(toks) < 2:
+            return InstructionModifier(at=resolved_at, patch=patch)
+        lhs, rhs = toks[0], toks[1]
+        op = ""  # no operator found
+        rest_toks = toks[2:]
 
     rhs_s = rhs.strip()
 
     # passthrough: pointer/memory/register/number
     if ("*" in rhs_s) or ("[" in rhs_s) or ("]" in rhs_s) or helper.is_cortexm_register(rhs_s) or is_numberish(rhs_s):
-        new_patch = " ".join([lhs, rhs] + rest).strip()
+        parts = [lhs] + ([op] if op else []) + [rhs] + rest_toks
+        new_patch = " ".join([p for p in parts if p]).strip()
         return InstructionModifier(at=resolved_at, patch=new_patch)
 
     # symbol resolve (supports sym+/-offset)
@@ -768,7 +715,8 @@ def resolve_mod(mod: "InstructionModifier", *, symbol_map: Dict[str, Any]) -> "I
         base = normalize_map_value(symbol_map[sym])
         rhs = hex(base + off)
 
-    new_patch = " ".join([lhs, rhs] + rest).strip()
+    parts = [lhs] + ([op] if op else []) + [rhs] + rest_toks
+    new_patch = " ".join([p for p in parts if p]).strip()
     return InstructionModifier(at=resolved_at, patch=new_patch)
 
 def mod_to_string(mod: "InstructionModifier") -> str:
