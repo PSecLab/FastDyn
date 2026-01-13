@@ -10,12 +10,6 @@ cjson_dep = dependency('libcjson', required: true)
 deps = [glib, cjson_dep]
 srcs = []
 
-#fuzzer support
-libfuzz_wrapper_dep = declare_dependency(
-  link_args: ['-L' + meson.current_source_dir() + '/fuzzer/fastdyn_fuzz_lib/target/release', '-lfastdyn_fuzzer']
-)
-deps += libfuzz_wrapper_dep
-
 #debugging FLAGS
 DEBUG_PRINT = get_option('DEBUG_PRINT')
 
@@ -69,6 +63,15 @@ if ENABLE_LIBHW
   )
 
   deps += libhw_dep
+endif
+
+#fuzzer support
+ENABLE_LIBFUZZ = get_option('enable_libfuzz')
+if ENABLE_LIBFUZZ
+  libfuzz_wrapper_dep = declare_dependency(
+    link_args: ['-L' + meson.current_source_dir() + '/fuzzer/fastdyn_fuzz_lib/target/release', '-lfastdyn_fuzzer']
+  )
+  deps += libfuzz_wrapper_dep
 endif
 
 #Based on the configurations, generate config.h

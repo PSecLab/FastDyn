@@ -4,6 +4,7 @@ qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
 LIBGZ        ?= false
 LIBHW        ?= true
+LIBFUZZ		 ?= false
 DEV          ?= true
 DEBUG_PRINT  ?= true
 LIBPY        ?= false
@@ -22,6 +23,7 @@ setup: clean fetch
 	-Dlibhw_path=$(abspath $(libhw_path)) \
 	-Denable_libhw=$(LIBHW) \
 	-Denable_libgz=$(LIBGZ) \
+	-Denable_libfuzz=$(LIBFUZZ) \
 	-Ddevice_models=$(DEV) \
 	-DDEBUG_PRINT=$(DEBUG_PRINT) \
 	-Denable_libpy=$(LIBPY)

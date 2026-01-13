@@ -6,6 +6,7 @@ option('libhw_path', type: 'string', value: '../../../libhw', description: 'Path
 #USER Libraries
 option('enable_libhw', type: 'boolean', value: false, description: 'Enable libhw support')
 option('enable_libgz', type: 'boolean', value: false, description: 'Enable gazebo lib support')
+option('enable_libfuzz', type: 'boolean', value: false, description: 'Enable rust fuzzing support')
 
 #Configuration Options
 option('device_models', type: 'boolean', value: false, description: 'Enable device models support')
