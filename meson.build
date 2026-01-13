@@ -10,6 +10,12 @@ cjson_dep = dependency('libcjson', required: true)
 deps = [glib, cjson_dep]
 srcs = []
 
+#fuzzer support
+libfuzz_wrapper_dep = declare_dependency(
+  link_args: ['-L' + meson.current_source_dir() + '/fuzzer/fastdyn_fuzz_lib/target/release', '-lfastdyn_fuzzer']
+)
+deps += libfuzz_wrapper_dep
+
 #debugging FLAGS
 DEBUG_PRINT = get_option('DEBUG_PRINT')
 
