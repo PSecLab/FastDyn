@@ -92,6 +92,8 @@ public:
                        const std::string &topic_name,
                        const std::string &service_name)
   {
+    if (topic_name == "NONE")
+      return;
     node.Subscribe(topic_name, &GenericSensorService::OnSensorMsg, this);
     node.Advertise(service_name, &GenericSensorService::OnServiceRequest, this);
   }
@@ -154,6 +156,7 @@ public:
   ServoService(gz::transport::Node &node,
                const std::string &service_name,
                const std::string &target_ip,
+               const std::string &model_name,
                int target_port,
                int local_port)
     : target_ip_(target_ip), target_port_(target_port)
@@ -171,6 +174,14 @@ public:
 
     // Initialize PWM values to 1500
     pwm_values_.resize(16, 1500);
+    // Per vehicle changes to expected format
+    if (model_name == "vtail_plane") {
+      pwm_values_[2] = 1000;
+      for (size_t i = 4; i < 16; i++)
+      {
+        pwm_values_[i] = 0;
+      }
+    }
     magic_ = 18458;
     frame_rate_ = 5;
     frame_count_ = 1;
@@ -543,6 +554,7 @@ private:
   void OnPoseMsg(const MsgType &msg)
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    received_ = true;
     latest_pose_ = msg;
   }
 
@@ -562,6 +574,9 @@ private:
   bool OnServiceRequest(const gz::msgs::Empty &,
                         gz::msgs::Float &rep)
   {
+    if (!received_)
+      rep.set_data(0.0f);
+      return true;
     std::lock_guard<std::mutex> lock(mutex_);
     float yaw = QuaternionToYaw(latest_pose_.pose(0).orientation());
     rep.set_data(yaw);
@@ -570,20 +585,36 @@ private:
 
   MsgType latest_pose_;
   std::mutex mutex_;
+  bool received_{false};
 };
 
 
 int main(int argc, char **argv)
 {
+  if (argc != 2)
+  {
+    std::cerr << "Usage: " << argv[0] << " <model_name>\n";
+    std::cerr << "Example: " << argv[0] << " [r1_rover, gs_drone, vtail_plane]\n";
+    return 1;
+  }
+
   gz::transport::Node node;
 
-  std::string model_name = "r1_rover";
+  std::string model_name = argv[1];
 
   std::string navsat_topic = "/world/runway/model/r1_rover/link/base_link/sensor/navsat_sensor/navsat";
   std::string mag_topic = "/world/runway/model/r1_rover/link/base_link/sensor/magnetometer_sensor/magnetometer";
+  std::string joint_states_topic = "/joint_states";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
+    joint_states_topic = "NONE";
+  } else if (model_name == "vtail_plane") {
+    // navsat_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/navsat_sensor/navsat";
+    // mag_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/magnetometer_sensor/magnetometer";
+    navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
+    mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    joint_states_topic = "NONE";
   }
   GenericSensorService<gz::msgs::NavSat> navSatService(
     node,
@@ -600,7 +631,7 @@ int main(int argc, char **argv)
   // skip this if not rover
   GenericSensorService<gz::msgs::Model> jointStateService(
     node,
-    "/joint_states",
+    joint_states_topic,
     "/get_joint_state"
   );
 
@@ -608,15 +639,16 @@ int main(int argc, char **argv)
     node,
     "/set_run_until_time",
     "127.0.0.1",
+    model_name,
     9002,
     5200
   );
 
-  YawService yawService(
-    node,
-    "/model/" + model_name + "/pose",
-    "/get_yaw_reading"
-  );
+  // YawService yawService(
+  //   node,
+  //   "/model/" + model_name + "/pose",
+  //   "/get_yaw_reading"
+  // );
 
   std::cout << "ArduPilot Services running...\n";
 
