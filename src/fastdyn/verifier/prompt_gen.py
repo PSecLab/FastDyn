@@ -1,10 +1,12 @@
 import os
 import sys
-import argparse
 import glob
 from typing import Dict
 import logging
+import textwrap
+from pathlib import Path
 
+from . import verifier as verify
 from .. import fastdyn_log as fastdyn_log_conf
 
 log = logging.getLogger(__name__)
@@ -87,7 +89,178 @@ typedef struct {
 
 // --- End of DMA Info
 
+// --- Network Backend APIs (Linux TAP) ---
+// 1. Init TAP interface (NON-BLOCKING). Returns fd.
+int api_tap_init(const char *dev_name);
+// 2. Send raw frame to host.
+int api_tap_send(int fd, const uint8_t *buf, int len);
+// 3. Poll host for incoming frame. Returns length or -1.
+int api_tap_recv_nonblock(int fd, uint8_t *buf, int max_len);
 """
+
+def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir):
+    fastdyn_log.info("Generating Prompt for LLM")
+    global qemu_api_list
+
+    final_prompt = generate_prompt_multiple(
+        analysis_dir=analysis_dir,
+        model_name=model_name,
+        peripherals=peripherals,
+        qemu_api_list=qemu_api_list,
+    )
+
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    output_path = Path(out_dir) / "initial_prompt.txt"
+    output_path.write_text(final_prompt + "\n", encoding="utf-8")
+
+    fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
+    return str(output_path)
+
+def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list):
+    """
+    Generates a detailed prompt for an LLM based on analysis files in a directory.
+    `peripherals` can be a tuple/list (Click multiple=True) or a single string.
+    """
+    if isinstance(peripherals, str):
+        peripherals = [peripherals]
+    else:
+        peripherals = list(peripherals)
+
+    # Parse summary once (it lives in analysis_dir/summary.txt per your layout)
+    summary_path = os.path.join(analysis_dir, "summary.txt")
+    summary_info = parse_summary_file(summary_path)
+    platform_name = summary_info.get("Platform", "Unknown Platform")
+
+    blocks = []
+    for periph in peripherals:
+        peripheral_directory = os.path.join(analysis_dir, periph)
+        peripheral_name = os.path.basename(peripheral_directory)
+
+        init_data    = read_file_content(os.path.join(peripheral_directory, "init.txt"))
+        state_data   = read_file_content(os.path.join(peripheral_directory, "state.txt"))
+        entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
+
+        isr_path = os.path.join(peripheral_directory, "isr_analysis.txt")
+        isr_analysis_data = read_file_content(isr_path) if os.path.exists(isr_path) else "No ISR analysis file was found."
+
+        loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
+        if not loop_files:
+            loop_data = "No repeating loop patterns were detected for this peripheral."
+        else:
+            loop_chunks = []
+            for loop_file in loop_files:
+                loop_chunks.append(
+                    f"--- Contents of {os.path.basename(loop_file)} ---\n{read_file_content(loop_file)}"
+                )
+            loop_data = "\n\n".join(loop_chunks)
+
+        block = textwrap.dedent(f"""\
+        ## Peripheral Name
+        {peripheral_name}
+
+        ## Initialization Sequence (`init.txt`)
+        This file contains all accesses that occur before the main runtime loop begins.
+        ```
+        {init_data}
+        ```
+
+        ## Detected Runtime Loops (`loop_pattern_*.txt`)
+        These files contain the most common repeating sequences of operations during runtime.
+        ```
+        {loop_data}
+        ```
+
+        ## Stateful Behavior Analysis (`state.txt`)
+        This file identifies programming patterns like Read-Modify-Write (RMW), which indicate stateful registers.
+        ```
+        {state_data}
+        ```
+
+        ## Register Entropy Analysis (`entropy.txt`)
+        This file measures the randomness of values read from registers. High entropy suggests data registers,
+        while low entropy suggests status registers.
+        ```
+        {entropy_data}
+        ```
+
+        ## ISR Analysis (`isr_analysis.txt`)
+        This file contains information about IRQs.
+        ```
+        {isr_analysis_data}
+        ```
+        """)
+        blocks.append(block)
+
+    prompt_start = textwrap.dedent(f"""\
+    Take this prompt independent from previous prompt history.
+
+    You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
+    You have read the reference manual for {platform_name} with special familiarity with {", ".join(peripherals)}.
+
+    Your task is to analyze the following summary of MMIO trace data and generate a complete C device model for {model_name}.
+
+    ## Available APIs
+    You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
+    ```c
+    {qemu_api_list.strip()}
+    ```
+
+    ### NOTE
+    If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API
+    by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API
+    or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
+
+    ## Host-Side I/O Setup (if needed)
+
+    If the model needs host I/O, output the exact host command(s) to create the required endpoint(s), inferred strictly
+    from the available APIs (e.g., PTY→serial, TAP→network, socket→UDP/TCP, file→path). If multiple endpoints are needed,
+    list commands in run order with minimal required bring-up. If none, output exactly: No host-side setup required.
+
+    --- START OF ANALYSIS DATA ---
+
+    ## Platform
+    {platform_name}
+
+    """)  # ends with blank line
+
+    # f-string + doubled braces to emit literal C braces
+    prompt_end = textwrap.dedent(f"""\
+    --- END OF ANALYSIS DATA ---
+
+    Based **only** on the data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
+
+    ## Required Output Format
+
+    ### 1. High-Level Summary
+    A concise, one-paragraph summary of this peripheral's likely purpose and overall behavior, considering the platform context.
+
+    ### 2. Register Analysis
+    A bulleted list of the important registers mentioned in the traces and their inferred functions.
+
+    ### 3. C Device Model Source Code
+    The C source code for MMIO read and write callback for {model_name} emulation and any initialization you need for the emulation only.
+    The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs mentioned.
+
+    ```c
+    // Device Model for {model_name}
+
+    // This function will emulate all device reads
+    uint64_t {model_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
+        // ...
+    }}
+
+    // This function will emulate all device writes
+    void {model_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
+        // ...
+    }}
+
+    void {model_name.lower()}_init(ConfigSection* model_info) {{
+        // ...
+    }}
+    ```
+    """)
+
+    return (prompt_start + "\n\n".join(blocks) + "\n\n" + prompt_end).strip()
 
 def initial_prompt_gen(analysis_dir, peripheral, out_dir):
     fastdyn_log.info("Generating Prompt for LLM")
@@ -102,6 +275,151 @@ def initial_prompt_gen(analysis_dir, peripheral, out_dir):
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
     return output_path
+
+def iteration_prompt_gen_multiple_periph(
+    cm_path_hardware,
+    cm_path_emulation,
+    peripherals,
+    model_name,
+    out_dir,
+    device_model_path,
+    show_prompt = False,
+    max_model_chars=120000,   # token-saver knob
+):
+    global qemu_api_list
+    # Normalize peripherals to list
+    if isinstance(peripherals, str):
+        peripherals = [peripherals]
+    else:
+        peripherals = list(peripherals)
+
+    # Parse summary once
+    summary_path = os.path.join(cm_path_hardware, "summary.txt")
+    summary_info = parse_summary_file(summary_path)
+    platform_name = summary_info.get("Platform", "Unknown Platform")
+
+    # Read (and optionally truncate) current device model
+    device_model = ""
+    if show_prompt:
+        device_model = Path(device_model_path).read_text(encoding="utf-8", errors="replace")
+        if max_model_chars and len(device_model) > max_model_chars:
+            device_model = "\n--- START OF CURRENT GENERATED DEVICE MODEL ---\n" + device_model[:max_model_chars] + "\n/* ... truncated ... */\n" + "\n--- END OF CURRENT GENERATED DEVICE MODEL ---\n"
+
+    total_center = []
+    for periph in peripherals:
+        not_match, diff_obj = verify.verify_automata(
+            automata1=cm_path_hardware,
+            automata2=cm_path_emulation,
+            peripheral=periph
+        )
+
+        center_prompt = textwrap.dedent(f"""\
+        ## Peripheral Name
+        {periph}
+
+        ## Initialization Sequence (`init.txt`)
+        ```
+        {diff_obj.diff_init_data}
+        ```
+
+        ## Detected Runtime Loops (`loop_pattern_*.txt`)
+        ```
+        {diff_obj.diff_loop_pattern_data}
+        ```
+
+        ## Stateful Behavior Analysis (`state.txt`)
+        ```
+        {diff_obj.diff_state_data}
+        ```
+
+        ## Register Entropy Analysis (`entropy.txt`)
+        ```
+        {diff_obj.diff_entropy_data}
+        ```
+
+        ## Runtime Data Accesses
+        ```
+        {diff_obj.diff_runtime_trace}
+        ```
+
+        ## ISR Analysis (`isr_analysis.txt`)
+        ```
+        {diff_obj.isr_analysis_data}
+        ```
+        """).strip()
+
+        total_center.append(center_prompt)
+
+    prompt_start = textwrap.dedent(f"""\
+    Take this prompt independent from previous prompt history.
+
+    You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
+    You have read the reference manual for {platform_name} with special familiarity with {", ".join(peripherals)}.
+
+    Your task is to analyze the following logs and correct the C device model for {model_name}.
+
+    ## Backward-pass / Correction
+    Below is the current generated model used for emulation. The logs below show mismatches; identify the root cause and fix it.
+
+
+    {device_model}
+
+    ## Available APIs
+    ```c
+    {qemu_api_list.strip()}
+    ```
+
+    ### NOTE
+    If a required API is missing, stop and ask the user to provide its signature and semantics.
+
+    ## Host-Side I/O Setup (if needed)
+    If the model needs host I/O, output the exact host command(s) to create required endpoint(s), inferred strictly
+    from the available APIs (PTY→serial, TAP→network, socket→UDP/TCP, file→path). If none, output exactly:
+    No host-side setup required.
+
+    --- START OF ANALYSIS DATA ---
+
+    ## Platform
+    {platform_name}
+
+    """).strip()
+
+    prompt_end = textwrap.dedent(f"""\
+    --- END OF ANALYSIS DATA ---
+
+    Based **only** on the data provided above, output:
+
+    ### 1. Previous Model Failure Analysis
+    One paragraph explaining the most likely reason for the mismatches.
+
+    ### 2. Register Analysis
+    Bullet list of important registers and inferred roles.
+
+    ### 3. Revised C Device Model Source Code
+    Provide the complete, self-contained C source for {model_name} (read/write/init), ready to compile. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs mentioned.
+
+    ```c
+    // Device Model for {model_name}
+    uint64_t {model_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
+        // ...
+    }}
+    void {model_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
+        // ...
+    }}
+    void {model_name.lower()}_init(ConfigSection* model_info) {{
+        // ...
+    }}
+    ```
+    """).strip()
+
+    final_prompt = (prompt_start + "\n\n" + "\n\n".join(total_center) + "\n\n" + prompt_end).strip()
+
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    output_path = Path(out_dir) / "revised_prompt.txt"
+    output_path.write_text(final_prompt + "\n", encoding="utf-8")
+
+    fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
+    return str(output_path)
 
 def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path):
     '''

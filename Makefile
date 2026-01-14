@@ -4,7 +4,7 @@ qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
 LIBGZ        ?= false
 LIBHW        ?= true
-LIBFUZZ		 ?= true
+LIBFUZZ		 ?= false
 DEV          ?= true
 DEBUG_PRINT  ?= true
 LIBPY        ?= false
@@ -45,10 +45,9 @@ clean:
 	rm -rf build docs/html
 
 fetch:
-#TODO: Add the cmsis as well
 	@# Only fetch submodules that are required for the selected features.
 	@if [ "$(DEV)" = "true" ] && [ "$(LIBHW)" = "true" ]; then \
-		git submodule update --init device_models/elder/inih; \
+		git submodule update --init device_models/elder/inih third_party/cmsis-svd-data; \
 	fi
 	@if [ "$(LIBGZ)" = "true" ]; then \
 		git submodule update --init submodules/mavlink_headers submodules/SITL_Models; \

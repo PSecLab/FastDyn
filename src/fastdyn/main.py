@@ -105,8 +105,15 @@ def run(config, map_file, work_dir):
 @click.option(
     '-p', '--peripheral',
     type=str,
+    multiple=True,
     required=True,
     help='Name of the peripheral targeted for verification.'
+)
+@click.option(
+    '-mname', '--model-name',
+    type=str,
+    required=False,
+    help='Name of the generated model you want to pass to LLM.'
 )
 @click.option(
     '--method',
@@ -137,7 +144,7 @@ def run(config, map_file, work_dir):
     type=click.Path(resolve_path=True, writable=True),
     help='Path to the work directory.'
 )
-def generate(hardware_log, slave_model, reference_model, firmware_code, board, peripheral, method, n, isr_window, work_dir):
+def generate(hardware_log, slave_model, reference_model, firmware_code, board, peripheral, model_name, method, n, isr_window, work_dir):
     """Generates the LLM Prompt using the hardware log passed by the user."""
     if slave_model:
         if reference_model is None:
@@ -175,28 +182,46 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
             shutil.rmtree(work_dir)
 
         log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
-        os.makedirs(work_dir)
 
-        #minimize the context
+        os.makedirs(work_dir)
+        #minimize the context -- since all the other peripherals are also part of the model, we dont need to do it multiple times
         cm_path = cm.minimize_context(
             out_dir=work_dir,
             log_file=hardware_log,
             platform=board,
             method=method,
-            peripheral=peripheral,
+            peripheral=peripheral[0],
             n=n,
-            isr_window=isr_window,
             svd_path="third_party/cmsis-svd-data",
+            isr_window=isr_window,
             cm_dir_name="out_cm"
             )
 
+        #TODO: Refactor and clean later
+        # but we still need to check if the other requested peripherals exist or not!
+        for periph in peripheral:
+            periph_path = os.path.join(cm_path, periph)
+            if os.path.exists(periph_path):
+                continue
+            else:
+                log.error(f"Requested Peripheral {periph} does not exist!")
+                sys.exit(1)
 
-        #generate the prompt
-        pg_path = pg.initial_prompt_gen(
-            analysis_dir=cm_path,
-            peripheral=peripheral,
-            out_dir=work_dir
-        )
+        #generate the prompt - we will generate a prompt such that it covers all the peripherals requested by the user
+        #TODO: Refactor and clean later
+        if len(peripheral) > 1:
+            pg_path = pg.initial_prompt_gen_multiple_periphs(
+                analysis_dir=cm_path,
+                model_name = model_name,
+                peripherals=peripheral,
+                out_dir=work_dir
+            )
+        else:
+            pg_path = pg.initial_prompt_gen(
+                analysis_dir=cm_path,
+                peripheral=peripheral,
+                out_dir=work_dir
+            )
 
 @cli.command(
     'verifier',
@@ -236,8 +261,15 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
 @click.option(
     '-p', '--peripheral',
     type=str,
+    multiple=True,
     required=True,
     help='Name of the peripheral targeted for verification.'
+)
+@click.option(
+    '-mname', '--model-name',
+    type=str,
+    required=False,
+    help='Name of the generated model you want to pass to LLM.'
 )
 @click.option(
     '--method',
@@ -268,7 +300,7 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
     type=click.Path(resolve_path=True, writable=True),
     help='Path to the work directory.'
 )
-def verifier(hardware_log, emulation_log, dev_model, board, peripheral, method, n, isr_window, work_dir):
+def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripheral, method, n, isr_window, work_dir):
     """Verifies the model against hardware and emulation logs."""
     log.info("Running Verifier")
     #minimize the context for hardware log
@@ -291,11 +323,23 @@ def verifier(hardware_log, emulation_log, dev_model, board, peripheral, method, 
         log_file=hardware_log,
         platform=board,
         method=method,
-        peripheral=peripheral,
+        peripheral=peripheral[0],
         n=n,
+        svd_path="third_party/cmsis-svd-data",
         isr_window=isr_window,
         cm_dir_name="hardware"
         )
+
+    #TODO: Refactor and clean later
+    # but we still need to check if the other requested peripherals exist or not!
+    for periph in peripheral:
+        periph_path = os.path.join(cm_path_hardware, periph)
+        if os.path.exists(periph_path):
+            continue
+        else:
+            log.error(f"Requested Peripheral {periph} does not exist!")
+            sys.exit(1)
+
 
     #minimize the context--emulation
     cm_path_emulation = cm.minimize_context(
@@ -303,29 +347,52 @@ def verifier(hardware_log, emulation_log, dev_model, board, peripheral, method, 
         log_file=emulation_log,
         platform=board,
         method=method,
-        peripheral=peripheral,
+        peripheral=peripheral[0],
         n=n,
         isr_window=isr_window,
+        svd_path="third_party/cmsis-svd-data",
         cm_dir_name="emulation"
         )
 
-    #compare the automatas
-    #diff_obj-> the difference object which contains the information about the differences in the automatas
-    not_match, diff_obj = verify.verify_automata(automata1=cm_path_hardware, automata2=cm_path_emulation, peripheral=peripheral)
+    #TODO: Refactor and clean later
+    # but we still need to check if the other requested peripherals exist or not!
+    for periph in peripheral:
+        periph_path = os.path.join(cm_path_emulation, periph)
+        if os.path.exists(periph_path):
+            continue
+        else:
+            log.error(f"Requested Peripheral {periph} does not exist!")
+            sys.exit(1)
 
-    #generate a prompt or tell the user, everything worked perfectly
-    if not_match:
-        log.warn("Log mismatch! Generating prompt")
-        #generate the prompt
-        #use the difference from the
-        pg_path = pg.iteration_prompt_gen(
-            diff_obj=diff_obj,
-            device_model_path=dev_model,
-            peripheral=peripheral,
-            out_dir=work_dir,
-        )
+
+    if (len(peripheral)) == 1:
+        #compare the automatas
+        #diff_obj-> the difference object which contains the information about the differences in the automatas
+        not_match, diff_obj = verify.verify_automata(automata1=cm_path_hardware, automata2=cm_path_emulation, peripheral=peripheral)
+
+        #generate a prompt or tell the user, everything worked perfectly
+        if not_match:
+            log.warn("Log mismatch! Generating prompt")
+            #generate the prompt
+            #use the difference from the
+            pg_path = pg.iteration_prompt_gen(
+                diff_obj=diff_obj,
+                device_model_path=dev_model,
+                peripheral=peripheral,
+                out_dir=work_dir,
+            )
+        else:
+            log.info("Both hardware log and emulation log matched!")
     else:
-        log.info("Both hardware log and emulation log matched!")
+        for periph in peripheral:
+            pg_path = pg.iteration_prompt_gen_multiple_periph(
+                cm_path_hardware=cm_path_hardware,
+                cm_path_emulation=cm_path_emulation,
+                model_name=model_name,
+                device_model_path=dev_model,
+                peripherals=peripheral,
+                out_dir=work_dir,
+            )
 
 @cli.command(
     'fuzz',
