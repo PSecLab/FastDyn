@@ -1,4 +1,5 @@
 mod phi_observer;
+mod phi_feedback;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
@@ -9,24 +10,15 @@ use libafl::monitors::tui::TuiMonitor;
 #[cfg(not(feature = "tui"))]
 use libafl::monitors::SimpleMonitor;
 use libafl::{
-    corpus::{InMemoryCorpus, OnDiskCorpus},
-    events::SimpleEventManager,
-    executors::{ExitKind, InProcessExecutor},
-    feedbacks::{CrashFeedback, MaxMapFeedback},
-    fuzzer::{Fuzzer, StdFuzzer},
-    generators::RandPrintablesGenerator,
-    inputs::{BytesInput, HasTargetBytes},
-    mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
-    observers::ConstMapObserver,
-    schedulers::QueueScheduler,
-    stages::mutational::StdMutationalStage,
-    state::StdState,
+    corpus::{InMemoryCorpus, OnDiskCorpus}, events::SimpleEventManager, executors::{ExitKind, InProcessExecutor}, feedback_or, feedbacks::{CrashFeedback, MaxMapFeedback}, fuzzer::{Fuzzer, StdFuzzer}, generators::RandPrintablesGenerator, inputs::{BytesInput, HasTargetBytes}, mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator}, observers::ConstMapObserver, schedulers::QueueScheduler, stages::mutational::StdMutationalStage, state::StdState
 };
 use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
 };
 
 use phi_observer::PhysicalObserver;
+
+use crate::phi_feedback::PhysicalFeedback;
 
 /// Coverage map with explicit assignments due to the lack of instrumentation
 const SIGNALS_LEN: usize = 16;
@@ -79,7 +71,12 @@ pub fn main() {
     );
 
     // Feedback to rate the interestingness of an input
-    let mut feedback = MaxMapFeedback::new(&observer);
+    let physical_feedback = PhysicalFeedback::new(
+        0,
+        vec!["One".to_string(), "Two".to_string()],
+        1
+    );
+    let mut feedback = feedback_or!(MaxMapFeedback::new(&observer), physical_feedback);
 
     // A feedback to choose if an input is a solution or not
     let mut objective = CrashFeedback::new();

@@ -8,7 +8,8 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 
-#[derive(Serialize, Deserialize, Debug)]pub struct PhysicalObserver {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PhysicalObserver {
     name: Cow<'static, str>,
     trace_time_step: f64, // Time step between recorded trace points
     sim_time_limit: f64, // Maximum simulation time to record
