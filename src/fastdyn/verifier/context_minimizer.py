@@ -18,14 +18,18 @@ from ..utils import parse_config as svd_parser
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
-def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window, cm_dir_name):
+def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window, cm_dir_name, svd_path="third_party/cmsis-svd-data"):
     fastdyn_log.info("Minimizing the context")
-    svd_file_map = svd_parser.discover_svd_files()
+
+    svd_file_map, is_file = svd_parser.discover_svd_files(svd_path)
+    if not is_file:
+        svd_file_path = svd_file_map[platform]
+    else:
+        svd_file_path = svd_file_map
 
     if platform not in svd_file_map:
         fastdyn_log.error(f"Platform '{platform}' not found in the discovered platforms from the cmsis-svd-data."); sys.exit(1)
 
-    svd_file_path = svd_file_map[platform]
     analyzer = MMIOAnalyzer(svd_path=svd_file_path)
     all_accesses = analyzer.load_and_correlate_log(log_file)
 

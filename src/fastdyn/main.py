@@ -16,7 +16,7 @@ from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 from .utils import helper
 from . import toml_parser
-
+from .fuzzer import fuzzer
 from dataclasses import asdict
 
 log = logging.getLogger(__name__)
@@ -186,6 +186,7 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
             peripheral=peripheral,
             n=n,
             isr_window=isr_window,
+            svd_path="third_party/cmsis-svd-data",
             cm_dir_name="out_cm"
             )
 
@@ -325,6 +326,116 @@ def verifier(hardware_log, emulation_log, dev_model, board, peripheral, method, 
         )
     else:
         log.info("Both hardware log and emulation log matched!")
+
+@cli.command(
+    'fuzz',
+    help='Performs the fuzzing using the hardware trace and toml configuration.'
+         'Takes the hardware trace to find the data registers and then uses toml configuration to run in the elder mode for fuzzing'
+)
+@click.option('-c','--config',required = True, type= click.Path(resolve_path=True,exists=True),
+                        help='The Path to the config file.',
+                        metavar= 'PATH')
+@click.option(
+    '-hw', '--hardware-log',
+    required=True,
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the log file generated when running the firmware on hardware.',
+    metavar='PATH'
+)
+@click.option(
+    '-p', '--peripheral',
+    type=str,
+    required=True,
+    help='Name of the peripheral targeted for verification.'
+)
+@click.option(
+    '-b', '--board',
+    type=str,
+    required=True,
+    help='Name of the platform on which the firmware is running.'
+)
+@click.option(
+    '--method',
+    default='ngram',
+    show_default=True,
+    type=click.Choice(['ngram', 'window', 'other'], case_sensitive=False),
+    help='Context minimization method.'
+)
+@click.option(
+    '--n',
+    type=int,
+    default=2,
+    show_default=True,
+    help='Value of n for n-gram method.'
+)
+@click.option(
+    '--isr-window',
+    type=int,
+    default=10000000,
+    show_default=True,
+    help='ISR window size.'
+)
+@click.option(
+    '-o', '--work-dir',
+    default="./fastdyn_work",
+    show_default=True,
+    metavar='PATH',
+    type=click.Path(resolve_path=True, writable=True),
+    help='Path to the work directory.'
+)
+def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_dir):
+    """Performs Fuzzing using the context minimizer for data register and then runs using the toml config"""
+
+    if work_dir is not None:
+        if not os.path.isdir(work_dir):
+            log.warning(f"The output directory: {work_dir} passed by the user does not exist.")
+    else:
+        work_dir = "fastdyn_work"
+
+    if os.path.exists(work_dir):
+        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
+        shutil.rmtree(work_dir)
+
+    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
+    os.makedirs(work_dir)
+
+    #minimize the context
+    cm_path = cm.minimize_context(
+        out_dir=work_dir,
+        log_file=hardware_log,
+        platform=board,
+        method=method,
+        peripheral=peripheral,
+        n=n,
+        isr_window=isr_window,
+        svd_path="third_party/cmsis-svd-data",
+        cm_dir_name="out_cm"
+        )
+
+    #takes the peripheral and the minimized context path to find the entropy.txt and generate all the anchor virtual instructions
+    anchors_lst = fuzzer.generate_vi(
+        cm_path     = cm_path,
+        peripheral  = peripheral,
+    )
+
+    #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
+    fastdyn_handle = toml_parser.parser(machine_name="machine0",toml_config=config, svd_path="third_party/cmsis-svd-data")
+
+    #TODO: For initial verification of fuzzer, the cpu is hardcoded to be zero, update this once complete fuzzer is added
+    for machine in fastdyn_handle.machines:
+        curr_machine = fastdyn_handle.machines[machine]
+        for cpu in curr_machine.cpus:
+            cpu.add_virtual_instruction(anchors_lst)
+            print(cpu.virtuals)
+
+    #run all the machines requested by the user
+    for idx, machine in enumerate(fastdyn_handle.machines):
+        fastdyn_handle.run(machine_name=f"machine{idx}",
+                           target="qemu",
+                           out_path=work_dir
+                           )
+
+
 
 if __name__ == "__main__":
     cli()

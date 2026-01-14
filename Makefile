@@ -4,7 +4,7 @@ qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
 LIBGZ        ?= false
 LIBHW        ?= true
-LIBFUZZ		 ?= false
+LIBFUZZ		 ?= true
 DEV          ?= true
 DEBUG_PRINT  ?= true
 LIBPY        ?= false
@@ -45,6 +45,7 @@ clean:
 	rm -rf build docs/html
 
 fetch:
+#TODO: Add the cmsis as well
 	@# Only fetch submodules that are required for the selected features.
 	@if [ "$(DEV)" = "true" ] && [ "$(LIBHW)" = "true" ]; then \
 		git submodule update --init device_models/elder/inih; \

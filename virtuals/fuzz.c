@@ -28,9 +28,9 @@ static void vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
 void virt_assert(unsigned int cpu_index, void *udata)
 {
     if (!coverage) {
-        utils_die("Coverage not enabled, cannot assert coverage data");                
+        utils_die("Coverage not enabled, cannot assert coverage data");
     }
-    
+
     if (!udata)
         return;
 
@@ -71,7 +71,7 @@ void anchor(unsigned int cpu_index, void *udata)
         fuzzer_init_done = true;
 	} else {
         // Dump coverage, but only after an initial fuzz
-        if (!dump_trace_info(hFuzzer)) { 
+        if (!dump_trace_info(hFuzzer)) {
             utils_die("Rust side closed PC channel");
         }
     }
@@ -117,7 +117,7 @@ void anchor(unsigned int cpu_index, void *udata)
         if (value < 100) {
             qemu_set_register(fuzzed_input, value);
         } else {
-            qemu_plugin_write_memory(value, fuzzed_input, 4);
+            qemu_plugin_write_memory(value, (uint8_t *)&fuzzed_input, 4);
         }
         idx +=1;
 		if (idx >= read_count) {

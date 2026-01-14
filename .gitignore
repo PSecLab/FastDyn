@@ -9,3 +9,4 @@ Doxyfile.bak
 *fastdyn_work
 fastdyn-env
 *build
+*.bin

@@ -1,8 +1,5 @@
-#include <boardrunner/vio.h>    //Warn: Dont change this, it contains the definition of the model required apis
-
-//Paste your beautiful model here
-//Following is an example of the model that user can create.
 #include <device.h>
+#include <boardrunner/vio.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
