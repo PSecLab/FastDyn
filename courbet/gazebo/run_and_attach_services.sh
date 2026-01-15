@@ -20,8 +20,11 @@ MODEL_NAME=""
 
 # Start Gazebo with the specified world file
 if [ "$VEHICLE_TYPE" == "copter" ]; then
-    gz sim -r r1_rover_runway.sdf &
-    MODEL_NAME="gs_drone"
+    # gz sim -r gs_drone_runway.sdf &
+    gz sim -r bicopter_runway.sdf &
+    # gz sim -r skywalker_x8_quad_runway.sdf &
+    # MODEL_NAME="skywalker_x8_quad"
+    MODEL_NAME="bicopter"
 elif [ "$VEHICLE_TYPE" == "rover" ]; then
     gz sim -r r1_rover_runway.sdf &
     MODEL_NAME="r1_rover"

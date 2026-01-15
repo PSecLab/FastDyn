@@ -822,8 +822,8 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
         if (compass_read_count % 10 == 0) {
             double average_interval_ms = (compass_total_elapsed_time_s / compass_read_count) * 1000.0;
             double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
-            printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
-                   average_interval_ms, frequency_hz, compass_read_count);
+            // printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
+                //    average_interval_ms, frequency_hz, compass_read_count);
         }
     }
     compass_read_count++;

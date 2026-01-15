@@ -181,6 +181,15 @@ public:
       {
         pwm_values_[i] = 0;
       }
+    } else if (model_name == "bicopter") {
+      pwm_values_[0] = 1000;
+      pwm_values_[1] = 1000;
+      pwm_values_[2] = 1500;
+      pwm_values_[3] = 1500;
+      for (size_t i = 4; i < 16; i++)
+      {
+        pwm_values_[i] = 0;
+      }
     }
     magic_ = 18458;
     frame_rate_ = 5;
@@ -609,11 +618,19 @@ int main(int argc, char **argv)
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
+  } else if (model_name == "bicopter") {
+    navsat_topic = "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/navsat_sensor/navsat";
+    mag_topic =    "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    joint_states_topic = "NONE";
   } else if (model_name == "vtail_plane") {
-    // navsat_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/navsat_sensor/navsat";
-    // mag_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/magnetometer_sensor/magnetometer";
-    navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
-    mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
+    mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
+    // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    joint_states_topic = "NONE";
+  } else if (model_name == "skywalker_x8_quad") {
+    navsat_topic = "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/navsat_sensor/navsat";
+    mag_topic =    "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
   }
   GenericSensorService<gz::msgs::NavSat> navSatService(
