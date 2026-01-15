@@ -1,5 +1,6 @@
 mod phi_observer;
 mod phi_feedback;
+mod phi_objective;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
@@ -17,8 +18,8 @@ use libafl_bolts::{
 };
 
 use phi_observer::PhysicalObserver;
-
-use crate::phi_feedback::PhysicalFeedback;
+use phi_feedback::PhysicalFeedback;
+use phi_objective::PhysicalObjective;
 
 /// Coverage map with explicit assignments due to the lack of instrumentation
 const SIGNALS_LEN: usize = 16;
@@ -66,20 +67,15 @@ pub fn main() {
     let physical_observer = PhysicalObserver::new(
         0.1,               // time step
         10.0,              // time limit
-        "./recorder_bin",  // path to the external recorder binary
-        "./trace_logs",    // directory to store the trace logs
+        "./trace_logs",  // directory to store the trace logs
     );
 
     // Feedback to rate the interestingness of an input
-    let physical_feedback = PhysicalFeedback::new(
-        0,
-        vec!["One".to_string(), "Two".to_string()],
-        1
-    );
+    let physical_feedback = PhysicalFeedback::new();
     let mut feedback = feedback_or!(MaxMapFeedback::new(&observer), physical_feedback);
 
     // A feedback to choose if an input is a solution or not
-    let mut objective = CrashFeedback::new();
+    let mut objective = feedback_or!(CrashFeedback::new(), PhysicalObjective::new());
 
     // create a State from scratch
     let mut state = StdState::new(
