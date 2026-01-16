@@ -90,7 +90,7 @@ where
         recorder_path.push("trace_recorder");
 
         let spawn_result = Command::new(recorder_path)
-             .args([state.executions().to_string(),
+             .args([(state.executions() + 1).to_string(),
                 self.trace_time_step.to_string(), 
                 self.sim_time_limit.to_string(), 
                 self.trace_log_dir.clone()
@@ -153,7 +153,7 @@ where
         // Finally, evaluate the trace against all STL formulas
         let x_pred: banquo::Predicate = predicate!{ x <= 110.0 };
         let y_pred: banquo::Predicate = predicate!{ y <= 6.0 };
-        let z_pred: banquo::Predicate = predicate!{ z <= -1.0 };
+        let z_pred: banquo::Predicate = predicate!{ z <= 0.16 };
 
         // Either formulas are impossible to store generically in a single vector or I am a bot (most likely)
         // So for now just manually call evaluate() and push the results into latest_robustness_vec
@@ -163,6 +163,8 @@ where
         self.latest_robustness_vec.clear();
         self.latest_robustness_vec.push(evaluate(&trace, &formula).unwrap());
         self.latest_robustness_vec.push(evaluate(&trace, &formula2).unwrap());
+
+        // println!("Robustness for execution {}: {:?}", state.executions(), self.latest_robustness_vec);
 
         // TODO: Write the robustness values to a separate log file
 
