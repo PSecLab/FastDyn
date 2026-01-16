@@ -355,7 +355,7 @@ private:
 
     // std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
 
-    while (run_until_time_s_ - latest_time_s_ > 0.1)
+    while (run_until_time_s_ - latest_time_s_ > 0.1 )
     {
       // wait for the sim to catch up within 0.1 s
       // std::cout << "Waiting... latest_time_s_: " << latest_time_s_ << " s\n";
@@ -631,6 +631,10 @@ int main(int argc, char **argv)
   } else if (model_name == "skywalker_x8_quad") {
     navsat_topic = "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    joint_states_topic = "NONE";
+  } else if (model_name == "blueboat") {
+    navsat_topic = "/world/waves/model/blueboat/link/base_link/sensor/navsat_sensor/navsat";
+    mag_topic =    "/world/waves/model/blueboat/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
   }
   GenericSensorService<gz::msgs::NavSat> navSatService(
