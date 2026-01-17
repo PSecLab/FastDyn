@@ -636,6 +636,10 @@ int main(int argc, char **argv)
     navsat_topic = "/world/waves/model/blueboat/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/waves/model/blueboat/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
+  } else if (model_name == "bluerov2") {
+    navsat_topic = "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/navsat_sensor/navsat";
+    mag_topic =    "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    joint_states_topic = "NONE";
   }
   GenericSensorService<gz::msgs::NavSat> navSatService(
     node,
