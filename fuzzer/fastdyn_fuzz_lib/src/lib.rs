@@ -17,7 +17,7 @@ use libafl::{
     feedbacks::{CrashFeedback, MaxMapFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::RandPrintablesGenerator,
-    inputs::{HasTargetBytes, NopBytesConverter},
+    inputs::{BytesInput, HasTargetBytes, Input, InputConverter},
     mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
     observers::StdMapObserver,
     schedulers::QueueScheduler,
@@ -25,14 +25,25 @@ use libafl::{
     state::{HasCorpus, HasExecutions, StdState},
     BloomInputFilter, StdFuzzerBuilder,
 };
-
+use libafl_bolts::{
+    current_nanos,
+    nonzero,
+    rands::StdRand,
+    tuples::tuple_list,
+    AsSlice,
+};
+use core::num::NonZeroUsize;
 use std::fs::File;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write, BufReader};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::thread::JoinHandle;
+use std::ffi::CStr;
+use std::os::raw::c_char;
+use std::sync::{RwLock, Mutex, Arc};
+use std::ptr;
+use lazy_static::lazy_static;
 
-use libafl_bolts::{current_nanos, nonzero, rands::StdRand, tuples::tuple_list, AsSlice};
 /// Coverage map with explicit assignments due to the lack of instrumentation
 static mut SIGNALS: [u8; 16] = [0; 16];
 static mut SIGNALS_PTR: *mut u8 = &raw mut SIGNALS as _;
@@ -50,7 +61,7 @@ const MAP_SIZE: usize = 65536; // same as AFL
 static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 
 pub struct FuzzHandleInternal {
-    pub input_rx: Receiver<u32>,        // C side receives inputs from Rust
+    pub input_rx: Receiver<Vec<u8>>,        // C side receives inputs from Rust
     pub pc_tx: Sender<Vec<u32>>,        // C side sends PCs back to Rust
     pub thread: JoinHandle<()>,         // handle to the fuzzer thread
 }
@@ -63,12 +74,12 @@ pub struct FuzzHandle {
 
 struct FastDynExecutor<S> {
     phantom: PhantomData<S>,
-    input_tx: Sender<u32>,
+    input_tx: Sender<Vec<u8>>,
     pc_rx: Receiver<Vec<u32>>,
 }
 
 impl<S> FastDynExecutor<S> {
-    pub fn new(_state: &S, input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) -> Self {
+    pub fn new(_state: &S, input_tx: Sender<Vec<u8>>, pc_rx: Receiver<Vec<u32>>) -> Self {
         Self {
             phantom: PhantomData,
             input_tx,
@@ -95,19 +106,7 @@ where
         let target = input.target_bytes();
         let buf = target.as_slice();
 
-        // Number of 4-byte words
-        let count = (buf.len() + 3) / 4;
-
-        // Send count first
-        self.input_tx.send(count as u32).unwrap();
-
-        // Send each 4-byte chunk
-        for chunk in buf.chunks(4) {
-            let mut padded = [0u8; 4];
-            padded[..chunk.len()].copy_from_slice(chunk);
-            let word = u32::from_le_bytes(padded);
-            self.input_tx.send(word).unwrap();
-        }
+        self.input_tx.send(buf.to_vec()).unwrap();
 
 //		println!("{:?}", buf);
 
@@ -166,7 +165,7 @@ where
     }
 }
 
-pub fn fuzzer_thread_main(input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) {
+pub fn fuzzer_thread_main(input_size: usize, input_tx: Sender<Vec<u8>>, pc_rx: Receiver<Vec<u32>>) {
     // Create an observation channel using the signals map
     let observer = unsafe { StdMapObserver::new("cvg", &mut CVG) };
 
@@ -175,7 +174,7 @@ pub fn fuzzer_thread_main(input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) {
 
     let calibration_stage = CalibrationStage::new(&feedback);
     let stats_stage = AflStatsStage::builder()
-        .map_observer(&observer)
+        .map_feedback(&feedback)
         .build()
         .unwrap();
 
@@ -230,17 +229,20 @@ pub fn fuzzer_thread_main(input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) {
     #[cfg(feature = "bloom_input_filter")]
     let mut fuzzer = StdFuzzerBuilder::new()
         .input_filter(filter)
-        .bytes_converter(NopBytesConverter::default())
-        .build(scheduler, feedback, objective)
-        .unwrap();
+        .scheduler(scheduler)
+        .feedback(feedback)
+        .objective(objective)
+        .build();
 
     // Create the executor for an in-process function with just one observer
     let executor = FastDynExecutor::new(&state, input_tx, pc_rx);
 
     let mut executor = WithObservers::new(executor, tuple_list!(observer));
 
-    // Generator of printable bytearrays of max size 32
-    let mut generator = RandPrintablesGenerator::with_min_size(nonzero!(1), nonzero!(32));
+    // Generator of printable bytearrays
+    let nz = NonZeroUsize::new(input_size)
+        .expect("input_size must be non-zero");
+    let mut generator = RandPrintablesGenerator::with_min_size(nz, nz);
 
     // Generate 8 initial inputs
     state
@@ -252,7 +254,7 @@ pub fn fuzzer_thread_main(input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) {
     let mut stages = tuple_list!(
         calibration_stage,
         StdMutationalStage::new(mutator),
-        stats_stage
+        stats_stage,
     );
 
     fuzzer
@@ -260,17 +262,16 @@ pub fn fuzzer_thread_main(input_tx: Sender<u32>, pc_rx: Receiver<Vec<u32>>) {
         .expect("Error in the fuzzing loop");
 }
 
-#[no_mangle]
-pub extern "C" fn fuzz_init() -> *mut FuzzHandle {
+pub fn fuzz_init(input_size: usize) -> FuzzHandle {
     use std::sync::mpsc::channel;
 
-    // Channels for simple u32 / Vec<u32> communication
-    let (input_tx, input_rx) = channel::<u32>();          // Rust → C
+    // Channels for simple Vec<u8> / Vec<u32> communication
+    let (input_tx, input_rx) = channel::<Vec<u8>>();          // Rust → C
     let (pc_tx, pc_rx) = channel::<Vec<u32>>();           // C → Rust
 
     // Spawn the fuzzer thread and move the correct ends into it
     let thread = std::thread::spawn(move || {
-        fuzzer_thread_main(input_tx, pc_rx);
+        fuzzer_thread_main(input_size, input_tx, pc_rx);
     });
 
     // Store the opposite ends for the C side
@@ -280,35 +281,71 @@ pub extern "C" fn fuzz_init() -> *mut FuzzHandle {
         thread,
     });
 
-    let handle = Box::new(FuzzHandle {
+    let handle = FuzzHandle {
         inner: Box::into_raw(internal),
-    });
+    };
 
-    Box::into_raw(handle)
+    return handle;
+}
+
+unsafe impl Send for FuzzHandle {}
+unsafe impl Sync for FuzzHandle {}
+
+lazy_static::lazy_static! {
+    static ref ANCHOR_MAP: RwLock<HashMap<u32, FuzzHandle>> =
+        RwLock::new(HashMap::new());
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_get(id: u32, cstr: *const c_char) -> *mut FuzzHandle {
+    // Safety: cstr must be a valid null-terminated C string
+    let c_str = unsafe { CStr::from_ptr(cstr) };
+    let r_str = c_str.to_str().unwrap(); // handle errors in production
+
+    let input_size = (r_str.chars().filter(|&c| c == ',').count() + 1) * 4;
+
+    // Insert if missing
+    {
+        let mut map = ANCHOR_MAP.write().unwrap();
+        map.entry(id).or_insert_with(|| fuzz_init(input_size));
+    }
+
+    // Return a pointer to the stored handle
+    let map = ANCHOR_MAP.read().unwrap();
+    map.get(&id).map(|h| h as *const FuzzHandle as *mut FuzzHandle)
+        .unwrap_or(ptr::null_mut())
 }
 
 #[no_mangle]
 pub extern "C" fn fuzz_receive_input(
     handle_ptr: *mut FuzzHandle,
-    out_input: *mut u32,
-) -> u32 {
-    if handle_ptr.is_null() {
+    out_buf: *mut u8,
+    out_buf_len: usize,
+) -> usize {
+    if handle_ptr.is_null() || out_buf.is_null() || out_buf_len == 0 {
         return 0;
     }
 
     let internal = unsafe { &mut *(*handle_ptr).inner };
 
-    // Block until the fuzzer thread sends an input
     match internal.input_rx.recv() {
         Ok(input) => {
+            let copy_len = core::cmp::min(input.len(), out_buf_len);
+
             unsafe {
-                *out_input = input;
+                core::ptr::copy_nonoverlapping(
+                    input.as_ptr(),
+                    out_buf,
+                    copy_len,
+                );
             }
-            1 // success
+
+            copy_len // number of bytes written
         }
         Err(_) => 0, // channel closed / error
     }
 }
+
 
 #[no_mangle]
 pub extern "C" fn fuzz_submit_pcs(
