@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import signal
 
-from ..utils import helper
+from ..utils import helper, twintrace
 import logging
 
 log = logging.getLogger(__name__)
@@ -175,6 +175,21 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
 
     cmd.extend(memory_config)
 
+    #-----------------generate twin trace binary from the hardware log------------------------
+    replay_hardware_log = getattr(cpu0, "hardware_trace", None)
+    twintrace_opt = getattr(cpu0, "twintrace", None)
+    replay_binary = None
+
+    if twintrace_opt == "replay":
+        #create a binary for faster parsing of hardware log for the replayer
+        replay_binary = os.path.join(out_path, "replay_bin.ttbin")
+        print(replay_hardware_log)
+        twintrace.convert(replay_hardware_log, replay_binary, only_model=None)
+        #quick verification
+        twintrace.replay_binary_verifier(replay_binary)
+    elif twintrace_opt == "None":
+        twintrace_opt= "off"
+
     # ------------------------ Plugin ------------------------
     plugin_lib = cpu0.plugin_library
     for c in cpus[1:]:
@@ -186,10 +201,11 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"virtual={virtuals_path}",
         f"modifier={modifiers_path}",
         f"coverage={_bool01(opts.coverage)}",
+        f"twintrace={twintrace_opt}",
+        f"twintrace_binary={replay_binary}",
     ]
     if opts.finline is not None:
         plugin_kv.append(f"finline={opts.finline}")
-
     cmd.extend(["--plugin", ",".join(plugin_kv)])
 
     # ------------------------ GDB command ------------------------

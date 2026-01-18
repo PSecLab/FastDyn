@@ -59,6 +59,12 @@ typedef struct {
     SPIDevices SPIdetails;
 } DeviceModels;
 
+typedef enum {
+    TT_OFF = 0,
+    TT_RECORD = 1,
+    TT_REPLAY = 2,
+} twintrace_mode_t;
+
 // Represents a top-level section (e.g., "elder", "passthrough")
 typedef struct {
     char* name;
@@ -68,6 +74,9 @@ typedef struct {
 
     DeviceModels* devices; // Dynamic array of device models
     int device_count;
+
+    twintrace_mode_t twintrace_mode;
+    const char* twintrace_bin;
 } ConfigSection;
 
 // The root structure holding the entire configuration

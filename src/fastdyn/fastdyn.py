@@ -79,8 +79,8 @@ class Machine:
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
-    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor):
-        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, self) #pass parent for easy referencing to objs like irq_map
+    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace):
+        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, self) #pass parent for easy referencing to objs like irq_map
         self.cpus.append(cpu)
         return cpu
 
@@ -137,13 +137,16 @@ class InstructionModifier:
     patch: str
 
 class CPU:
-    def __init__(self, arch, machine, cpu, binary, init_nsvtor, machine_obj):
+    def __init__(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, machine_obj):
         """One CPU instance belonging to a machine."""
         self.arch = arch
         self.machine = machine
         self.cpu = cpu
         self.binary = binary
         self.init_nsvtor: int = init_nsvtor
+        self.twintrace = twintrace       #supported options are record, replay or None
+        self.hardware_trace = hardware_trace    # hardware log needed in case of replay
+
         self.machine_obj = machine_obj
 
         self.plugin_library: Optional[str] = "build/libfastdyn.so"
@@ -452,8 +455,8 @@ class Memory:
         elif not isinstance(mem_backend, BackendType):
             raise TypeError(f"mem_type must be MemoryType or str, got {type(mem_backend).__name__}")
 
-        if not os.path.exists(memory_file):
-            raise ValueError(f"memory file: {memory_file} does not exist")
+        # if not os.path.exists(memory_file):
+        #     raise ValueError(f"memory file: {memory_file} does not exist")
 
         self.memory_file = memory_file
 

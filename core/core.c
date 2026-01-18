@@ -53,6 +53,9 @@ int isdigit(int c);
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <stdatomic.h>
+
+static _Atomic uint64_t g_icount = 0;
 
 static const char * runtime;
 
@@ -60,6 +63,8 @@ AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
 int coverage;
 
+twintrace_mode_t twintrace_mode = TT_OFF;
+const char *twintrace_bin_path = NULL;
 
 /**
  * @brief Parses a token string into a logger entry.
@@ -380,6 +385,16 @@ uint64_t core_get_pc(void) {
 	return ret_val;
 }
 
+uint64_t core_get_icount(void) {
+    return atomic_load_explicit(&g_icount, memory_order_relaxed);
+}
+
+// Called from your QEMU/plugin TB callback:
+void core_icount_add(uint32_t n_insns) {
+    atomic_fetch_add_explicit(&g_icount, (uint64_t)n_insns, memory_order_relaxed);
+}
+
+
 void qemu_set_register(uint32_t value, int reg);
 void qemu_set_register(uint32_t value, int reg) {
 	if ((reg >= ARM_V7M_S0)) {
@@ -605,6 +620,14 @@ LoggerEntry cc_entry;
 LookupResult cc_ret;
 static int tracer_ready =0;
 char gpio_memory[0x400];
+
+static void tb_exec_cb(unsigned int cpu_index, void *udata)
+{
+    (void)cpu_index;
+    uint32_t n = (uint32_t)(uintptr_t)udata;
+    core_icount_add(n);
+}
+
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
 	if (runtime && !init) {
@@ -614,6 +637,14 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     size_t n = qemu_plugin_tb_n_insns(tb);
     size_t i;
 	UpdateEntry *matches[MAX_MATCHES];
+
+    if (twintrace_mode != TT_OFF) {
+        qemu_plugin_register_vcpu_tb_exec_cb(
+            tb, tb_exec_cb,
+            QEMU_PLUGIN_CB_NO_REGS,
+            (void *)(uintptr_t)n
+        );
+    }
 
 	DEBUG_LOG("->Virtual Clock: %llu \n", (unsigned long long)qemu_plugin_get_virtual_timer());
 
@@ -870,6 +901,51 @@ bool find_rule_by_address(unsigned long long addr, rule_t **out_rule) {
     return false;
 }
 
+static const char* safe_arg(const char* s) {
+    if (!s) return NULL;
+    if (arg_is_disabled(s)) return NULL;
+    if (s[0] == '\0') return NULL;
+    return s;
+}
+
+static void parse_twintrace_args(int argc, char **argv)
+{
+    const char *tt  = safe_arg(utils_get_arg("twintrace", argc, argv));
+    const char *bin = safe_arg(utils_get_arg("twintrace_binary", argc, argv));
+
+    twintrace_mode = TT_OFF;
+    twintrace_bin_path = NULL;
+
+    if (tt) {
+        if (!strcasecmp(tt, "replay")) {
+            twintrace_mode = TT_REPLAY;
+        } else if (!strcasecmp(tt, "record")) {
+            twintrace_mode = TT_RECORD;
+        } else if (!strcasecmp(tt, "true") || !strcasecmp(tt, "on") || !strcmp(tt, "1")) {
+            // if user just says "true", pick a default; I'd default to REPLAY only if bin exists,
+            // otherwise RECORD. Here's a reasonable default:
+            twintrace_mode = bin ? TT_REPLAY : TT_RECORD;
+        } else if (!strcasecmp(tt, "false") || !strcasecmp(tt, "off") || !strcmp(tt, "0")) {
+            twintrace_mode = TT_OFF;
+        } else {
+            fprintf(stderr, "fastdyn: unknown twintrace mode: '%s'\n", tt);
+            utils_die("bad twintrace mode");
+        }
+    }
+
+    if (twintrace_mode == TT_REPLAY) {
+        if (!bin) {
+            utils_die("fastdyn: twintrace enabled but twintrace_binary is missing");
+        }
+        twintrace_bin_path = bin;
+    }
+
+    fprintf(stderr, "fastdyn: twintrace_mode=%d twintrace_binary=%s\n",
+            (int)twintrace_mode,
+            twintrace_bin_path ? twintrace_bin_path : "(none)");
+}
+
+
 void parse_rules_file(const char *filename);
 void parse_rules_file(const char *filename) {
     FILE *f = fopen(filename, "r");
@@ -963,6 +1039,9 @@ static int core_parse_arguments(int argc, char ** argv) {
     } else {
         coverage = 0;
     }
+
+    //parse args for twintrace
+    parse_twintrace_args(argc, argv);
 
     filename = utils_get_arg("logger", argc, argv);
     if (filename) {

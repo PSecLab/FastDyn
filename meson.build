@@ -135,6 +135,7 @@ if ENABLE_LIBHW
   'device_models/passthrough/passthrough.c',
   'device_models/elder/elder.c',
   'device_models/elder/device_config.c',
+  'device_models/twintrace/twintrace.c',
   'device_models/elder/inih/ini.c'
   )
 endif

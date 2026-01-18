@@ -7,6 +7,9 @@
 #include "cJSON.h"
 #include <stdio.h>
 
+extern twintrace_mode_t twintrace_mode;
+extern const char *twintrace_bin_path;
+
 // Global current device model
 static FILE * io_logger;
 
@@ -59,6 +62,7 @@ static inline void dev_get_timestamp(time_t *sec, long *usec) {
 static int dev_write(char * handler, long unsigned int address, uint64_t value, long unsigned int size) {
 #ifdef DEV_LOGGER
     uint64_t pc = core_get_pc();
+    uint64_t icount = core_get_icount();
     time_t sec;
     long usec;
     dev_get_timestamp(&sec, &usec);
@@ -87,8 +91,14 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
             dev->write(dev->opaque, address, value, size, pc);
             handled = true;
 #ifdef DEV_LOGGER
-            utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-                    sec, usec, dev->name, address, size, size * 2, value, pc);
+    if (twintrace_mode != TT_OFF) {
+        utils_log_to_file(io_logger,
+        "[%5ld.%06ld] icount=%" PRIu64 " [%s] Write: \t address=0x%08X, size=%lu bytes, value=0x%0*" PRIx64 ", pc=0x%08" PRIx64 "\n",
+        sec, usec, icount, dev->name, (unsigned)address, size, (int)(size * 2), value, pc);
+    } else {
+        utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+                sec, usec, dev->name, address, size, size * 2, value, pc);
+    }
 #endif
         }
         node = node->next;
@@ -115,6 +125,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 static int dev_read(char * handler, long unsigned int address, uint64_t *buf, long unsigned int size) {
 #ifdef DEV_LOGGER
     uint64_t pc = core_get_pc();
+    uint64_t icount = core_get_icount();
     time_t sec;
     long usec;
     dev_get_timestamp(&sec, &usec);
@@ -162,8 +173,14 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
         value = dev_to_use->read(dev_to_use->opaque, address, size, pc);
         *buf = value;
 #ifdef DEV_LOGGER
-        utils_log_to_file(io_logger, "[%5ld.%06ld] [%s] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+    if (twintrace_mode != TT_OFF) {
+        utils_log_to_file(io_logger, "[%5ld.%06ld] icount=%" PRIu64" [%s] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+        sec, usec, icount, dev_to_use->name, address, size, size * 2, value, pc);
+
+    } else {
+    utils_log_to_file(io_logger, "[%5ld.%06ld] [%s] Read: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
               sec, usec, dev_to_use->name, address, size, size * 2, value, pc);
+    }
 #endif
     } else {
         // This block is reached if:
@@ -661,6 +678,9 @@ static inline AppConfig* dev_parse_models(const char *s, ModelEntry *entries, in
 
         for (int i=0; i < config->section_count; i++) {
             ConfigSection* s = &config->sections[i];
+            //add model twintrace binary
+            s->twintrace_bin = twintrace_bin_path;
+            s->twintrace_mode = twintrace_mode;
 
             //model name
             strncpy(entries[i].model, s->name, sizeof(entries[i].model));

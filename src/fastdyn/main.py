@@ -14,7 +14,6 @@ from fastdyn.__init__ import __version__
 from .verifier import verifier as verify             #contains the verification framework
 from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
-from .utils import helper
 from . import toml_parser
 from .fuzzer import fuzzer
 from dataclasses import asdict
@@ -368,7 +367,7 @@ def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripher
     if (len(peripheral)) == 1:
         #compare the automatas
         #diff_obj-> the difference object which contains the information about the differences in the automatas
-        not_match, diff_obj = verify.verify_automata(automata1=cm_path_hardware, automata2=cm_path_emulation, peripheral=peripheral)
+        not_match, diff_obj = verify.verify_automata(automata1=cm_path_hardware, automata2=cm_path_emulation, peripheral=peripheral[0])
 
         #generate a prompt or tell the user, everything worked perfectly
         if not_match:

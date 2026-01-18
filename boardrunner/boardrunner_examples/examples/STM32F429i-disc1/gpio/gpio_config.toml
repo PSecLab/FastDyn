@@ -54,6 +54,8 @@ monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the targ
 binary = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
 init_nsvtor = "0x08000000"
 map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
+twintrace = "replay" #options are record, replay or None
+hardware_trace = '/home/hammad/work/rehosting/FastDyn/hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
@@ -76,6 +78,10 @@ logger_content = """
     backend = "stlink"
 
 [Device.Models.classic]
+    # The classic model has no global arguments.
+
+[Device.Models.twintrace]
+    backend = "stlink"
     # The classic model has no global arguments.
 
 [Device.Models.unhandled]
@@ -101,7 +107,7 @@ logger_content = """
     [[Device.gpiog.handlers]]
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
-        model   = "passthrough"
+        model   = "twintrace"
         enabled = true
 
 [Device.unhandled_space]
@@ -110,5 +116,5 @@ logger_content = """
     description = "Memory regions that are explicitly not handled by any model."
 
     [[Device.unhandled_space.handlers]]
-        model = "passthrough"
+        model = "twintrace"
         enabled = true

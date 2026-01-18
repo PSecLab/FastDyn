@@ -54,7 +54,9 @@ def parser(machine_name, toml_config, svd_path):
                 machine=curr_cpu.get("machine", "cortexm"),
                 cpu=curr_cpu.get("cpu", "cortex-m4"),
                 binary=curr_cpu['binary'],  #mandatory else throw error
-                init_nsvtor= curr_cpu.get("init_nsvtor", None)  #handle by the target to retreive correct value from binary
+                init_nsvtor= curr_cpu.get("init_nsvtor", None),  #handle by the target to retreive correct value from binary
+                twintrace = curr_cpu.get("twintrace", None),
+                hardware_trace = curr_cpu.get("hardware_trace", None)
                 )
 
         #additional params if set by the user

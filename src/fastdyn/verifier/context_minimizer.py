@@ -129,6 +129,7 @@ def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_win
 class MMIOAccess:
     timestamp_ns: int
     access_type: str
+    icount: Optional[int] = None
     address: Optional[int] = None
     value: Optional[int] = None
     pc: Optional[int] = None
@@ -187,11 +188,19 @@ class MMIOAnalyzer:
     def load_and_correlate_log(self, log_path: str) -> List[MMIOAccess]:
         fastdyn_log.info(f"Loading and correlating log file: {log_path}")
         log_pattern = re.compile(
-            r'\[\s*(?P<timestamp>\d+\.\d+)\s*\]\s*\[(?P<model>[^\]]+)\]\s*(?P<type>Read|Write):\s*address\s*=\s*(?P<address>0x[0-9a-fA-F]+),\s*'
-            r'size\s*=\s*\d+\s*bytes,\s*value\s*=\s*(?P<value>0x[0-9a-fA-F]+),\s*pc=(?P<pc>0x[0-9a-fA-F]+)'
+            r'\[\s*(?P<timestamp>\d+\.\d+)\s*\]\s*'
+            r'(?:icount=(?P<icount>\d+)\s+)?'
+            r'\[(?P<model>[^\]]+)\]\s*'
+            r'(?P<type>Read|Write):\s*'
+            r'address\s*=\s*(?P<address>0x[0-9a-fA-F]+),\s*'
+            r'size\s*=\s*\d+\s*bytes,\s*'
+            r'value\s*=\s*(?P<value>0x[0-9a-fA-F]+),\s*'
+            r'pc\s*=\s*(?P<pc>0x[0-9a-fA-F]+)'
         )
         interrupt_pattern = re.compile(
-            r'\[\s*(?P<timestamp>\d+\.\d+)\s*\]\s*Interrupt Taken:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)'
+            r'\[\s*(?P<timestamp>\d+\.\d+)\s*\]\s*'
+            r'(?:icount=(?P<icount>\d+)\s+)?'
+            r'Interrupt Taken:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)'
         )
         enriched_accesses = []
         try:
@@ -212,12 +221,14 @@ class MMIOAnalyzer:
                         access = MMIOAccess(
                             timestamp_ns=int(float(data['timestamp']) * 1e9),
                             access_type='interrupt',
+                            icount=icount,
                             peripheral=p_name,
                             vector=vector
                         )
                         enriched_accesses.append(access)
                     if not match: continue
                     data = match.groupdict()
+                    icount = int(data['icount']) if data.get('icount') else None
                     address = int(data['address'], 16)
                     p_name, r_name, d_name = self._find_register_for_address(address)
                     if p_name is None:
@@ -226,6 +237,7 @@ class MMIOAnalyzer:
                         continue
                     access = MMIOAccess(
                         timestamp_ns=int(float(data['timestamp']) * 1e9), access_type=data['type'].lower(),
+                        icount=icount,
                         address=address, value=int(data['value'], 16), pc=int(data['pc'], 16),
                         peripheral=p_name, register=r_name, register_desc=d_name
                     )

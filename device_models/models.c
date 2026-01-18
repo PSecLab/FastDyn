@@ -2,6 +2,7 @@
 #if ENABLE_LIBHW
 	extern DeviceModel passthrough_model_def;
 	extern DeviceModel elder_model_def;
+	extern DeviceModel twintrace_model_def;
 #endif
 extern DeviceModel classic_model_def;
 #if ENABLE_LIBPY
@@ -13,6 +14,7 @@ static DeviceModel *all_devices[] = {
 	#if ENABLE_LIBHW
 		&passthrough_model_def,
 		&elder_model_def,
+		&twintrace_model_def,
 	#endif
 	&classic_model_def,
 	#if ENABLE_LIBPY
