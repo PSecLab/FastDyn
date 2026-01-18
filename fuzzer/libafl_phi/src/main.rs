@@ -1,6 +1,9 @@
 mod phi_observer;
 mod phi_feedback;
 mod phi_objective;
+mod cpexp_state;
+mod phi_stage;
+mod cpexp_input;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
@@ -17,9 +20,20 @@ use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
 };
 
+use scirs2_optimize::global::{ 
+    BayesianOptimizationOptions,
+    BayesianOptimizer,
+    Space
+};
+use scirs2_optimize::prelude::Parameter;
+use scirs2_core::ndarray::Array1;
+
 use phi_observer::PhysicalObserver;
 use phi_feedback::PhysicalFeedback;
 use phi_objective::PhysicalObjective;
+use cpexp_state::CPExpState;
+use phi_stage::PhiStage;
+use cpexp_input::CPExpInput;
 
 /// Coverage map with explicit assignments due to the lack of instrumentation
 const SIGNALS_LEN: usize = 16;
@@ -72,13 +86,41 @@ pub fn main() {
 
     // Feedback to rate the interestingness of an input
     let physical_feedback = PhysicalFeedback::new();
-    let mut feedback = feedback_or!(MaxMapFeedback::new(&observer), physical_feedback);
+    let mut feedback = feedback_or!(MaxMapFeedback::new(&observer), ); //physical_feedback);
 
     // A feedback to choose if an input is a solution or not
-    let mut objective = feedback_or!(CrashFeedback::new(), PhysicalObjective::new());
+    let mut objective = feedback_or!(CrashFeedback::new(),); // PhysicalObjective::new());
 
     // create a State from scratch
-    let mut state = StdState::new(
+    // let mut state = StdState::new(
+    //     // RNG
+    //     StdRand::with_seed(current_nanos()),
+    //     // Corpus that will be evolved, we keep it in memory for performance
+    //     InMemoryCorpus::new(),
+    //     // Corpus in which we store solutions (crashes in this example),
+    //     // on disk so the user can get them after stopping the fuzzer
+    //     OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
+    //     // States of the feedbacks.
+    //     // The feedbacks can report the data that should persist in the State.
+    //     &mut feedback,
+    //     // Same for objective feedbacks
+    //     &mut objective,
+    // )
+    // .unwrap();
+
+    // Define search space
+    let mut space = Space::new();
+    // space = space.add("categorical_param", Parameter::Categorical(vec!["A".to_string(), "B".to_string(), "C".to_string()]));
+    space = space.add("throttle", Parameter::Real(-1.0, 1.0));
+    space = space.add("wind_speed", Parameter::Real(0.0, 20.0));
+
+    // Create options object
+    let mut opt = BayesianOptimizationOptions::default();
+    opt.n_initial_points = 100;
+
+    let bo = BayesianOptimizer::new(space, Some(opt));
+
+     let mut state = CPExpState::new(
         // RNG
         StdRand::with_seed(current_nanos()),
         // Corpus that will be evolved, we keep it in memory for performance
@@ -91,6 +133,11 @@ pub fn main() {
         &mut feedback,
         // Same for objective feedbacks
         &mut objective,
+        // Bayesian Optimizer!
+        Some(bo),
+        // Start with phi stage first?
+        true,
+
     )
     .unwrap();
 
@@ -116,7 +163,7 @@ pub fn main() {
     // Create the executor for an in-process function with just one observer
     let mut executor = InProcessExecutor::new(
         &mut harness,
-        tuple_list!(observer, physical_observer),
+        tuple_list!(observer, ),//physical_observer),
         &mut fuzzer,
         &mut state,
         &mut mgr,
@@ -126,14 +173,26 @@ pub fn main() {
     // Generator of printable bytearrays of max size 32
     let mut generator = RandPrintablesGenerator::new(nonzero!(32));
 
+    let mut inputs = Vec::<CPExpInput>::new();
+
     // Generate 8 initial inputs
     state
-        .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
+        .generate_initial_inputs(
+            &mut fuzzer, 
+            &mut executor, 
+            &mut generator, 
+            &mut mgr, 
+            8,
+            // &mut inputs,
+        )
         .expect("Failed to generate the initial corpus");
 
     // Setup a mutational stage with a basic bytes mutator
+
+    let phi_stage = PhiStage::new(20);
+
     let mutator = HavocScheduledMutator::new(havoc_mutations());
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+    let mut stages = tuple_list!(phi_stage, StdMutationalStage::new(mutator),);
 
     fuzzer
         .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)

@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 // pub use stack::StageStack;
 pub use libafl::state::StageStack;
 
+use crate::cpexp_input::CPExpInput;
 #[cfg(feature = "introspection")]
 use crate::monitors::stats::ClientPerfStats;
 use libafl::{
@@ -33,7 +34,7 @@ use libafl::{
     feedbacks::StateInitializer,
     fuzzer::{Evaluator, ExecuteInputResult},
     generators::Generator,
-    inputs::{Input, NopInput},
+    inputs::{self, Input, NopInput},
     stages::StageId,
 };
 
@@ -53,13 +54,16 @@ use scirs2_optimize::global::{
 use scirs2_optimize::prelude::Parameter;
 use scirs2_core::ndarray::Array1;
 
+use crate::cpexp_input::ParamInput;
+use crate::cpexp_input::EnvInput;
+
 /*
     This is a copy of baby_fuzzer's StdState with two Bayesian Optimizers included!
 */
 
 /// Struct that holds the options for input loading
 #[cfg(feature = "std")]
-pub struct PhiLoadConfig<'a, I, S, Z> {
+pub struct CPExpLoadConfig<'a, I, S, Z> {
     /// Load Input even if it was deemed "uninteresting" by the fuzzer
     forced: bool,
     /// Function to load input from a Path
@@ -69,7 +73,7 @@ pub struct PhiLoadConfig<'a, I, S, Z> {
 }
 
 #[cfg(feature = "std")]
-impl<I, S, Z> Debug for PhiLoadConfig<'_, I, S, Z> {
+impl<I, S, Z> Debug for CPExpLoadConfig<'_, I, S, Z> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "LoadConfig {{}}")
     }
@@ -82,7 +86,7 @@ impl<I, S, Z> Debug for PhiLoadConfig<'_, I, S, Z> {
         R: serde::Serialize + for<'a> serde::Deserialize<'a>,
         SC: serde::Serialize + for<'a> serde::Deserialize<'a>,
     ")]
-pub struct PhiStdState<C, I, R, SC> {
+pub struct CPExpState<C, I, R, SC> {
     /// RNG instance
     rand: R,
     /// How many times the executor ran the harness/target
@@ -127,42 +131,44 @@ pub struct PhiStdState<C, I, R, SC> {
     stage_stack: StageStack,
     phantom: PhantomData<I>,
 
-    // One Bayesian Optimizer will handle environment parameters...
+    // Bayesian Optimizer to generate environment inputs and parameter values
     #[serde(skip)]
-    environment_bo: Option<BayesianOptimizer>,
+    optimizer: Option<BayesianOptimizer>,
 
-    // And another will handle FC config parameters...
-    #[serde(skip)]
-    parameter_bo: Option<BayesianOptimizer>,
-
-    // And eventually, one will be used to automatically generate missions!
-    // mission_bo: BayesianOptimizer,
+    // Should we execute phi stage (true) or lambda stage (false)?
+    optimize_params: bool
 
 }
 
-pub trait HasOptimizers {
-    fn environment_bo(&self) -> &Option<BayesianOptimizer>;
-    fn environment_bo_mut(&mut self) -> &mut Option<BayesianOptimizer>;
-    fn parameter_bo(&self) -> &Option<BayesianOptimizer>;
-    fn parameter_bo_mut(&mut self) -> &mut Option<BayesianOptimizer>;
+pub trait HasOptimizer {
+    fn optimizer(&self) -> &Option<BayesianOptimizer>;
+    fn optimizer_mut(&mut self) -> &mut Option<BayesianOptimizer>;
 }
 
-impl <C, I, R, SC> HasOptimizers for PhiStdState<C, I, R, SC> {
-    fn environment_bo(&self) -> &Option<BayesianOptimizer> {
-        &self.environment_bo
+impl <C, I, R, SC> HasOptimizer for CPExpState<C, I, R, SC> {
+    fn optimizer(&self) -> &Option<BayesianOptimizer> {
+        &self.optimizer
     }
-    fn environment_bo_mut(&mut self) -> &mut Option<BayesianOptimizer> {
-        &mut self.environment_bo
-    }
-    fn parameter_bo(&self) -> &Option<BayesianOptimizer> {
-        &self.parameter_bo
-    }
-    fn parameter_bo_mut(&mut self) -> &mut Option<BayesianOptimizer> {
-        &mut self.parameter_bo
+    fn optimizer_mut(&mut self) -> &mut Option<BayesianOptimizer> {
+        &mut self.optimizer
     }
 }
 
-impl<C, I, R, SC> HasRand for PhiStdState<C, I, R, SC>
+pub trait HasOptimizeParams {
+    fn optimize_params(&self) -> bool;
+    fn optimize_params_mut(&mut self) -> &mut bool;
+}
+
+impl <C, I, R, SC> HasOptimizeParams for CPExpState<C, I, R, SC> {
+    fn optimize_params(&self) -> bool {
+        self.optimize_params
+    }
+    fn optimize_params_mut(&mut self) -> &mut bool {
+        &mut self.optimize_params
+    }
+}
+
+impl<C, I, R, SC> HasRand for CPExpState<C, I, R, SC>
 where
     R: Rand,
 {
@@ -181,7 +187,7 @@ where
     }
 }
 
-impl<C, I, R, SC> HasCorpus<I> for PhiStdState<C, I, R, SC>
+impl<C, I, R, SC> HasCorpus<I> for CPExpState<C, I, R, SC>
 where
     C: Corpus<I>,
 {
@@ -200,7 +206,7 @@ where
     }
 }
 
-impl<C, I, R, SC> HasTestcase<I> for PhiStdState<C, I, R, SC>
+impl<C, I, R, SC> HasTestcase<I> for CPExpState<C, I, R, SC>
 where
     C: Corpus<I>,
 {
@@ -215,7 +221,7 @@ where
     }
 }
 
-impl<C, I, R, SC> HasSolutions<I> for PhiStdState<C, I, R, SC>
+impl<C, I, R, SC> HasSolutions<I> for CPExpState<C, I, R, SC>
 where
     C: Corpus<I>,
     I: Input,
@@ -236,7 +242,7 @@ where
     }
 }
 
-impl<C, I, R, SC> HasMetadata for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasMetadata for CPExpState<C, I, R, SC> {
     /// Get all the metadata into an [`hashbrown::HashMap`]
     #[inline]
     fn metadata_map(&self) -> &SerdeAnyMap {
@@ -250,7 +256,7 @@ impl<C, I, R, SC> HasMetadata for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasNamedMetadata for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasNamedMetadata for CPExpState<C, I, R, SC> {
     /// Get all the metadata into an [`hashbrown::HashMap`]
     #[inline]
     fn named_metadata_map(&self) -> &NamedSerdeAnyMap {
@@ -264,7 +270,7 @@ impl<C, I, R, SC> HasNamedMetadata for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasExecutions for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasExecutions for CPExpState<C, I, R, SC> {
     /// The executions counter
     #[inline]
     fn executions(&self) -> &u64 {
@@ -278,7 +284,7 @@ impl<C, I, R, SC> HasExecutions for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasImported for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasImported for CPExpState<C, I, R, SC> {
     /// Return the number of new paths that imported from other fuzzers
     #[inline]
     fn imported(&self) -> &usize {
@@ -292,7 +298,7 @@ impl<C, I, R, SC> HasImported for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasLastFoundTime for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasLastFoundTime for CPExpState<C, I, R, SC> {
     /// Return the number of new paths that imported from other fuzzers
     #[inline]
     fn last_found_time(&self) -> &Duration {
@@ -306,7 +312,7 @@ impl<C, I, R, SC> HasLastFoundTime for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasLastReportTime for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasLastReportTime for CPExpState<C, I, R, SC> {
     /// The last time we reported progress,if available/used.
     /// This information is used by fuzzer `maybe_report_progress`.
     fn last_report_time(&self) -> &Option<Duration> {
@@ -320,7 +326,7 @@ impl<C, I, R, SC> HasLastReportTime for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasMaxSize for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasMaxSize for CPExpState<C, I, R, SC> {
     fn max_size(&self) -> usize {
         self.max_size
     }
@@ -330,7 +336,7 @@ impl<C, I, R, SC> HasMaxSize for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasStartTime for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasStartTime for CPExpState<C, I, R, SC> {
     /// The starting time
     #[inline]
     fn start_time(&self) -> &Duration {
@@ -344,7 +350,7 @@ impl<C, I, R, SC> HasStartTime for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasCurrentCorpusId for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasCurrentCorpusId for CPExpState<C, I, R, SC> {
     fn set_corpus_id(&mut self, id: CorpusId) -> Result<(), Error> {
         self.corpus_id = Some(id);
         Ok(())
@@ -360,7 +366,7 @@ impl<C, I, R, SC> HasCurrentCorpusId for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> Stoppable for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> Stoppable for CPExpState<C, I, R, SC> {
     fn request_stop(&mut self) {
         self.stop_requested = true;
     }
@@ -374,7 +380,7 @@ impl<C, I, R, SC> Stoppable for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasCurrentStageId for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasCurrentStageId for CPExpState<C, I, R, SC> {
     fn set_current_stage_id(&mut self, idx: StageId) -> Result<(), Error> {
         self.stage_stack.set_current_stage_id(idx)
     }
@@ -392,7 +398,7 @@ impl<C, I, R, SC> HasCurrentStageId for PhiStdState<C, I, R, SC> {
     }
 }
 
-impl<C, I, R, SC> HasNestedStage for PhiStdState<C, I, R, SC> {
+impl<C, I, R, SC> HasNestedStage for CPExpState<C, I, R, SC> {
     fn enter_inner_stage(&mut self) -> Result<(), Error> {
         self.stage_stack.enter_inner_stage()
     }
@@ -403,7 +409,7 @@ impl<C, I, R, SC> HasNestedStage for PhiStdState<C, I, R, SC> {
 }
 
 #[cfg(feature = "std")]
-impl<C, I, R, SC> PhiStdState<C, I, R, SC>
+impl<C, I, R, SC> CPExpState<C, I, R, SC>
 where
     C: Corpus<I>,
     I: Input,
@@ -497,7 +503,7 @@ where
         executor: &mut E,
         manager: &mut EM,
         file_list: &[PathBuf],
-        load_config: PhiLoadConfig<I, Self, Z>,
+        load_config: CPExpLoadConfig<I, Self, Z>,
     ) -> Result<(), Error>
     where
         EM: EventFirer<I, Self>,
@@ -521,7 +527,7 @@ where
         manager: &mut EM,
         fuzzer: &mut Z,
         executor: &mut E,
-        config: &mut PhiLoadConfig<I, Self, Z>,
+        config: &mut CPExpLoadConfig<I, Self, Z>,
     ) -> Result<ExecuteInputResult, Error>
     where
         EM: EventFirer<I, Self>,
@@ -561,7 +567,7 @@ where
         fuzzer: &mut Z,
         executor: &mut E,
         manager: &mut EM,
-        mut config: PhiLoadConfig<I, Self, Z>,
+        mut config: CPExpLoadConfig<I, Self, Z>,
     ) -> Result<(), Error>
     where
         EM: EventFirer<I, Self>,
@@ -639,7 +645,7 @@ where
             executor,
             manager,
             file_list,
-            PhiLoadConfig {
+            CPExpLoadConfig {
                 loader: &mut |_, _, path| I::from_file(path),
                 forced: false,
                 exit_on_solution: false,
@@ -666,7 +672,7 @@ where
             fuzzer,
             executor,
             manager,
-            PhiLoadConfig {
+            CPExpLoadConfig {
                 loader: &mut |_, _, path| I::from_file(path),
                 forced: true,
                 exit_on_solution: false,
@@ -692,7 +698,7 @@ where
             executor,
             manager,
             file_list,
-            PhiLoadConfig {
+            CPExpLoadConfig {
                 loader: &mut |_, _, path| I::from_file(path),
                 forced: true,
                 exit_on_solution: false,
@@ -717,7 +723,7 @@ where
             fuzzer,
             executor,
             manager,
-            PhiLoadConfig {
+            CPExpLoadConfig {
                 loader: &mut |_, _, path| I::from_file(path),
                 forced: false,
                 exit_on_solution: false,
@@ -743,7 +749,7 @@ where
             fuzzer,
             executor,
             manager,
-            PhiLoadConfig {
+            CPExpLoadConfig {
                 loader: &mut |_, _, path| I::from_file(path),
                 forced: false,
                 exit_on_solution: true,
@@ -784,7 +790,7 @@ where
                 fuzzer,
                 executor,
                 manager,
-                PhiLoadConfig {
+                CPExpLoadConfig {
                     loader: &mut |_, _, path| I::from_file(path),
                     forced: false,
                     exit_on_solution: false,
@@ -850,13 +856,14 @@ where
     }
 }
 
-impl<C, I, R, SC> PhiStdState<C, I, R, SC>
+impl<C, I, R, SC> CPExpState<C, I, R, SC>
 where
     C: Corpus<I>,
     I: Input,
     R: Rand,
     SC: Corpus<I>,
 {
+
     fn generate_initial_internal<G, E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
@@ -923,22 +930,29 @@ where
         generator: &mut G,
         manager: &mut EM,
         num: usize,
+        // inputs: &mut Vec<I>,
     ) -> Result<(), Error>
     where
         EM: EventFirer<I, Self>,
         G: Generator<I, Self>,
         Z: Evaluator<E, EM, I, Self>,
     {
+
+        // for input in inputs.iter() {
+        //     let _ = fuzzer.evaluate_input(self, executor, manager, input)?;
+        // }
+
+        // Ok(())
         self.generate_initial_internal(fuzzer, executor, generator, manager, num, false)
     }
 }
 
-impl<C, I, R, SC> PhiStdState<C, I, R, SC>
+impl<C, I, R, SC> CPExpState<C, I, R, SC>
 where
-    C: Corpus<I>,
-    I: Input,
+    // C: Corpus<I>,
+    // I: Input,
     R: Rand,
-    SC: Corpus<I>,
+    // SC: Corpus<I>,
 {
     /// Creates a new `State`, taking ownership of all of the individual components during fuzzing.
     pub fn new<F, O>(
@@ -947,8 +961,8 @@ where
         solutions: SC,
         feedback: &mut F,
         objective: &mut O,
-        env_bo: Option<BayesianOptimizer>,
-        param_bo: Option<BayesianOptimizer>,
+        bo: Option<BayesianOptimizer>,
+        phi_first: bool,
     ) -> Result<Self, Error>
     where
         F: StateInitializer<Self>,
@@ -981,8 +995,8 @@ where
             #[cfg(feature = "std")]
             multicore_inputs_processed: None,
 
-            environment_bo: env_bo,
-            parameter_bo: param_bo,
+            optimizer: bo,
+            optimize_params: phi_first,
 
         };
         feedback.init_state(&mut state)?;

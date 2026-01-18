@@ -35,7 +35,9 @@ libafl = { path = "/home/ere/fire/LibAFL-0.15.4/crates/libafl", features = ["tui
 libafl_bolts = { path = "/home/ere/fire/LibAFL-0.15.4/crates/libafl_bolts" }
 
 log = { version = "0.4.22", features = ["release_max_level_info"] }
+ordered-float = "5.1.0"
 protobuf = "3.7.2"
 scirs2-core = "0.1.1"
 scirs2-optimize = "0.1.1"
 serde = "1.0.228"
+serde_json = "1.0.149"
