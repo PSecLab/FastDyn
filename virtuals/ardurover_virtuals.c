@@ -314,15 +314,24 @@ static const float wheel_radius = 0.069f; // meters
  */
 void init_wheel_encoder(unsigned int cpu_index, void *udata)
 {
-    // Set proper wheel radius for both wheels
+    const char *type_str = (const char *)udata;
+    unsigned long type = strtoul(type_str, NULL, 0);
+    uint8_t type_u8 = (uint8_t)type;
+
     uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
-    qemu_plugin_write_memory(this_pointer + 0x8, (uint8_t *)&wheel_radius, sizeof(float));
-    qemu_plugin_write_memory(this_pointer + 0xC, (uint8_t *)&wheel_radius, sizeof(float));
+
+    if (type_u8 != 1 && type_u8 != 0) {
+        fprintf(stderr, "Warning: Undefined beavhior. You must set type to either NONE (0) or QUADRATURE (1).\n");
+    } else if (type_u8 == 1) {
+        // Set proper wheel radius for both wheels
+        uint32_t this_pointer = (uint32_t)qemu_get_register(ARM_V7M_R0);
+        qemu_plugin_write_memory(this_pointer + 0x8, (uint8_t *)&wheel_radius, sizeof(float));
+        qemu_plugin_write_memory(this_pointer + 0xC, (uint8_t *)&wheel_radius, sizeof(float));
+    }
 
     // Set proper wheel type for both wheels
-    uint8_t type = 1;
-    qemu_plugin_write_memory(this_pointer, (uint8_t *)&type, sizeof(uint8_t));
-    qemu_plugin_write_memory(this_pointer + 1, (uint8_t *)&type, sizeof(uint8_t));
+    qemu_plugin_write_memory(this_pointer, (uint8_t *)&type_u8, sizeof(uint8_t));
+    qemu_plugin_write_memory(this_pointer + 1, (uint8_t *)&type_u8, sizeof(uint8_t));
 }
 
 /**
@@ -822,8 +831,8 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
         if (compass_read_count % 10 == 0) {
             double average_interval_ms = (compass_total_elapsed_time_s / compass_read_count) * 1000.0;
             double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
-            printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
-                   average_interval_ms, frequency_hz, compass_read_count);
+            // printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
+                //    average_interval_ms, frequency_hz, compass_read_count);
         }
     }
     compass_read_count++;

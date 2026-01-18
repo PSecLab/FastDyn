@@ -10,29 +10,30 @@ if [ -z "$VEHICLE_TYPE" ]; then
     exit 1
 fi
 
-# check that the vehicle type is rover, copter, plane, or boat
-if [ "$VEHICLE_TYPE" != "rover" ] && [ "$VEHICLE_TYPE" != "copter" ] && [ "$VEHICLE_TYPE" != "plane" ] && [ "$VEHICLE_TYPE" != "boat" ];  then
-    echo "Error: vehicle_type must be 'rover', 'copter', 'plane', or 'boat'"
-    exit 1
-fi
-
 MODEL_NAME=""
 
 # Start Gazebo with the specified world file
-if [ "$VEHICLE_TYPE" == "copter" ]; then
-    gz sim -r r1_rover_runway.sdf &
+if [ "$VEHICLE_TYPE" == "copter-heli" ]; then
+    gz sim -r bicopter_runway.sdf &
+    MODEL_NAME="bicopter"
+elif [ "$VEHICLE_TYPE" == "copter" ]; then
+    gz sim -r gs_drone_runway.sdf &
     MODEL_NAME="gs_drone"
 elif [ "$VEHICLE_TYPE" == "rover" ]; then
     gz sim -r r1_rover_runway.sdf &
     MODEL_NAME="r1_rover"
 elif [ "$VEHICLE_TYPE" == "boat" ]; then
-    echo "Boat world not yet implemented"
+    gz sim -r waves.sdf &
+    MODEL_NAME="blueboat"
 elif [ "$VEHICLE_TYPE" == "plane" ]; then
     gz sim -r vtail_runway.sdf &
-    # gz sim -r skywalker_x8_runway.sdf &
     MODEL_NAME="vtail_plane"
+elif [ "$VEHICLE_TYPE" == "sub" ]; then
+    gz sim -r bluerov2_underwater.world &
+    MODEL_NAME="bluerov2"
 else
     echo "Error: Unsupported vehicle type '$VEHICLE_TYPE'"
+    echo "Supported types are: copter-heli, copter, rover, boat, plane, sub"
     exit 1
 fi
 GAZEBO_PID=$!

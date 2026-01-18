@@ -7,7 +7,6 @@
 0x8155a8c adc_voltage *
 0x81585d0 write_channel 
 0x8139f90 ins_block_read *
-0x803d814 compass_calibrate *
 0x803841c compass_configure *
 0x803d658 compass_read_block *
 0x81720c4 chibiOS_tick_handler *
@@ -18,10 +17,11 @@
 0x804fdec gcs_read *
 0x804fe0c gcs_bytes_available *
 0x80978f4 gcs_send_mavlink_message *
-0x8150a02 raise_periodic_irq 66
-0x8032bce gps_get_type_mavlink 
+0x81721d2 raise_periodic_irq 66
+0x80427fe gps_get_type_mavlink 
 0x80ced3c ap_fs_read *
 0x80cecc4 ap_fs_open *
 0x80ced84 ap_fs_fsync *
 0x80ced60 ap_fs_write *
 0x80ced20 ap_fs_close *
+0x8011700 ignore_cpu_failsafe_disarm *
