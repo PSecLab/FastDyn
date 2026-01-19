@@ -1,5 +1,6 @@
 use libafl::feedbacks::{Feedback, StateInitializer};
 use libafl::observers::ObserversTuple;
+use libafl::state::HasExecutions;
 use libafl_bolts::Named;
 use libafl::Error;
 use libafl_bolts::tuples::{Handle, MatchNameRef};
@@ -50,7 +51,7 @@ where
             _exit_kind: &libafl::executors::ExitKind,
         ) -> Result<bool, Error> {
 
-        // println!("Hello from PhysicalObjective is_interesting!");
+        println!("Hello from PhysicalObjective is_interesting!");
 
         // Get the latest robustness vector from the PhysicalObserver
         let physical_observer = observers.get(&self.physical_observer_handle).unwrap();

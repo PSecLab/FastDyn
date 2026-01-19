@@ -7,14 +7,15 @@ mod cpexp_input;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
-use std::{path::PathBuf, ptr::write};
+use std::{path::PathBuf, ptr::write, thread::sleep, time::Duration};
 
+use gz_msgs::param;
 #[cfg(feature = "tui")]
 use libafl::monitors::tui::TuiMonitor;
 #[cfg(not(feature = "tui"))]
 use libafl::monitors::SimpleMonitor;
 use libafl::{
-    corpus::{InMemoryCorpus, OnDiskCorpus}, events::SimpleEventManager, executors::{ExitKind, InProcessExecutor}, feedback_or, feedbacks::{CrashFeedback, MaxMapFeedback}, fuzzer::{Fuzzer, StdFuzzer}, generators::RandPrintablesGenerator, inputs::{BytesInput, HasTargetBytes}, mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator}, observers::ConstMapObserver, schedulers::QueueScheduler, stages::mutational::StdMutationalStage, state::StdState
+    corpus::{InMemoryCorpus, OnDiskCorpus}, events::SimpleEventManager, executors::{CommandExecutor, ExitKind, InProcessExecutor}, feedback_or, feedbacks::{CrashFeedback, MaxMapFeedback}, fuzzer::{Fuzzer, StdFuzzer}, generators::RandPrintablesGenerator, inputs::{BytesInput, HasTargetBytes}, mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator}, observers::ConstMapObserver, schedulers::QueueScheduler, stages::mutational::StdMutationalStage, state::StdState
 };
 use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
@@ -35,6 +36,8 @@ use cpexp_state::CPExpState;
 use phi_stage::PhiStage;
 use cpexp_input::CPExpInput;
 
+use crate::cpexp_input::{EnvInput, ParamInput};
+
 /// Coverage map with explicit assignments due to the lack of instrumentation
 const SIGNALS_LEN: usize = 16;
 static mut SIGNALS: [u8; SIGNALS_LEN] = [0; SIGNALS_LEN];
@@ -48,30 +51,43 @@ fn signals_set(idx: usize) {
 pub fn main() {
     env_logger::init();
     // The closure that we want to fuzz
-    let mut harness = |input: &BytesInput| {
-        let target = input.target_bytes();
-        let buf = target.as_slice();
-        signals_set(0);
-        if !buf.is_empty() && buf[0] == b'a' {
-            signals_set(1);
-            if buf.len() > 1 && buf[1] == b'b' {
-                signals_set(2);
-                if buf.len() > 2 && buf[2] == b'c' {
-                    #[cfg(unix)]
-                    panic!("Artificial bug triggered =)");
+    // let mut harness = |input: &BytesInput| {
+    //     let target = input.target_bytes();
+    //     let buf = target.as_slice();
+    //     signals_set(0);
+    //     if !buf.is_empty() && buf[0] == b'a' {
+    //         signals_set(1);
+    //         if buf.len() > 1 && buf[1] == b'b' {
+    //             signals_set(2);
+    //             if buf.len() > 2 && buf[2] == b'c' {
+    //                 #[cfg(unix)]
+    //                 panic!("Artificial bug triggered =)");
 
-                    // panic!() raises a STATUS_STACK_BUFFER_OVERRUN exception which cannot be caught by the exception handler.
-                    // Here we make it raise STATUS_ACCESS_VIOLATION instead.
-                    // Extending the windows exception handler is a TODO. Maybe we can refer to what winafl code does.
-                    // https://github.com/googleprojectzero/winafl/blob/ea5f6b85572980bb2cf636910f622f36906940aa/winafl.c#L728
-                    #[cfg(windows)]
-                    unsafe {
-                        // Replace zero-ptr with the below function, suggested by Clippy
-                        write_volatile(std::ptr::null_mut::<u32>(), 0);
-                    }
-                }
-            }
-        }
+    //                 // panic!() raises a STATUS_STACK_BUFFER_OVERRUN exception which cannot be caught by the exception handler.
+    //                 // Here we make it raise STATUS_ACCESS_VIOLATION instead.
+    //                 // Extending the windows exception handler is a TODO. Maybe we can refer to what winafl code does.
+    //                 // https://github.com/googleprojectzero/winafl/blob/ea5f6b85572980bb2cf636910f622f36906940aa/winafl.c#L728
+    //                 #[cfg(windows)]
+    //                 unsafe {
+    //                     // Replace zero-ptr with the below function, suggested by Clippy
+    //                     write_volatile(std::ptr::null_mut::<u32>(), 0);
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     ExitKind::Ok
+    // };
+
+    let mut harness = |input: &Vec<Vec<f64>>| {
+
+        println!("Hello from harness!");
+        println!("Input parameters: {:?}", input);
+
+        let param_vec = &input[0];
+        let env_vec = &input[1];
+
+        // TODO: Run the simulation and apply inputs here!
+
         ExitKind::Ok
     };
 
@@ -86,10 +102,10 @@ pub fn main() {
 
     // Feedback to rate the interestingness of an input
     let physical_feedback = PhysicalFeedback::new();
-    let mut feedback = feedback_or!(MaxMapFeedback::new(&observer), ); //physical_feedback);
+    let mut feedback = feedback_or!(physical_feedback, ); // MaxMapFeedback::new(&observer), );
 
     // A feedback to choose if an input is a solution or not
-    let mut objective = feedback_or!(CrashFeedback::new(),); // PhysicalObjective::new());
+    let mut objective = feedback_or!(PhysicalObjective::new(), ); // CrashFeedback::new(),);
 
     // create a State from scratch
     // let mut state = StdState::new(
@@ -163,7 +179,7 @@ pub fn main() {
     // Create the executor for an in-process function with just one observer
     let mut executor = InProcessExecutor::new(
         &mut harness,
-        tuple_list!(observer, ),//physical_observer),
+        tuple_list!(physical_observer, ), // observer, ),
         &mut fuzzer,
         &mut state,
         &mut mgr,
@@ -171,28 +187,33 @@ pub fn main() {
     .expect("Failed to create the Executor");
 
     // Generator of printable bytearrays of max size 32
-    let mut generator = RandPrintablesGenerator::new(nonzero!(32));
+    // let mut generator = RandPrintablesGenerator::new(nonzero!(32));
 
-    let mut inputs = Vec::<CPExpInput>::new();
+    let env_input = EnvInput::new("testing", (-10.0, 10.0), false);
+    let param_input = ParamInput::new_float("test param", (-5.0, 5.0), 0.1);
+    let mut input = CPExpInput::new(vec![param_input], vec![env_input]);
+
+    state
+        .add_initial_cpexp_inputs(&mut fuzzer, &mut executor, &mut mgr, &mut input)
+        .expect("Failed to generate the initial corpus");
 
     // Generate 8 initial inputs
-    state
-        .generate_initial_inputs(
-            &mut fuzzer, 
-            &mut executor, 
-            &mut generator, 
-            &mut mgr, 
-            8,
-            // &mut inputs,
-        )
-        .expect("Failed to generate the initial corpus");
+    // state 
+    //     .generate_initial_inputs(
+    //         &mut fuzzer, 
+    //         &mut executor, 
+    //         &mut generator, 
+    //         &mut mgr, 
+    //         8,
+    //     )
+    //     .expect("Failed to generate the initial corpus");
 
     // Setup a mutational stage with a basic bytes mutator
 
     let phi_stage = PhiStage::new(20);
 
-    let mutator = HavocScheduledMutator::new(havoc_mutations());
-    let mut stages = tuple_list!(phi_stage, StdMutationalStage::new(mutator),);
+    // let mutator = HavocScheduledMutator::new(havoc_mutations());
+    let mut stages = tuple_list!(phi_stage,); // StdMutationalStage::new(mutator),);
 
     fuzzer
         .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)

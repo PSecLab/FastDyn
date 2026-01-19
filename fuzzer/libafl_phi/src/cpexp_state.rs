@@ -190,6 +190,7 @@ where
 impl<C, I, R, SC> HasCorpus<I> for CPExpState<C, I, R, SC>
 where
     C: Corpus<I>,
+    // C: Corpus<CPExpInput>,
 {
     type Corpus = C;
 
@@ -864,6 +865,34 @@ where
     SC: Corpus<I>,
 {
 
+    pub fn add_initial_cpexp_inputs<E, EM, Z>(
+        &mut self,
+        fuzzer: &mut Z,
+        executor: &mut E,
+        // _generator: &mut G,
+        manager: &mut EM,
+        // inputs: &mut Vec<CPExpInput>
+        input: &mut CPExpInput
+    ) -> Result<(), Error> 
+    where
+        EM: EventFirer<CPExpInput, Self>,
+        // G: Generator<CPExpInput, Self>,
+        Z: Evaluator<E, EM, CPExpInput, Self>,
+    {
+
+        // for input in inputs.iter() {
+        //     fuzzer.evaluate_input(self, executor, manager, input)?;
+        // }
+
+        // Just try to add one input for now
+        let result = fuzzer.evaluate_input(self, executor, manager, input);
+        if result.is_err() {
+            Err(result.err().unwrap())
+        } else {
+            Ok(())
+        }
+    }
+
     fn generate_initial_internal<G, E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
@@ -937,12 +966,6 @@ where
         G: Generator<I, Self>,
         Z: Evaluator<E, EM, I, Self>,
     {
-
-        // for input in inputs.iter() {
-        //     let _ = fuzzer.evaluate_input(self, executor, manager, input)?;
-        // }
-
-        // Ok(())
         self.generate_initial_internal(fuzzer, executor, generator, manager, num, false)
     }
 }

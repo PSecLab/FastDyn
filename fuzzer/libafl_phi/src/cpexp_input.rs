@@ -2,7 +2,7 @@ use libafl::inputs::Input;
 use std::hash::Hash;
 use serde::{Deserialize, Serialize};
 use ordered_float::OrderedFloat;
-
+use libafl::inputs::bytes;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Hash)]
 pub struct ParamInput {
@@ -66,6 +66,52 @@ impl Input for CPExpInput {
     fn generate_name(&self, _id: Option<libafl::corpus::CorpusId>) -> String {
 
         todo!()
+
+    }
+
+}
+
+impl EnvInput {
+
+    pub fn new(name: &str, range: (f64, f64), categorical: bool) -> Self {
+
+        Self {
+            name: String::from(name),
+            range: (OrderedFloat(range.0), OrderedFloat(range.1)),
+            categorical,
+        }
+
+    }
+
+}
+
+impl ParamInput {
+
+    pub fn new_float(name: &str, range: (f64, f64), increment: f64) -> Self {
+
+        Self {
+            name: String::from(name),
+            is_float: true,
+            range: Some((OrderedFloat(range.0), OrderedFloat(range.1))),
+            increment: Some(OrderedFloat(increment)),
+            options: None,
+            truncate: false,
+        }
+
+    }
+
+    pub fn new_categorical(name: &str, options: Vec<f64>, truncate: bool) -> Self {
+
+        let ordered_options: Vec<OrderedFloat<f64>> = options.into_iter().map(|x| OrderedFloat(x)).collect();
+
+        Self {
+            name: String::from(name),
+            is_float: false,
+            range: None,
+            increment: None,
+            options: Some(ordered_options),
+            truncate,
+        }
 
     }
 

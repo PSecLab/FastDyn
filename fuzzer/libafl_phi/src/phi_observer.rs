@@ -15,6 +15,8 @@ use banquo::{EvaluationError, Formula, Trace, evaluate, predicate};
 use banquo::operators::{Always, And, Eventually, Implies, Not, Or};
 use banquo::predicate::FormulaError;
 
+use crate::cpexp_state::HasOptimizer;
+
 // Example: Capturing timestamp, x, y, z coords
 #[derive(Deserialize)]
 struct State {
@@ -71,12 +73,12 @@ impl PhysicalObserver {
 
 impl<I, S> Observer<I, S> for PhysicalObserver 
 where
-    S: HasExecutions, 
+    S: HasExecutions + HasOptimizer, 
 {
 
     fn pre_exec(&mut self, state: &mut S, _input: &I) -> Result<(), Error> {
 
-        // println!("Hello from PhysicalObserver PRE_exec!");
+        println!("Hello from PhysicalObserver PRE_exec!");
         // self.latest_robustness_vec[0] = self.count as f64;
         
         if self.recorder_process.is_some() {
@@ -118,7 +120,7 @@ where
             ])
         } 
 
-        // println!("Hello from PhysicalObserver POST_exec!");
+        println!("Hello from PhysicalObserver POST_exec!");
 
         if self.recorder_process.is_none() {
             // The recorder process should NOT be none...
@@ -165,6 +167,30 @@ where
         self.latest_robustness_vec.push(evaluate(&trace, &formula2).unwrap());
 
         // println!("Robustness for execution {}: {:?}", state.executions(), self.latest_robustness_vec);
+
+        // Get minimum robustness value and send it to optimizers
+        let mut min_robustness: f64 = f64::INFINITY;
+        for robustness in self.latest_robustness_vec.iter() {
+            if *robustness < min_robustness {
+                min_robustness = *robustness;
+            }
+        }
+
+        // if let Some(bo) = state.optimizer_mut() {
+        //     let params = bo.ask();
+        //     println!("Asked params for iteration {}: {:?}", state.executions(), params);
+        //     // bo.tell(params, min_robustness);
+        // }
+
+        // TODO: Retrieve the input vectors for tell()
+
+        // if let Some(_) = state.environment_bo_mut() {
+        //     state.environment_bo_mut().unwrap().tell(_input, min_robustness);
+        // }
+
+        // if let Some(_) = state.parameter_bo_mut() {
+        //     state.parameter_bo_mut().unwrap().tell(_input, min_robustness);
+        // }
 
         // TODO: Write the robustness values to a separate log file
 
