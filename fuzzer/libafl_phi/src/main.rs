@@ -6,6 +6,7 @@ mod phi_stage;
 // mod cpexp_input;
 mod new_input;
 mod input_generator;
+mod lambda_mutational;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
@@ -40,6 +41,7 @@ use phi_objective::PhysicalObjective;
 use cpexp_state::CPExpState;
 use phi_stage::PhiStage;
 use new_input::{CPExpInput, ParamInput, EnvInput, TargetInput};
+use lambda_mutational::LambdaMutationalStage;
 
 /// Coverage map with explicit assignments due to the lack of instrumentation
 const SIGNALS_LEN: usize = 16;
@@ -76,33 +78,6 @@ fn search_space_from_input_library(input_lib: &CPExpInput) -> Space {
 
 pub fn main() {
     env_logger::init();
-    // The closure that we want to fuzz
-    // let mut harness = |input: &BytesInput| {
-    //     let target = input.target_bytes();
-    //     let buf = target.as_slice();
-    //     signals_set(0);
-    //     if !buf.is_empty() && buf[0] == b'a' {
-    //         signals_set(1);
-    //         if buf.len() > 1 && buf[1] == b'b' {
-    //             signals_set(2);
-    //             if buf.len() > 2 && buf[2] == b'c' {
-    //                 #[cfg(unix)]
-    //                 panic!("Artificial bug triggered =)");
-
-    //                 // panic!() raises a STATUS_STACK_BUFFER_OVERRUN exception which cannot be caught by the exception handler.
-    //                 // Here we make it raise STATUS_ACCESS_VIOLATION instead.
-    //                 // Extending the windows exception handler is a TODO. Maybe we can refer to what winafl code does.
-    //                 // https://github.com/googleprojectzero/winafl/blob/ea5f6b85572980bb2cf636910f622f36906940aa/winafl.c#L728
-    //                 #[cfg(windows)]
-    //                 unsafe {
-    //                     // Replace zero-ptr with the below function, suggested by Clippy
-    //                     write_volatile(std::ptr::null_mut::<u32>(), 0);
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     ExitKind::Ok
-    // };
 
     let mut harness = |input: &TargetInput| {
 
@@ -140,28 +115,6 @@ pub fn main() {
 
     // A feedback to choose if an input is a solution or not
     let mut objective = feedback_or!(PhysicalObjective::new(), ); // CrashFeedback::new(),);
-
-    // create a State from scratch
-    // let mut state = StdState::new(
-    //     // RNG
-    //     StdRand::with_seed(current_nanos()),
-    //     // Corpus that will be evolved, we keep it in memory for performance
-    //     InMemoryCorpus::new(),
-    //     // Corpus in which we store solutions (crashes in this example),
-    //     // on disk so the user can get them after stopping the fuzzer
-    //     OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
-    //     // States of the feedbacks.
-    //     // The feedbacks can report the data that should persist in the State.
-    //     &mut feedback,
-    //     // Same for objective feedbacks
-    //     &mut objective,
-    // )
-    // .unwrap();
-
-    // Define search space
-    // let mut space = Space::new();
-    // space = space.add("throttle", Parameter::Real(-1.0, 1.0));
-    // space = space.add("wind_speed", Parameter::Real(0.0, 20.0));
 
     // Build the optimizer and input library (CPExpInput) here
     // TODO: Load all this stuff from a file + create a function
@@ -207,8 +160,9 @@ pub fn main() {
     // println!("Search space: {:?}", space);
 
     // Create options object
+    let initial_points = 1;
     let mut opt = BayesianOptimizationOptions::default();
-    opt.n_initial_points = 10;
+    opt.n_initial_points = initial_points.clone();
 
     let bo = BayesianOptimizer::new(space, Some(opt));
 
@@ -228,7 +182,7 @@ pub fn main() {
         // Bayesian Optimizer!
         Some(bo),
         // Start with phi stage first?
-        true,
+        false,
         // CPExpInput object for transforming inputs
         input_library,
 
@@ -264,20 +218,6 @@ pub fn main() {
     )
     .expect("Failed to create the Executor");
 
-    // Generator of printable bytearrays of max size 32
-    // let mut generator = RandPrintablesGenerator::new(nonzero!(32));
-
-    // let param_val: f32 = 13.07;
-    // let value_bytes = param_val.to_le_bytes();
-    // let param_bytes = BytesInput::new(value_bytes.to_vec());
-
-    // let env_config = String::from("Wind:5.75343463,");
-    // let input = TargetInput::new(param_bytes, env_config);
-
-    // state
-    //     .add_initial_cpexp_inputs(&mut fuzzer, &mut executor, &mut mgr, &mut input)
-    //     .expect("Failed to generate the initial corpus");
-
     // Generate 8 initial inputs
     state 
         .generate_initial_inputs(
@@ -285,18 +225,20 @@ pub fn main() {
             &mut executor, 
             // &mut generator, 
             &mut mgr,
-            10, // Same as n_initial_points in Bayesian optimizer
+            initial_points,
         )
         .expect("Failed to generate the initial corpus");
 
-    panic!("Stopping after initial input generation for debugging purposes.");
+    // panic!("Stopping after initial input generation for debugging purposes.");
+    for _ in 0..3 {
+        println!("Starting the fuzzing loop!");
+    }
+
+    let phi_stage = PhiStage::new(5);
 
     // Setup a mutational stage with a basic bytes mutator
-    // let mutator = HavocScheduledMutator::new(havoc_mutations());
-
-    let phi_stage = PhiStage::new(20);
-
-    let mut stages = tuple_list!(phi_stage,); // StdMutationalStage::new(mutator),);
+    let mutator = HavocScheduledMutator::new(havoc_mutations());
+    let mut stages = tuple_list!(phi_stage, LambdaMutationalStage::new(mutator),);
 
     fuzzer
         .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)

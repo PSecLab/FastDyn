@@ -1,3 +1,4 @@
+use env_logger::Target;
 use libafl::inputs::BytesInput;
 use libafl::stages::Stage;
 use libafl::stages::Restartable;
@@ -6,7 +7,7 @@ use libafl::state::HasExecutions;
 use std::{borrow::Cow, num::NonZeroUsize};
 use libafl_bolts::Named;
 use crate::new_input::TargetInput;
-use crate::cpexp_state::HasOptimizeParams;
+use crate::cpexp_state::{HasOptimizeParams, HasOptimizer, HasInputLibrary, HasLatestRobustness};
 
 pub struct PhiStage {
     name: Cow<'static, str>,
@@ -24,7 +25,7 @@ impl Named for PhiStage {
 
 impl<E, EM, S, Z> Stage<E, EM, S, Z> for PhiStage 
 where 
-    S: HasOptimizeParams + HasCurrentTestcase<TargetInput>,
+    S: HasOptimizer + HasOptimizeParams + HasCurrentTestcase<TargetInput> + HasInputLibrary + HasLatestRobustness,
     Z: libafl::fuzzer::Evaluator<E, EM, TargetInput, S>,
 {
 
@@ -38,16 +39,17 @@ where
         
         println!("Hello from PhiStage perform()!");
 
-        // TODO: Genearate input, pass it to executor
+        // PhiStage only gets input from the optimizer, so just generate a new TargetInput here
+        let asked_values = state.ask_optimizer();
 
-        let param_val: f32 = 13.07;
-        let value_bytes = param_val.to_le_bytes();
-        let param_bytes = BytesInput::new(value_bytes.to_vec());
+        let param_bytes = TargetInput::opt_ask_to_param_bytes(&asked_values, state.input_library());
+        let env_config = TargetInput::opt_ask_to_env_string(&asked_values, state.input_library());
 
-        let env_config = String::from("Wind:5.75343463,");
         let input = TargetInput::new(param_bytes, env_config);
 
         fuzzer.evaluate_input(state, executor, manager, &input);
+
+        state.tell_optimizer(&asked_values, state.latest_robustness());
 
         self.current_executions += 1;
         self.total_executions += 1;
@@ -79,10 +81,10 @@ where
 
         // The phi stage runs for max_executions, then switches to lambda stage
         // We rely on lambda stage to yield (set optimize_params to true)
-        // if self.current_executions > self.max_executions {
-        //     self.current_executions = 0;
-        //     *state.optimize_params_mut() = false;
-        // } 
+        if self.current_executions >= self.max_executions {
+            self.current_executions = 0;
+            *state.optimize_params_mut() = false;
+        } 
 
         Ok(state.optimize_params())
 

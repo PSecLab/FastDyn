@@ -1,5 +1,8 @@
+use env_logger::Target;
 use gz_msgs::param;
-use libafl::inputs::{BytesInput, Input};
+use libafl::inputs::{BytesInput, Input, ResizableMutator, ValueInput};
+use libafl::inputs::HasMutatorBytes;
+use libafl_bolts::HasLen;
 use core::hash;
 use std::{collections::HashMap, env, fmt::format, hash::{DefaultHasher, Hash, Hasher}, ptr::hash};
 use serde::{Deserialize, Serialize};
@@ -190,6 +193,48 @@ impl Input for TargetInput {
 
 }
 
+impl HasLen for TargetInput {
+    fn len(&self) -> usize {
+        self.param_bytes.len() + self.env_config.len()
+    }
+}
+
+impl HasMutatorBytes for TargetInput {
+    fn mutator_bytes(&self) -> &[u8] {
+        self.get_param_bytes().as_ref().as_slice()
+    }
+    fn mutator_bytes_mut(&mut self) -> &mut [u8] {
+        self.get_param_bytes_mut().as_mut().as_mut_slice()
+    }
+}
+
+impl ResizableMutator<u8> for TargetInput {
+
+    fn resize(&mut self, new_len: usize, value: u8) {
+        self.get_param_bytes_mut().resize(new_len, value);
+    }
+
+    fn extend<'a, I: IntoIterator<Item = &'a u8>>(&mut self, iter: I)
+    {
+        self.get_param_bytes_mut().extend(iter);
+                
+    }
+
+    fn splice<R, I>(&mut self, range: R, replace_with: I) -> std::vec::Splice<'_, I::IntoIter>
+        where
+            R: std::ops::RangeBounds<usize>,
+            I: IntoIterator<Item = u8> {
+        self.get_param_bytes_mut().splice(range, replace_with)
+    }
+
+    fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, u8>
+        where
+            R: std::ops::RangeBounds<usize> {
+        self.get_param_bytes_mut().drain(range)
+    }
+
+}
+
 impl TargetInput {
 
     pub fn new(param_bytes: BytesInput, env_config: String) -> Self {
@@ -317,8 +362,44 @@ impl TargetInput {
         &self.param_bytes
     }
 
+    pub fn get_param_bytes_mut(&mut self) -> &mut BytesInput {
+        &mut self.param_bytes
+    }
+
     pub fn get_env_config(&self) -> &String {
         &self.env_config
     }
 
+}
+
+pub trait HasParamBytes {
+    fn param_bytes(&self) -> &BytesInput;
+    fn param_bytes_mut(&mut self) -> &mut BytesInput;
+}
+
+impl HasParamBytes for TargetInput {
+    fn param_bytes(&self) -> &BytesInput {
+        &self.param_bytes
+    }
+    fn param_bytes_mut(&mut self) -> &mut BytesInput {
+        &mut self.param_bytes
+    }
+}
+
+pub trait HasEnvConfig {
+    fn env_config(&self) -> &String;
+    fn env_config_mut(&mut self) -> &mut String;
+    fn set_env_config(&mut self, new_config: String);
+}
+
+impl HasEnvConfig for TargetInput {
+    fn env_config(&self) -> &String {
+        &self.env_config
+    }
+    fn env_config_mut(&mut self) -> &mut String {
+        &mut self.env_config
+    }
+    fn set_env_config(&mut self, new_config: String) {
+        self.env_config = new_config;
+    }
 }
