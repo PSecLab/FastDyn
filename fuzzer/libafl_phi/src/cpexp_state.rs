@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use env_logger::Target;
 #[cfg(feature = "std")]
 use libafl_bolts::core_affinity::{CoreId, Cores};
 use libafl_bolts::{
@@ -24,7 +25,6 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 // pub use stack::StageStack;
 pub use libafl::state::StageStack;
 
-use crate::cpexp_input::CPExpInput;
 #[cfg(feature = "introspection")]
 use crate::monitors::stats::ClientPerfStats;
 use libafl::{
@@ -46,6 +46,8 @@ use libafl::state::{
 use libafl::state::DEFAULT_MAX_SIZE;
 // use libafl::state::LoadConfig;
 
+use crate::new_input::{CPExpInput, TargetInput};
+
 use scirs2_optimize::global::{ 
     BayesianOptimizationOptions,
     BayesianOptimizer,
@@ -53,9 +55,6 @@ use scirs2_optimize::global::{
 };
 use scirs2_optimize::prelude::Parameter;
 use scirs2_core::ndarray::Array1;
-
-use crate::cpexp_input::ParamInput;
-use crate::cpexp_input::EnvInput;
 
 /*
     This is a copy of baby_fuzzer's StdState with two Bayesian Optimizers included!
@@ -136,22 +135,44 @@ pub struct CPExpState<C, I, R, SC> {
     optimizer: Option<BayesianOptimizer>,
 
     // Should we execute phi stage (true) or lambda stage (false)?
-    optimize_params: bool
+    optimize_params: bool,
+
+    // Contains all information about parameter/environmental inputs
+    input_library: CPExpInput,
 
 }
 
 pub trait HasOptimizer {
     fn optimizer(&self) -> &Option<BayesianOptimizer>;
     fn optimizer_mut(&mut self) -> &mut Option<BayesianOptimizer>;
+    fn ask_optimizer(&mut self) -> Array1<f64>; 
+    fn tell_optimizer(&mut self, params: &Array1<f64>, result: f64);
 }
 
 impl <C, I, R, SC> HasOptimizer for CPExpState<C, I, R, SC> {
+
     fn optimizer(&self) -> &Option<BayesianOptimizer> {
         &self.optimizer
     }
+
     fn optimizer_mut(&mut self) -> &mut Option<BayesianOptimizer> {
         &mut self.optimizer
     }
+
+    fn ask_optimizer(&mut self) -> Array1<f64> {
+        if let Some(opt) = &mut self.optimizer {
+            opt.ask()
+        } else {
+            panic!("Error: No optimizer found in CPExpState!");
+        }
+    }
+
+    fn tell_optimizer(&mut self, params: &Array1<f64>, result: f64) {
+        if let Some(opt) = &mut self.optimizer {
+            opt.tell(params.clone(), result);
+        }
+    }
+
 }
 
 pub trait HasOptimizeParams {
@@ -166,6 +187,23 @@ impl <C, I, R, SC> HasOptimizeParams for CPExpState<C, I, R, SC> {
     fn optimize_params_mut(&mut self) -> &mut bool {
         &mut self.optimize_params
     }
+}
+
+pub trait HasInputLibrary {
+    fn input_library(&self) -> &CPExpInput;
+    fn input_library_mut(&mut self) -> &mut CPExpInput;
+}
+
+impl <C, I, R, SC> HasInputLibrary for CPExpState<C, I, R, SC> {
+
+    fn input_library(&self) -> &CPExpInput {
+        &self.input_library
+    }
+
+    fn input_library_mut(&mut self) -> &mut CPExpInput {
+        &mut self.input_library
+    }
+    
 }
 
 impl<C, I, R, SC> HasRand for CPExpState<C, I, R, SC>
@@ -864,61 +902,36 @@ where
     R: Rand,
     SC: Corpus<I>,
 {
-
-    pub fn add_initial_cpexp_inputs<E, EM, Z>(
+    fn generate_initial_internal<E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
         executor: &mut E,
-        // _generator: &mut G,
-        manager: &mut EM,
-        // inputs: &mut Vec<CPExpInput>
-        input: &mut CPExpInput
-    ) -> Result<(), Error> 
-    where
-        EM: EventFirer<CPExpInput, Self>,
-        // G: Generator<CPExpInput, Self>,
-        Z: Evaluator<E, EM, CPExpInput, Self>,
-    {
-
-        // for input in inputs.iter() {
-        //     fuzzer.evaluate_input(self, executor, manager, input)?;
-        // }
-
-        // Just try to add one input for now
-        let result = fuzzer.evaluate_input(self, executor, manager, input);
-        if result.is_err() {
-            Err(result.err().unwrap())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn generate_initial_internal<G, E, EM, Z>(
-        &mut self,
-        fuzzer: &mut Z,
-        executor: &mut E,
-        generator: &mut G,
+        // generator: &mut G,
         manager: &mut EM,
         num: usize,
         forced: bool,
     ) -> Result<(), Error>
     where
-        EM: EventFirer<I, Self>,
-        G: Generator<I, Self>,
-        Z: Evaluator<E, EM, I, Self>,
+        EM: EventFirer<TargetInput, Self>,
+        // G: Generator<TargetInput, Self>,
+        Z: Evaluator<E, EM, TargetInput, Self>,
     {
         let mut added = 0;
         for _ in 0..num {
-            let input = generator.generate(self)?;
-            if forced {
-                let _ = fuzzer.add_input(self, executor, manager, input)?;
-                added += 1;
-            } else {
-                let (res, _) = fuzzer.evaluate_input(self, executor, manager, &input)?;
-                if res != ExecuteInputResult::None {
-                    added += 1;
-                }
-            }
+            // let input = generator.generate(self)?;
+            
+            // let asked_values = self.ask_optimizer();
+
+
+            // if forced {
+            //     let _ = fuzzer.add_input(self, executor, manager, input)?;
+            //     added += 1;
+            // } else {
+            //     let (res, _) = fuzzer.evaluate_input(self, executor, manager, &input)?;
+            //     if res != ExecuteInputResult::None {
+            //         added += 1;
+            //     }
+            // }
         }
         manager.fire(
             self,
@@ -935,38 +948,38 @@ where
     }
 
     /// Generate `num` initial inputs, using the passed-in generator and force the addition to corpus.
-    pub fn generate_initial_inputs_forced<G, E, EM, Z>(
+    pub fn generate_initial_inputs_forced<E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
         executor: &mut E,
-        generator: &mut G,
+        // generator: &mut G,
         manager: &mut EM,
         num: usize,
     ) -> Result<(), Error>
     where
-        EM: EventFirer<I, Self>,
-        G: Generator<I, Self>,
-        Z: Evaluator<E, EM, I, Self>,
+        EM: EventFirer<TargetInput, Self>,
+        // G: Generator<I, Self>,
+        Z: Evaluator<E, EM, TargetInput, Self>,
     {
-        self.generate_initial_internal(fuzzer, executor, generator, manager, num, true)
+        self.generate_initial_internal(fuzzer, executor,  manager, num, true)
     }
 
     /// Generate `num` initial inputs, using the passed-in generator.
-    pub fn generate_initial_inputs<G, E, EM, Z>(
+    pub fn generate_initial_inputs<E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
         executor: &mut E,
-        generator: &mut G,
+        // generator: &mut G,
         manager: &mut EM,
         num: usize,
         // inputs: &mut Vec<I>,
     ) -> Result<(), Error>
     where
-        EM: EventFirer<I, Self>,
-        G: Generator<I, Self>,
-        Z: Evaluator<E, EM, I, Self>,
+        EM: EventFirer<TargetInput, Self>,
+        // G: Generator<TargetInput, Self>,
+        Z: Evaluator<E, EM, TargetInput, Self>,
     {
-        self.generate_initial_internal(fuzzer, executor, generator, manager, num, false)
+        self.generate_initial_internal(fuzzer, executor, manager, num, false)
     }
 }
 
@@ -986,6 +999,7 @@ where
         objective: &mut O,
         bo: Option<BayesianOptimizer>,
         phi_first: bool,
+        input_library: CPExpInput,
     ) -> Result<Self, Error>
     where
         F: StateInitializer<Self>,
@@ -1020,6 +1034,7 @@ where
 
             optimizer: bo,
             optimize_params: phi_first,
+            input_library,
 
         };
         feedback.init_state(&mut state)?;

@@ -3,12 +3,15 @@ mod phi_feedback;
 mod phi_objective;
 mod cpexp_state;
 mod phi_stage;
-mod cpexp_input;
+// mod cpexp_input;
+mod new_input;
+mod input_generator;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
 use std::{path::PathBuf, ptr::write, thread::sleep, time::Duration};
 
+use env_logger::Target;
 use gz_msgs::param;
 #[cfg(feature = "tui")]
 use libafl::monitors::tui::TuiMonitor;
@@ -34,9 +37,7 @@ use phi_feedback::PhysicalFeedback;
 use phi_objective::PhysicalObjective;
 use cpexp_state::CPExpState;
 use phi_stage::PhiStage;
-use cpexp_input::CPExpInput;
-
-use crate::cpexp_input::{EnvInput, ParamInput};
+use new_input::{CPExpInput, ParamInput, EnvInput, TargetInput};
 
 /// Coverage map with explicit assignments due to the lack of instrumentation
 const SIGNALS_LEN: usize = 16;
@@ -78,14 +79,12 @@ pub fn main() {
     //     ExitKind::Ok
     // };
 
-    let mut harness = |input: &Vec<Vec<f64>>| {
+    let mut harness = |input: &TargetInput| {
 
         println!("Hello from harness!");
-        println!("Input parameters: {:?}", input);
-
-        let param_vec = &input[0];
-        let env_vec = &input[1];
-
+        println!("Input parameters: {:?}", input.get_param_bytes());
+        println!("Input environment config: {:?}", input.get_env_config());
+        
         // TODO: Run the simulation and apply inputs here!
 
         ExitKind::Ok
@@ -153,6 +152,7 @@ pub fn main() {
         Some(bo),
         // Start with phi stage first?
         true,
+        CPExpInput::new(Vec::<ParamInput>::new(), Vec::<EnvInput>::new()),
 
     )
     .unwrap();
@@ -187,32 +187,35 @@ pub fn main() {
     .expect("Failed to create the Executor");
 
     // Generator of printable bytearrays of max size 32
-    // let mut generator = RandPrintablesGenerator::new(nonzero!(32));
+    let mut generator = RandPrintablesGenerator::new(nonzero!(32));
 
-    let env_input = EnvInput::new("testing", (-10.0, 10.0), false);
-    let param_input = ParamInput::new_float("test param", (-5.0, 5.0), 0.1);
-    let mut input = CPExpInput::new(vec![param_input], vec![env_input]);
+    // let param_val: f32 = 13.07;
+    // let value_bytes = param_val.to_le_bytes();
+    // let param_bytes = BytesInput::new(value_bytes.to_vec());
 
-    state
-        .add_initial_cpexp_inputs(&mut fuzzer, &mut executor, &mut mgr, &mut input)
-        .expect("Failed to generate the initial corpus");
+    // let env_config = String::from("Wind:5.75343463,");
+    // let input = TargetInput::new(param_bytes, env_config);
 
-    // Generate 8 initial inputs
-    // state 
-    //     .generate_initial_inputs(
-    //         &mut fuzzer, 
-    //         &mut executor, 
-    //         &mut generator, 
-    //         &mut mgr, 
-    //         8,
-    //     )
+    // state
+    //     .add_initial_cpexp_inputs(&mut fuzzer, &mut executor, &mut mgr, &mut input)
     //     .expect("Failed to generate the initial corpus");
 
+    // Generate 8 initial inputs
+    state 
+        .generate_initial_inputs(
+            &mut fuzzer, 
+            &mut executor, 
+            // &mut generator, 
+            &mut mgr, 
+            8,
+        )
+        .expect("Failed to generate the initial corpus");
+
     // Setup a mutational stage with a basic bytes mutator
+    // let mutator = HavocScheduledMutator::new(havoc_mutations());
 
     let phi_stage = PhiStage::new(20);
 
-    // let mutator = HavocScheduledMutator::new(havoc_mutations());
     let mut stages = tuple_list!(phi_stage,); // StdMutationalStage::new(mutator),);
 
     fuzzer

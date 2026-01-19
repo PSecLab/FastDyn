@@ -1,10 +1,11 @@
+use libafl::inputs::BytesInput;
 use libafl::stages::Stage;
 use libafl::stages::Restartable;
 use libafl::state::HasCurrentTestcase;
 use libafl::state::HasExecutions;
 use std::{borrow::Cow, num::NonZeroUsize};
 use libafl_bolts::Named;
-use crate::cpexp_input::{EnvInput, ParamInput, CPExpInput};
+use crate::new_input::TargetInput;
 use crate::cpexp_state::HasOptimizeParams;
 
 pub struct PhiStage {
@@ -23,8 +24,8 @@ impl Named for PhiStage {
 
 impl<E, EM, S, Z> Stage<E, EM, S, Z> for PhiStage 
 where 
-    S: HasOptimizeParams + HasCurrentTestcase<CPExpInput>,
-    Z: libafl::fuzzer::Evaluator<E, EM, crate::cpexp_input::CPExpInput, S>,
+    S: HasOptimizeParams + HasCurrentTestcase<TargetInput>,
+    Z: libafl::fuzzer::Evaluator<E, EM, TargetInput, S>,
 {
 
     fn perform(
@@ -39,12 +40,14 @@ where
 
         // TODO: Genearate input, pass it to executor
 
-        let env_input = EnvInput::new("I AM FROM PHISTAGE", (-10.0, 10.0), false);
-        let param_input = ParamInput::new_float("I AM ALSO FROM PHISTAGE", (-5.0, 5.0), 0.1);
-        let input = CPExpInput::new(vec![param_input], vec![env_input]);
+        let param_val: f32 = 13.07;
+        let value_bytes = param_val.to_le_bytes();
+        let param_bytes = BytesInput::new(value_bytes.to_vec());
 
-        fuzzer.evaluate_input(state, executor, manager, &input)?;
+        let env_config = String::from("Wind:5.75343463,");
+        let input = TargetInput::new(param_bytes, env_config);
 
+        fuzzer.evaluate_input(state, executor, manager, &input);
 
         self.current_executions += 1;
         self.total_executions += 1;
