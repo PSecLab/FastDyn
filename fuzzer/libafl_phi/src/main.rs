@@ -9,10 +9,10 @@ mod input_generator;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
-use std::{path::PathBuf, ptr::write, thread::sleep, time::Duration};
+use std::{path::{self, PathBuf}, process::exit, ptr::write, thread::sleep, time::Duration};
 
 use env_logger::Target;
-use gz_msgs::param;
+use gz_msgs::param::{self, Param};
 #[cfg(feature = "tui")]
 use libafl::monitors::tui::TuiMonitor;
 #[cfg(not(feature = "tui"))]
@@ -23,6 +23,8 @@ use libafl::{
 use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
 };
+
+use std::process::{Command, Child};
 
 use scirs2_optimize::global::{ 
     BayesianOptimizationOptions,
@@ -47,6 +49,29 @@ static mut SIGNALS_PTR: *mut u8 = &raw mut SIGNALS as _;
 /// Assign a signal to the signals map
 fn signals_set(idx: usize) {
     unsafe { write(SIGNALS_PTR.add(idx), 1) };
+}
+
+fn search_space_from_input_library(input_lib: &CPExpInput) -> Space {
+
+    let mut space = Space::new();
+
+    // Add parameter inputs to space
+    let param_info_vec = input_lib.get_param_input();
+    for param in param_info_vec.iter() {
+        let param_name = param.get_name();
+        let param_range = param.get_range();
+        space = space.add(param_name, Parameter::Real(param_range.0, param_range.1));
+    }
+
+    // Add environmental inputs to space
+    let env_info_vec = input_lib.get_env_input();
+    for env in env_info_vec.iter() {
+        let env_name = env.get_name();
+        let env_range = env.get_range();
+        space = space.add(env_name, Parameter::Real(env_range.0, env_range.1));
+    }
+
+    space
 }
 
 pub fn main() {
@@ -82,10 +107,20 @@ pub fn main() {
     let mut harness = |input: &TargetInput| {
 
         println!("Hello from harness!");
-        println!("Input parameters: {:?}", input.get_param_bytes());
+        println!("Raw Ardu parameters: {:?}", input.get_param_bytes());
+        println!("Converted Ardu parameters: {:?}", TargetInput::bytes_to_f32_vec(input.get_param_bytes()));
         println!("Input environment config: {:?}", input.get_env_config());
         
         // TODO: Run the simulation and apply inputs here!
+        // For now, just start ./my_ackermann
+        let ackermann_path = "/home/ere/fire/PRehost/gazebo/my_ackermann_w_state.sh";
+        let spawn_gz = Command::new(ackermann_path).spawn();
+        if spawn_gz.is_err() {
+            panic!("Error: Failed to start my_ackermann process: {}", spawn_gz.err().unwrap());
+        }
+
+        // Right now we don't need to track the child but whateva
+        // let mut gz_process = spawn_gz.unwrap();
 
         ExitKind::Ok
     };
@@ -124,14 +159,56 @@ pub fn main() {
     // .unwrap();
 
     // Define search space
-    let mut space = Space::new();
-    // space = space.add("categorical_param", Parameter::Categorical(vec!["A".to_string(), "B".to_string(), "C".to_string()]));
-    space = space.add("throttle", Parameter::Real(-1.0, 1.0));
-    space = space.add("wind_speed", Parameter::Real(0.0, 20.0));
+    // let mut space = Space::new();
+    // space = space.add("throttle", Parameter::Real(-1.0, 1.0));
+    // space = space.add("wind_speed", Parameter::Real(0.0, 20.0));
+
+    // Build the optimizer and input library (CPExpInput) here
+    // TODO: Load all this stuff from a file + create a function
+
+    // --------------------------------
+    // NOTE: Add Ardu parameters to space first, then env parameters!!
+    // --------------------------------
+
+    let mut param_info_vec: Vec<ParamInput> = Vec::new();
+
+    param_info_vec.push(ParamInput::new_float(
+        "stars",
+        (0.0, 5.0),
+        0.1,
+    ));
+
+    param_info_vec.push((ParamInput::new_categorical(
+        "powers_of_ten",
+        vec![1.0, 10.0, 100.0, 1000.0],
+
+    )));
+
+    let mut env_info_vec: Vec<EnvInput> = Vec::new();
+
+    env_info_vec.push(EnvInput::new(
+        "wind_speed",
+        (0.0, 20.0),
+        false,
+    ));
+
+    env_info_vec.push(EnvInput::new(
+        "terrain_type",
+        (0.0, 3.0), // 3 types: 0, 1, 2
+        true,
+    ));
+
+    let input_library = CPExpInput::new(param_info_vec, env_info_vec);
+
+    // println!("Input library: {:?}", input_library);
+
+    let space = search_space_from_input_library(&input_library);
+
+    // println!("Search space: {:?}", space);
 
     // Create options object
     let mut opt = BayesianOptimizationOptions::default();
-    opt.n_initial_points = 100;
+    opt.n_initial_points = 10;
 
     let bo = BayesianOptimizer::new(space, Some(opt));
 
@@ -152,7 +229,8 @@ pub fn main() {
         Some(bo),
         // Start with phi stage first?
         true,
-        CPExpInput::new(Vec::<ParamInput>::new(), Vec::<EnvInput>::new()),
+        // CPExpInput object for transforming inputs
+        input_library,
 
     )
     .unwrap();
@@ -187,7 +265,7 @@ pub fn main() {
     .expect("Failed to create the Executor");
 
     // Generator of printable bytearrays of max size 32
-    let mut generator = RandPrintablesGenerator::new(nonzero!(32));
+    // let mut generator = RandPrintablesGenerator::new(nonzero!(32));
 
     // let param_val: f32 = 13.07;
     // let value_bytes = param_val.to_le_bytes();
@@ -206,10 +284,12 @@ pub fn main() {
             &mut fuzzer, 
             &mut executor, 
             // &mut generator, 
-            &mut mgr, 
-            8,
+            &mut mgr,
+            10, // Same as n_initial_points in Bayesian optimizer
         )
         .expect("Failed to generate the initial corpus");
+
+    panic!("Stopping after initial input generation for debugging purposes.");
 
     // Setup a mutational stage with a basic bytes mutator
     // let mutator = HavocScheduledMutator::new(havoc_mutations());

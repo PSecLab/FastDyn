@@ -140,6 +140,9 @@ pub struct CPExpState<C, I, R, SC> {
     // Contains all information about parameter/environmental inputs
     input_library: CPExpInput,
 
+    // Minimum robustness value of the previous execution
+    latest_robustness: f64,
+
 }
 
 pub trait HasOptimizer {
@@ -203,7 +206,29 @@ impl <C, I, R, SC> HasInputLibrary for CPExpState<C, I, R, SC> {
     fn input_library_mut(&mut self) -> &mut CPExpInput {
         &mut self.input_library
     }
-    
+
+}
+
+pub trait HasLatestRobustness {
+    fn latest_robustness(&self) -> f64;
+    fn latest_robustness_mut(&mut self) -> &mut f64;
+    fn set_latest_robustness(&mut self, value: f64);
+}
+
+impl <C, I, R, SC> HasLatestRobustness for CPExpState<C, I, R, SC> {
+
+    fn latest_robustness(&self) -> f64 {
+        self.latest_robustness
+    }
+
+    fn latest_robustness_mut(&mut self) -> &mut f64 {
+        &mut self.latest_robustness
+    }
+
+    fn set_latest_robustness(&mut self, value: f64) {
+        self.latest_robustness = value;
+    }
+
 }
 
 impl<C, I, R, SC> HasRand for CPExpState<C, I, R, SC>
@@ -920,18 +945,26 @@ where
         for _ in 0..num {
             // let input = generator.generate(self)?;
             
-            // let asked_values = self.ask_optimizer();
+            let asked_values = self.ask_optimizer();
+            // println!("Asked values from optimizer: {:?}", asked_values);
+            let param_bytes = TargetInput::opt_ask_to_param_bytes(&asked_values, &self.input_library);
+            let env_string = TargetInput::opt_ask_to_env_string(&asked_values, &self.input_library);
+            let input = TargetInput::new(param_bytes, env_string);
 
+            if forced {
+                let _ = fuzzer.add_input(self, executor, manager, input)?;
+                added += 1;
+            } else {
+                let (res, _) = fuzzer.evaluate_input(self, executor, manager, &input)?;
+                if res != ExecuteInputResult::None {
+                    added += 1;
+                }
+            }
 
-            // if forced {
-            //     let _ = fuzzer.add_input(self, executor, manager, input)?;
-            //     added += 1;
-            // } else {
-            //     let (res, _) = fuzzer.evaluate_input(self, executor, manager, &input)?;
-            //     if res != ExecuteInputResult::None {
-            //         added += 1;
-            //     }
-            // }
+            // Tell the optimizer about the result
+            println!("Telling optimizer with robustness: {}", self.latest_robustness);
+            self.tell_optimizer(&asked_values, self.latest_robustness);
+
         }
         manager.fire(
             self,
@@ -1035,6 +1068,7 @@ where
             optimizer: bo,
             optimize_params: phi_first,
             input_library,
+            latest_robustness: std::f64::INFINITY,
 
         };
         feedback.init_state(&mut state)?;

@@ -7,6 +7,8 @@ use libafl_bolts::Named;
 use core::f64;
 use std::process::{Command, Child};
 use std::borrow::Cow;
+use std::thread::sleep;
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use csv::Reader;
 use std::collections::HashMap;
@@ -15,7 +17,7 @@ use banquo::{EvaluationError, Formula, Trace, evaluate, predicate};
 use banquo::operators::{Always, And, Eventually, Implies, Not, Or};
 use banquo::predicate::FormulaError;
 
-use crate::cpexp_state::HasOptimizer;
+use crate::cpexp_state::{HasLatestRobustness, HasOptimizer};
 
 // Example: Capturing timestamp, x, y, z coords
 #[derive(Deserialize)]
@@ -73,7 +75,7 @@ impl PhysicalObserver {
 
 impl<I, S> Observer<I, S> for PhysicalObserver 
 where
-    S: HasExecutions + HasOptimizer, 
+    S: HasExecutions + HasOptimizer + HasLatestRobustness, 
 {
 
     fn pre_exec(&mut self, state: &mut S, _input: &I) -> Result<(), Error> {
@@ -134,6 +136,24 @@ where
         }
         self.recorder_process = None;
 
+        // Also, kill the gazebo process
+        let kill_gazebo = Command::new("pkill")
+            .args([
+                "-2",
+                "-f",
+                "my_ackermann_w_state.sh",
+            ])
+            .status()
+            .expect("Failed to execute pkill command for gazebo");
+
+        if !kill_gazebo.success() {
+            panic!("Error: pkill gazebo command failed!");
+        }
+
+        // Janky ass way to ensure everything is dead before starting again
+        // TODO find an elegant solution
+        sleep(Duration::from_millis(3000));
+
         // println!("All done!");
 
         let newest_trace_log_path = format!("{}/trace_{}.csv", self.trace_log_dir, state.executions());
@@ -168,7 +188,7 @@ where
 
         // println!("Robustness for execution {}: {:?}", state.executions(), self.latest_robustness_vec);
 
-        // Get minimum robustness value and send it to optimizers
+        // Get minimum robustness value and place it in the state
         let mut min_robustness: f64 = f64::INFINITY;
         for robustness in self.latest_robustness_vec.iter() {
             if *robustness < min_robustness {
@@ -176,21 +196,7 @@ where
             }
         }
 
-        // if let Some(bo) = state.optimizer_mut() {
-        //     let params = bo.ask();
-        //     println!("Asked params for iteration {}: {:?}", state.executions(), params);
-        //     // bo.tell(params, min_robustness);
-        // }
-
-        // TODO: Retrieve the input vectors for tell()
-
-        // if let Some(_) = state.environment_bo_mut() {
-        //     state.environment_bo_mut().unwrap().tell(_input, min_robustness);
-        // }
-
-        // if let Some(_) = state.parameter_bo_mut() {
-        //     state.parameter_bo_mut().unwrap().tell(_input, min_robustness);
-        // }
+        state.set_latest_robustness(min_robustness);
 
         // TODO: Write the robustness values to a separate log file
 
