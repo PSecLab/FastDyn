@@ -7,3 +7,4 @@
 #include <boardrunner/i2c.h>
 #include <boardrunner/net.h>
 #include <boardrunner/fileio.h>
+#include <boardrunner/fifo.h>

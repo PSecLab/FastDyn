@@ -213,7 +213,8 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
                 analysis_dir=cm_path,
                 model_name = model_name,
                 peripherals=peripheral,
-                out_dir=work_dir
+                out_dir=work_dir,
+                user_obs='' #TODO: Update later
             )
         else:
             pg_path = pg.initial_prompt_gen(

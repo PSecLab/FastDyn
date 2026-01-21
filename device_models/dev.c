@@ -112,11 +112,11 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
         dev_debug("IO Access not handled");
     }
 
-	//This is fix so we don't inject two interrupts
-    if (handler && (handler[0] == 'g' || handler[0] == 'v')) {
+// Filter out QEMU internals ('g') only and we dont filter ('v)
+//It is not always injecting double interrupts every ms
+    if (handler && (handler[0] == 'g' )) {
            return 0;
     }
-
     // Continue internal operation
     return 1;
 }

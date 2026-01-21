@@ -28,7 +28,7 @@ prealloc     = false
 #                                CPU Configuration
 # ==============================================================================
 [Machine]
-platform = "STM32F429"
+platform = "STM32F103xx"
 # --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
 enable_gdb = false
@@ -48,13 +48,14 @@ finline='None'
 # --- Core Emulation & Plugin Settings ---
 arch = "arm"
 machine = "cortexm"
-cpu = "cortex-m4"
+cpu = "cortex-m3"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
+binary = "/home/hammad/work/rehosting/stm_repo/STM32CubeF1/Projects/STM32F103RB-Nucleo/Examples/GPIO/GPIO_IOToggle/SW4STM32/STM32F103RB_Nucleo/Debug/STM32F103RB_Nucleo.elf"
+# binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/GPIO/firmwares/STM32F103RB_Nucleo.elf"
 init_nsvtor = "0x08000000"
 map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
-twintrace = "replay" #options are record, replay or None
+twintrace = "None" #options are record, replay or None
 hardware_trace = '/home/hammad/work/rehosting/FastDyn/hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 
 # --- Embedded CPU Behavior Configurations ---
@@ -90,31 +91,49 @@ logger_content = """
 # --- Peripheral Definitions ---
 # Each peripheral gets its own sub-table. If it uses the elder model,
 # its specific scroll configuration is defined directly within it.
-[Device.gpiog]
-    # ranges = ["0x40000000-0x40010FFF"]
-    ranges = [["0x40021800", "0x40021BFF"]]
-
-    description = "GPIO Port G for general-purpose I/O."
+[Device.gpio]
+    ranges = [["0x40010800", "0x40010BFF"], ["0x40011000", "0x400113FF"]] #handles Push button and LED
+    irq = ['15']
+    description = "GPIO Port for general-purpose I/O."
     read_priority = "elder"  #only the read from elder model is considered.
     # The configuration for this specific device when handled by the elder model.
-    [[Device.gpiog.handlers]]
+    [[Device.gpio.handlers]]
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "elder"
-        enabled = false
-        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
-    [[Device.gpiog.handlers]]
+    [[Device.gpio.handlers]]
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "passthrough"
-        enabled = true
+        enabled = false
 
-[Device.unhandled_space]
-    ranges = [["0x40000000", "0x400217FF"],["0x40021C00", "0xE00FFFFF"], ["0xE0000000", "0xEFFFFFFF"]]
+# [Device.gpioc]
+#     ranges = [["0x40011000", "0x400113FF"]] #handles push button
+#     irq = ['15']
+#     description = "GPIO Port for general-purpose I/O."
+#     read_priority = "elder"  #only the read from elder model is considered.
+#     # The configuration for this specific device when handled by the elder model.
+#     [[Device.gpioc.handlers]]
+#         # This device is now handled by the elder model, directly linking it
+#         # to the 'scroll_config' defined above.
+#         model   = "elder"
+#         enabled = true
+#         scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
 
-    description = "Memory regions that are explicitly not handled by any model."
+#     [[Device.gpioc.handlers]]
+#         # This device is now handled by the elder model, directly linking it
+#         # to the 'scroll_config' defined above.
+#         model   = "passthrough"
+#         enabled = true
 
-    [[Device.unhandled_space.handlers]]
+[Device.remaining_space]
+    ranges = [["0x40000000", "0x400107FF"],["0x40010C00", "0x40010FFF"], ["0x40011400", "0xE0000000"], ["0xE0000000", "0xEFFFFFFF"]]
+    irq = ['15']
+    description = "Memory regions that will handled by passthrough and are not of interest for the modeling."
+
+    [[Device.remaining_space.handlers]]
         model = "passthrough"
         enabled = true

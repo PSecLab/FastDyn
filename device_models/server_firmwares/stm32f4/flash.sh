@@ -5,7 +5,8 @@
 set -e
 
 OPENOCD="/usr/local/bin/openocd"
-BOARD_CFG="/usr/local/share/openocd/scripts/board/stm32f469discovery.cfg"
+BOARD_CFG="/usr/local/share/openocd/scripts/board/st_nucleo_f103rb.cfg"
+# BOARD_CFG="/usr/local/share/openocd/scripts/board/stm32f469discovery.cfg"
 # BOARD_CFG="/usr/local/share/openocd/scripts/board/stm32f7discovery.cfg"
 FLASH_ADDR="0x08000000"
 FIRMWARE="${1:-build/firmware.elf}"

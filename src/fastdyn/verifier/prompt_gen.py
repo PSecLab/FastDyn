@@ -11,6 +11,8 @@ from .. import fastdyn_log as fastdyn_log_conf
 
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
+user_obserability_prompt = "NOTE AND REQUIREMENT: We need this model to be observable/user interactive."
+non_user_obserability_prompt = "NOTE AND REQUIREMENT: We DON'T need this model to be observable/user interactive."
 
 # Define the QEMU API context
 qemu_api_list = """
@@ -41,6 +43,11 @@ qemu_api_list = """
 - `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
 - `void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque)`: Called by a DMA model. Takes a `stream_id`, a `handler` callback, and an `opaque` data pointer. Registers the handler to be called when a peripheral triggers a request for that stream.
 - `void api_dma_request(int stream_id)`: Called by a peripheral model (e.g., ADC). Takes a `stream_id` to trigger. This function looks up the corresponding handler (registered via `api_dma_register_stream`).
+- `int api_fifo_open(const char *path)`: Creates and opens a named pipe (FIFO) at the specified path using O_RDWR to prevent EOF when the external writer disconnects.
+- `int api_fifo_write(int fd, const void *data, int len)`: Writes a data buffer of a specified length to the FIFO file descriptor.
+- `int api_fifo_read_nonblock(int fd, uint8_t *out_byte)`: Reads a single byte from the FIFO in non-blocking mode. Returns 1 if a byte was read, 0 if the buffer is empty.
+- `void api_fifo_close(int fd, const char *path)`: Closes the file descriptor and removes (unlinks) the named pipe file from the filesystem.
+
 // --- I2C Bus struct definitions here ---
 typedef struct {
     char* name; //Name of the slave
@@ -98,7 +105,7 @@ int api_tap_send(int fd, const uint8_t *buf, int len);
 int api_tap_recv_nonblock(int fd, uint8_t *buf, int max_len);
 """
 
-def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir):
+def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir, user_obs=''):
     fastdyn_log.info("Generating Prompt for LLM")
     global qemu_api_list
 
@@ -107,6 +114,7 @@ def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, o
         model_name=model_name,
         peripherals=peripherals,
         qemu_api_list=qemu_api_list,
+        user_obs = user_obs,
     )
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -116,7 +124,7 @@ def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, o
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
     return str(output_path)
 
-def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list):
+def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list, user_obs):
     """
     Generates a detailed prompt for an LLM based on analysis files in a directory.
     `peripherals` can be a tuple/list (Click multiple=True) or a single string.
@@ -125,6 +133,13 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
         peripherals = [peripherals]
     else:
         peripherals = list(peripherals)
+
+    if user_obs == 'REQ':
+        usr_prompt = user_obserability_prompt
+    elif user_obs == 'NOT-REQ':
+        usr_prompt = non_user_obserability_prompt
+    else:
+        usr_prompt = ''
 
     # Parse summary once (it lives in analysis_dir/summary.txt per your layout)
     summary_path = os.path.join(analysis_dir, "summary.txt")
@@ -196,6 +211,7 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
 
     You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
     You have read the reference manual for {platform_name} with special familiarity with {", ".join(peripherals)}.
+    {usr_prompt}
 
     Your task is to analyze the following summary of MMIO trace data and generate a complete C device model for {model_name}.
 
