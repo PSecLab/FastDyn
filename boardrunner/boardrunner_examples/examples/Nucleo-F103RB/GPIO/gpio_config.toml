@@ -42,6 +42,7 @@ semihosting = true
 semihosting_config = "enable=on,target=native"
 coverage=false
 finline='None'
+bbl_coverage=true             #set to true or false to calculate bbl coverage
 
 [CPU]
 [[CPU.cpu0]]
@@ -101,14 +102,14 @@ logger_content = """
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "elder"
-        enabled = true
+        enabled = false
         scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
     [[Device.gpio.handlers]]
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "passthrough"
-        enabled = false
+        enabled = true
 
 # [Device.gpioc]
 #     ranges = [["0x40011000", "0x400113FF"]] #handles push button

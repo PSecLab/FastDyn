@@ -10,3 +10,4 @@ Doxyfile.bak
 fastdyn-env
 *build
 *.bin
+*bbl.txt

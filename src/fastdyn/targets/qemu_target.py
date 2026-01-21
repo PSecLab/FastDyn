@@ -204,6 +204,9 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"twintrace={twintrace_opt}",
         f"twintrace_binary={replay_binary}",
     ]
+    if (opts.bbl_coverage):
+        plugin_kv.append(f"bbl={out_path}/bbl.txt")
+
     if opts.finline is not None:
         plugin_kv.append(f"finline={opts.finline}")
     cmd.extend(["--plugin", ",".join(plugin_kv)])
@@ -211,6 +214,9 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     # ------------------------ GDB command ------------------------
     gdb_cmd, launch_gdb, binary = get_gdb_cmd(machine, out_path)
 
+    print_cmd = " ".join(cmd)
+    print(print_cmd)
+    # import sys; sys.exit(1)
     return cmd, gdb_cmd, launch_gdb, binary
 
 

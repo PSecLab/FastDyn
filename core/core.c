@@ -66,6 +66,18 @@ int coverage;
 twintrace_mode_t twintrace_mode = TT_OFF;
 const char *twintrace_bin_path = NULL;
 
+#define MAX_VCPUS 8
+#define DEFAULT_BBL_DUMP_PATH "bbl.txt"
+
+static int bbl_enable = 0;
+static const char *bbl_dump_path = DEFAULT_BBL_DUMP_PATH;
+
+// per-vCPU unique set of TB entry PCs
+static GHashTable *bbl_sets[MAX_VCPUS];
+
+// optional: total TB executions (not unique)
+static uint64_t bbl_total_tb_exec[MAX_VCPUS];
+
 /**
  * @brief Parses a token string into a logger entry.
  *
@@ -628,6 +640,19 @@ static void tb_exec_cb(unsigned int cpu_index, void *udata)
     core_icount_add(n);
 }
 
+static void bbl_tb_exec_cb(unsigned int vcpu_index, void *userdata)
+{
+    uint64_t tb_pc = (uint64_t)(uintptr_t)userdata;
+
+    if (vcpu_index >= MAX_VCPUS) return;
+
+    // normalize thumb bit if you want stable BB ids
+    tb_pc &= ~1ULL;
+
+    bbl_total_tb_exec[vcpu_index] += 1;
+    g_hash_table_add(bbl_sets[vcpu_index], (gpointer)(uintptr_t)tb_pc);
+}
+
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
 	if (runtime && !init) {
@@ -643,6 +668,18 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
             tb, tb_exec_cb,
             QEMU_PLUGIN_CB_NO_REGS,
             (void *)(uintptr_t)n
+        );
+    }
+
+    if (bbl_enable && n > 0) {
+        uint64_t tb_pc = qemu_plugin_insn_vaddr(qemu_plugin_tb_get_insn(tb, 0));
+        tb_pc &= ~1ULL;
+
+        qemu_plugin_register_vcpu_tb_exec_cb(
+            tb,
+            bbl_tb_exec_cb,
+            QEMU_PLUGIN_CB_NO_REGS,
+            (void *)(uintptr_t)tb_pc
         );
     }
 
@@ -881,12 +918,33 @@ void* tracer(void* arg) {
 	}
 }
 
+static void dump_bbl(void)
+{
+    uint64_t unique = 0;
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        if (bbl_sets[i]) unique += (uint64_t)g_hash_table_size(bbl_sets[i]);
+    }
+
+    FILE *f = fopen(bbl_dump_path ? bbl_dump_path : DEFAULT_BBL_DUMP_PATH, "w");
+    if (!f) return;
+
+    fprintf(f, "bbl_unique=%" PRIu64 "\n", unique);
+    uint64_t total_tb = 0;
+    for (int i = 0; i < MAX_VCPUS; i++) total_tb += bbl_total_tb_exec[i];
+    fprintf(f, "tb_exec_total=%" PRIu64 "\n", total_tb);
+    fclose(f);
+}
+
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
 	printf("FastDyn Exit.\n");
 	if (coverage) {
 		dump_values(DEFAULT_DUMP_PATH);
 	}
+
+    if (bbl_enable) {
+        dump_bbl();
+    }
 }
 
 // lookup_callback function moved to virtuals.c
@@ -1046,6 +1104,15 @@ static int core_parse_arguments(int argc, char ** argv) {
     //parse args for twintrace
     parse_twintrace_args(argc, argv);
 
+    //basic block coverage calculator
+    const char *arg = utils_get_arg("bbl", argc, argv);
+    if (!arg_is_disabled(arg) && arg) {
+        bbl_enable = 1;
+        if (strcmp(arg, "1") != 0 && strcasecmp(arg, "true") != 0) {
+            bbl_dump_path = arg; // treat as path
+        }
+    }
+
     filename = utils_get_arg("logger", argc, argv);
     if (filename) {
     load_logger_config(filename);
@@ -1077,6 +1144,13 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Device Init Failed");
 	}
     #endif
+
+    if (bbl_enable) {
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
+    }
+    memset(bbl_total_tb_exec, 0, sizeof(bbl_total_tb_exec));
+    }
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
