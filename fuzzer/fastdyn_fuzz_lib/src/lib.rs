@@ -36,10 +36,13 @@ use core::num::NonZeroUsize;
 use std::fs::File;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write, BufReader};
-use std::sync::mpsc::{Sender, Receiver, channel};
 use std::thread::JoinHandle;
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::sync::{
+    mpsc::{Sender, Receiver, channel},
+    atomic::{AtomicU32, Ordering},
+};
 use std::sync::{RwLock, Mutex, Arc};
 use std::ptr;
 use lazy_static::lazy_static;
@@ -57,33 +60,41 @@ fn signals_set(idx: usize) {
 }
 
 //This will hold the coverage from the run.
-const MAP_SIZE: usize = 65536; // same as AFL
-static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
-
-pub struct FuzzHandleInternal {
-    pub input_rx: Receiver<Vec<u8>>,        // C side receives inputs from Rust
-    pub pc_tx: Sender<Vec<u32>>,        // C side sends PCs back to Rust
-    pub thread: JoinHandle<()>,         // handle to the fuzzer thread
-}
-
+const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this size in C is the same
+#[no_mangle]
+pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 
 #[repr(C)]
-pub struct FuzzHandle {
-    inner: *mut FuzzHandleInternal,
+pub struct FuzzInput {
+    len: usize,
+    data: *mut u8,
+}
+
+#[repr(C)]
+pub struct FuzzBuffer {
+    status: std::sync::atomic::AtomicU32,
+    assert: std::sync::atomic::AtomicU32,
+    buffer: *mut *mut FuzzInput,
+}
+
+extern "C" {
+    fn fuzz_buffer_create(anchor_id: u32) -> *mut FuzzBuffer;
+    //fn fuzz_buffer_destroy(fb: *mut FuzzBuffer); // This should never really need to be removed
+    fn fuzz_buffer_write(fb: *mut FuzzBuffer, input: *mut FuzzInput) -> bool;
+    fn fuzz_check_empty(fb: *mut FuzzBuffer) -> bool;
+    fn fuzz_check_assert(fb: *mut FuzzBuffer) -> u32;
 }
 
 struct FastDynExecutor<S> {
     phantom: PhantomData<S>,
-    input_tx: Sender<Vec<u8>>,
-    pc_rx: Receiver<Vec<u32>>,
+    fuzz_buffer: *mut FuzzBuffer,
 }
 
 impl<S> FastDynExecutor<S> {
-    pub fn new(_state: &S, input_tx: Sender<Vec<u8>>, pc_rx: Receiver<Vec<u32>>) -> Self {
+    pub fn new(_state: &S, fuzz_buffer: *mut FuzzBuffer) -> Self {
         Self {
             phantom: PhantomData,
-            input_tx,
-            pc_rx,
+            fuzz_buffer,
         }
     }
 }
@@ -106,30 +117,56 @@ where
         let target = input.target_bytes();
         let buf = target.as_slice();
 
-        self.input_tx.send(buf.to_vec()).unwrap();
+        let mut vec = buf.to_vec().into_boxed_slice();
+        let input = Box::new(FuzzInput {
+            len: vec.len(),
+            data: vec.as_mut_ptr(),
+        });
 
-//		println!("{:?}", buf);
+        Box::leak(vec);
 
-        let pcs = self.pc_rx.recv().unwrap();
+        let input_ptr = Box::into_raw(input);
+        
+        loop {
+            let pushed = unsafe { fuzz_buffer_write(self.fuzz_buffer, input_ptr) };
+            if pushed {
+                break;
+            }
 
- //   	println!("Loaded {} PCs", pcs.len());
+            // Give the consumer time to read
+            std::hint::spin_loop();
+        }
 
+        // if fuzzing target doesn't finish quickly, move to a slower less cpu-intensive option
+        const SPIN_ITERS: usize = 1_000;
+        const YIELD_ITERS: usize = 10_000;
+        let mut spins = 0;
+        loop {
+            let finished = unsafe { fuzz_check_empty(self.fuzz_buffer) };
+            if finished {
+                break;
+            }
 
-		// If deadbeef in trace, we must return Ok(ExitKind::Crash)
+            // Give firmware time to reach next anchor
+            if spins < SPIN_ITERS {
+                std::hint::spin_loop();
+            } else if spins < YIELD_ITERS {
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(std::time::Duration::from_micros(500));
+            }
+        }
+
 	    // Build transitions
 		let mut crash = false;
-	    let mut edges: HashMap<u32, HashSet<u32>> = HashMap::new();
-	    for pair in pcs.windows(2) {
-	        let from = pair[0];
-	        let to = pair[1];
-			if (to ==0xdeadbeef || from == 0xdeadbeef) {
-					crash = true;
-			}
-    	    edges.entry(from).or_default().insert(to);
-	    }
+        unsafe {
+            let value = fuzz_check_assert(self.fuzz_buffer); 
+            if value != 0 {
+                crash = true;
+            }
+        }
 
-		
-	    println!("Unique nodes: {}", edges.len());
+	    //println!("Unique nodes: {}", edges.len());
 
 		/* DEBUG COnditional  
     	// Output to GraphViz DOT format
@@ -147,16 +184,6 @@ where
 
 		//TODO: This graph should go in CVG.
 
-		// Finally convert to AFL bitmap
-		unsafe {
-		    for (src, dsts) in &edges {
-		        for dst in dsts {
-        		    let idx = ((*src as usize) ^ (*dst as usize)) % MAP_SIZE;
-		            CVG[idx] = CVG[idx].wrapping_add(1);
-        		}
-		    }
-		}
-
 		if crash {
 			Ok(ExitKind::Crash)
 		} else {
@@ -165,7 +192,11 @@ where
     }
 }
 
-pub fn fuzzer_thread_main(input_size: usize, input_tx: Sender<Vec<u8>>, pc_rx: Receiver<Vec<u32>>) {
+pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
+    let fuzz_buffer;
+    unsafe {
+        fuzz_buffer = fuzz_buffer_create(anchor_id);
+    }
     // Create an observation channel using the signals map
     let observer = unsafe { StdMapObserver::new("cvg", &mut CVG) };
 
@@ -235,7 +266,7 @@ pub fn fuzzer_thread_main(input_size: usize, input_tx: Sender<Vec<u8>>, pc_rx: R
         .build();
 
     // Create the executor for an in-process function with just one observer
-    let executor = FastDynExecutor::new(&state, input_tx, pc_rx);
+    let executor = FastDynExecutor::new(&state, fuzz_buffer);
 
     let mut executor = WithObservers::new(executor, tuple_list!(observer));
 
@@ -262,135 +293,17 @@ pub fn fuzzer_thread_main(input_size: usize, input_tx: Sender<Vec<u8>>, pc_rx: R
         .expect("Error in the fuzzing loop");
 }
 
-pub fn fuzz_init(input_size: usize) -> FuzzHandle {
-    use std::sync::mpsc::channel;
-
-    // Channels for simple Vec<u8> / Vec<u32> communication
-    let (input_tx, input_rx) = channel::<Vec<u8>>();          // Rust → C
-    let (pc_tx, pc_rx) = channel::<Vec<u32>>();           // C → Rust
-
-    // Spawn the fuzzer thread and move the correct ends into it
-    let thread = std::thread::spawn(move || {
-        fuzzer_thread_main(input_size, input_tx, pc_rx);
-    });
-
-    // Store the opposite ends for the C side
-    let internal = Box::new(FuzzHandleInternal {
-        input_rx,   // C receives input
-        pc_tx,      // C sends PCs
-        thread,
-    });
-
-    let handle = FuzzHandle {
-        inner: Box::into_raw(internal),
-    };
-
-    return handle;
-}
-
-unsafe impl Send for FuzzHandle {}
-unsafe impl Sync for FuzzHandle {}
-
-lazy_static::lazy_static! {
-    static ref ANCHOR_MAP: RwLock<HashMap<u32, FuzzHandle>> =
-        RwLock::new(HashMap::new());
-}
-
 #[no_mangle]
-pub extern "C" fn fuzz_get(id: u32, cstr: *const c_char) -> *mut FuzzHandle {
+pub extern "C" fn fuzz_init(anchor_id: u32, cstr: *const c_char) -> u32 {
     // Safety: cstr must be a valid null-terminated C string
     let c_str = unsafe { CStr::from_ptr(cstr) };
     let r_str = c_str.to_str().unwrap(); // handle errors in production
 
     let input_size = (r_str.chars().filter(|&c| c == ',').count() + 1) * 4;
 
-    // Insert if missing
-    {
-        let mut map = ANCHOR_MAP.write().unwrap();
-        map.entry(id).or_insert_with(|| fuzz_init(input_size));
-    }
+    let thread = std::thread::spawn(move || {
+        fuzzer_thread_main(anchor_id, input_size);
+    });
 
-    // Return a pointer to the stored handle
-    let map = ANCHOR_MAP.read().unwrap();
-    map.get(&id).map(|h| h as *const FuzzHandle as *mut FuzzHandle)
-        .unwrap_or(ptr::null_mut())
+    return 1;
 }
-
-#[no_mangle]
-pub extern "C" fn fuzz_receive_input(
-    handle_ptr: *mut FuzzHandle,
-    out_buf: *mut u8,
-    out_buf_len: usize,
-) -> usize {
-    if handle_ptr.is_null() || out_buf.is_null() || out_buf_len == 0 {
-        return 0;
-    }
-
-    let internal = unsafe { &mut *(*handle_ptr).inner };
-
-    match internal.input_rx.recv() {
-        Ok(input) => {
-            let copy_len = core::cmp::min(input.len(), out_buf_len);
-
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    input.as_ptr(),
-                    out_buf,
-                    copy_len,
-                );
-            }
-
-            copy_len // number of bytes written
-        }
-        Err(_) => 0, // channel closed / error
-    }
-}
-
-
-#[no_mangle]
-pub extern "C" fn fuzz_submit_pcs(
-    handle_ptr: *mut FuzzHandle,
-    pcs_ptr: *const u32,
-    pcs_len: u32,
-) -> u32 {
-    if handle_ptr.is_null() {
-        return 0;
-    }
-
-    let internal = unsafe { &mut *(*handle_ptr).inner };
-
-    if pcs_ptr.is_null() {
-        return 0;
-    }
-
-    // Build Vec<u32> from C buffer
-    let slice = unsafe { std::slice::from_raw_parts(pcs_ptr, pcs_len as usize) };
-    let vec = slice.to_vec();
-
-    match internal.pc_tx.send(vec) {
-        Ok(_) => 1, // success
-        Err(_) => 0,
-    }
-}
-
-// AFL won't stop looping, so I think this will just freeze the program, but we shouldn't need to free, fuzzer should be lifetime
-#[no_mangle]
-pub extern "C" fn fuzz_free(handle_ptr: *mut FuzzHandle) {
-    if handle_ptr.is_null() {
-        return;
-    }
-
-    unsafe {
-        // Take ownership of the outer handle
-        let handle_box = Box::from_raw(handle_ptr);
-        // Take ownership of the internal data
-        let mut internal = Box::from_raw(handle_box.inner);
-
-        // Dropping pc_tx and input_rx will eventually cause the fuzzer thread to see closed channels.
-
-        // Join the fuzzer thread
-        let _ = internal.thread.join();
-        // `internal` is dropped here
-    }
-}
-

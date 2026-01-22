@@ -817,13 +817,14 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 #include <stdint.h>
 #include <stdio.h>
 #include <time.h>
+#include <pthread.h>
 
 // ---------------------------
 // Configuration / defaults
 // ---------------------------
 #define DEFAULT_PATH "/tmp/cvg"
 #define DEFAULT_DUMP_PATH "trace_log.bin"
-#define BUF_SIZE (64 * 1024)
+#define BUF_SIZE (64 * 1024) //0x10000
 #define WORD_SIZE sizeof(uint32_t)
 #define NUM_WORDS (BUF_SIZE / WORD_SIZE)
 #define INITIAL_CAPACITY 536870912 // Initial size for our dynamic array of observed values
@@ -834,20 +835,180 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 static uint32_t *g_observed_values = NULL; // Buffer for new values
 static size_t g_observed_count = 0;        // Number of values currently buffered
 static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
+static uint32_t g_prev_pc = 0;
 
 #if ENABLE_LIBFUZZ
-// Send a list of PCs (each 4 bytes) back to Rust
-// Returns 1 on success, 0 on failure
-uint32_t fuzz_submit_pcs(void *handle, const uint32_t* pcs, uint32_t pcs_len);
-uint32_t dump_trace_info(void *hFuzz) {
-    uint32_t ret = 1;
-    if (hFuzz) { // if fuzzer is null, just clear trace
-        ret = fuzz_submit_pcs(hFuzz, g_observed_values, g_observed_count);
+typedef enum {
+    FUZZ_EMPTY, // buffer is ready for fuzzer to give an input
+    FUZZ_READY, // buffer is ready for anchor to read input
+    FUZZ_BUSY, // anchor as successfully read input
+} fuzz_state_t;
+
+typedef struct fuzz_input {
+    size_t len;
+    uint8_t *data;
+} fuzz_input_t;
+
+// Designed for a system where producer and consumer are each single threaded
+typedef struct fuzz_buffer {
+    _Atomic fuzz_state_t state;
+    _Atomic uint32_t assert; // 0 = input didn't reach assert, 1 = input reached assert
+    fuzz_input_t *buffer;
+} fuzz_buffer_t;
+
+// since the fuzzer creates more threads, we need to use a lock in the callbacks that read/write fuzz_buffers and anchor_count
+static fuzz_buffer_t **fuzz_buffers = NULL; // size is always a power of two, if anchor count reaches new power of two, double
+static int anchor_count = -1;
+static int buffer_capacity = 0;
+static pthread_rwlock_t anchor_lock;
+
+#define MAP_SIZE 65536 // should always match the rust definition
+extern uint8_t CVG[MAP_SIZE];
+
+// 0 on fail, 1 otherwise
+int fuzz_init(uint32_t anchor_id, char *numbers);
+
+// allocate buffer (Rust -> C)
+fuzz_buffer_t *fuzz_buffer_create(uint32_t anchor_id) {
+    pthread_rwlock_wrlock(&anchor_lock);
+    if (anchor_count > buffer_capacity) {
+        if (buffer_capacity == 0) buffer_capacity = 1;
+        while (anchor_count > buffer_capacity) {
+            buffer_capacity *= 2;
+        }
+
+        fuzz_buffers = realloc(fuzz_buffers, buffer_capacity * sizeof(fuzz_buffer_t*));
+        if (fuzz_buffers == NULL) {
+            utils_die("Failed to realloc buffer for fuzzing");
+        }
     }
-    g_observed_count = 0;
-    return ret;
+
+    fuzz_buffers[anchor_id] = malloc(sizeof(fuzz_buffer_t));
+    if (fuzz_buffers[anchor_id] == NULL) {
+        utils_die("Failed to allocate new fuzzing object");
+    }
+
+    atomic_init(&fuzz_buffers[anchor_id]->state, FUZZ_EMPTY);
+    atomic_init(&fuzz_buffers[anchor_id]->assert, 0);
+    fuzz_buffers[anchor_id]->buffer = NULL;
+
+    fuzz_buffer_t *buffer = fuzz_buffers[anchor_id];
+
+    pthread_rwlock_unlock(&anchor_lock);
+
+    return buffer;
 }
-#endif
+
+// input side (Rust -> C)
+bool fuzz_buffer_write(fuzz_buffer_t *fb, fuzz_input_t *input) {
+    fuzz_state_t state = atomic_load_explicit(&fb->state, memory_order_acquire);
+    if (state == FUZZ_EMPTY) {
+        fb->buffer = input;
+        atomic_store_explicit(&fb->state, FUZZ_READY, memory_order_release);
+        return true;
+    } else {
+        fprintf(stderr, "Fuzzer not empty\n");
+        return false;
+    }
+}
+
+// C function for retrieving input
+int fuzz_buffer_read(uint32_t anchor_id, char* out, size_t len) {
+    pthread_rwlock_rdlock(&anchor_lock);
+    fuzz_buffer_t *fb = fuzz_buffers[anchor_id];
+    pthread_rwlock_unlock(&anchor_lock);
+
+    fuzz_state_t state = atomic_load_explicit(&fb->state, memory_order_acquire);
+    if (state != FUZZ_READY) {
+        return 0;
+    }
+    if (fb->buffer == NULL) {
+        fprintf(stderr, "Input is ready but buffer is null\n");
+        return 0;
+    }
+
+    atomic_store_explicit(&fb->state, FUZZ_BUSY, memory_order_release); // clear assert flag
+    atomic_store_explicit(&fb->assert, 0, memory_order_release); // clear assert flag
+
+    memcpy(out, fb->buffer->data, len < fb->buffer->len ? len : fb->buffer->len);
+    size_t input_size = fb->buffer->len;
+
+    free(fb->buffer->data);
+    free(fb->buffer);
+
+    fb->buffer = NULL;
+
+    return input_size;
+}
+
+bool fuzz_check_empty(fuzz_buffer_t *fb) {
+    return (atomic_load_explicit(&fb->state, memory_order_relaxed) == FUZZ_EMPTY);
+}
+
+// If the anchor is busy (didn't skip consuming input), set it to done
+void fuzz_finish(uint32_t anchor_id) {
+    pthread_rwlock_rdlock(&anchor_lock);
+    fuzz_buffer_t *fb = fuzz_buffers[anchor_id];
+    pthread_rwlock_unlock(&anchor_lock);
+
+    if (atomic_load_explicit(&fb->state, memory_order_acquire) == FUZZ_BUSY) {
+        atomic_store_explicit(&fb->state, FUZZ_EMPTY, memory_order_release);
+    }
+}
+
+uint32_t fuzz_check_assert(fuzz_buffer_t *fb) {
+    uint32_t assrt = atomic_load_explicit(&fb->assert, memory_order_relaxed);
+    return assrt;
+}
+
+void fuzz_report_assert(uint32_t anchor_id) {
+    pthread_rwlock_rdlock(&anchor_lock);
+    atomic_store_explicit(&fuzz_buffers[anchor_id]->assert, 1, memory_order_release);
+    pthread_rwlock_unlock(&anchor_lock);
+}
+
+void initialize_anchor(char* args) {
+    if (!args) return;
+
+    if (anchor_count == -1) {
+        pthread_rwlock_init(&anchor_lock, NULL);
+        anchor_count = 0;
+    }
+
+    char tmp[301] = {0};
+
+    char *ignored_id = strtok(args, ":"); // consume the assigned id, we're just going to assign from 0 up and overwrite this
+    char *numbers = strtok(NULL, ":");
+    if (numbers == NULL) {
+        utils_die("Failed to read anchor targets");
+    }
+
+    strncpy(tmp, numbers, sizeof(tmp) - 1);
+
+    pthread_rwlock_wrlock(&anchor_lock);
+    int anchor_id = anchor_count++;
+    pthread_rwlock_unlock(&anchor_lock);
+
+    sprintf(args, "%d", anchor_id);
+    strcat(args, ":");
+    strcat(args, tmp);
+
+    if (!fuzz_init(anchor_id, numbers)) {
+        utils_die("Failed initialization");
+    }
+}
+
+void add_observed_value(uint32_t val) {
+    //printf("Observing %lx\n", val);
+    if (g_prev_pc != 0) {
+        uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
+        CVG[idx] = CVG[idx] + 1;
+    }
+
+    g_prev_pc = val;
+}
+
+#else
 
 void add_observed_value(uint32_t val) {
     if (g_observed_count >= g_observed_capacity) {
@@ -863,7 +1024,7 @@ void add_observed_value(uint32_t val) {
     }
     g_observed_values[g_observed_count++] = val;
 }
-
+#endif
 
 /**
  * @brief Writes the buffered values to a binary file.
@@ -1006,7 +1167,6 @@ static void parse_twintrace_args(int argc, char **argv)
             twintrace_bin_path ? twintrace_bin_path : "(none)");
 }
 
-
 void parse_rules_file(const char *filename);
 void parse_rules_file(const char *filename) {
     FILE *f = fopen(filename, "r");
@@ -1039,6 +1199,10 @@ void parse_rules_file(const char *filename) {
         if (rules_count >= MAX_RULES) {
             fprintf(stderr, "Max rules limit reached (%d), skipping rest\n", MAX_RULES);
             break;
+        }
+
+        if (!strcmp("anchor", cb_name)) {
+            initialize_anchor(args);
         }
 
         rules[rules_count].address = strtoull(addr_str, NULL, 0);
