@@ -1,29 +1,30 @@
-// bme280_slave_hardcoded.c
+// bme280_slave.c
 //
-// Hardcoded I2C slave model for BME280-like behavior:
-// - Register pointer on first byte of a write phase
-// - Sequential reads auto-increment the pointer
+// I2C slave model for BME280-like behavior (register pointer + sequential reads).
+// Exports BOTH naming schemes:
+//   - STM32F4_event / STM32F4_send / STM32F4_receive   (fixed symbols)
+//   - bme280_event  / bme280_send  / bme280_receive    (Name=bme280)
 //
-// Exports the fixed symbols you require:
-//   - STM32F4_event
-//   - STM32F4_send
-//   - STM32F4_receive
+// Key hardcoded bytes to match your trace expectations:
+//   - regs[0xF3] (STATUS) = 0x00
+//   - regs[0x88]          = 0x93
 //
-// Build:
-//   gcc -shared -fPIC -O2 -o slave.so bme280_slave_hardcoded.c
+// Build (standalone):
+//   gcc -shared -fPIC -O2 -o slave.so bme280_slave.c
 //
-// Notes:
-// - STATUS (0xF3) is hardcoded to 0x00 to match your hardware trace.
-// - First calibration byte at 0x88 is hardcoded to 0x93 to match your trace.
-// - Everything else is deterministic and stable.
+// Or let your boardrunner_sdk CMake build it.
+//
+// Verify exports:
+//   nm -D slave.so | grep -E "bme280_(send|receive|event)|STM32F4_(send|receive|event)"
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 
-#include <boardrunner/vio.h>  // enum i2c_event + dev_debug()
+#include <device.h>         // provides dev_debug(fmt, ...) macro in your tree
+#include <boardrunner/vio.h>
 
-// ---- BME280 registers ----
+// ---- BME280 register addresses ----
 #define REG_ID         0xD0
 #define REG_RESET      0xE0
 #define REG_CTRL_HUM   0xF2
@@ -38,7 +39,7 @@
 typedef struct {
     uint8_t regs[256];
 
-    // On I2C_START_SEND, first byte is treated as register pointer.
+    // On I2C_START_SEND, next byte is the register pointer
     bool    expect_reg_addr;
     uint8_t reg_ptr;
 
@@ -47,37 +48,29 @@ typedef struct {
 
 static bme280_state_t g_bme;
 
-static void dbg(const char *msg) {
-    dev_debug((char*)msg);
-}
-
-static void bme280_load_hardcoded_defaults(bme280_state_t *s) {
+static void bme280_load_defaults(bme280_state_t *s) {
     memset(s->regs, 0, sizeof(s->regs));
 
     // Chip ID
     s->regs[REG_ID] = CHIP_ID_BME280;
 
-    // STATUS: match your hardware trace expectation (0x00)
-    s->regs[REG_STATUS] = 0x00;
-
-    // Control defaults (stable)
+    // Default config/control/status
     s->regs[REG_CTRL_HUM]  = 0x00;
     s->regs[REG_CTRL_MEAS] = 0x00;
     s->regs[REG_CONFIG]    = 0x00;
 
-    // Calibration region (0x88..0xA1 and 0xE1..0xE7) — deterministic.
-    // The only byte you *proved* from trace is 0x88 == 0x93.
-    // Fill the rest with stable values (doesn’t matter unless firmware checks exact bytes).
+    // IMPORTANT: match trace expectation (STATUS read -> 0x00)
+    s->regs[REG_STATUS] = 0x00;
+
+    // Calibration blocks (stable, but we override 0x88 specifically)
     for (int i = 0; i < 26; i++) s->regs[0x88 + i] = (uint8_t)(0x20 + i);
-    s->regs[0x88] = 0x93;  // <-- trace-matching fix
-
-    for (int i = 0; i < 7; i++) s->regs[0xE1 + i] = (uint8_t)(0x80 + i);
-
-    // One extra calibration byte often used
+    for (int i = 0; i < 7;  i++) s->regs[0xE1 + i] = (uint8_t)(0x80 + i);
     s->regs[0xA1] = 0x55;
 
-    // Stable sensor data bytes at 0xF7..0xFE:
-    // press(3), temp(3), hum(2). Deterministic and safe.
+    // IMPORTANT: match trace expectation (read at 0x88 -> 0x93)
+    s->regs[0x88] = 0x93;
+
+    // Provide 8 bytes of sensor data at 0xF7..0xFE: press(3), temp(3), hum(2)
     s->regs[0xF7] = 0x64; s->regs[0xF8] = 0x00; s->regs[0xF9] = 0x00;
     s->regs[0xFA] = 0x7A; s->regs[0xFB] = 0x00; s->regs[0xFC] = 0x00;
     s->regs[0xFD] = 0x40; s->regs[0xFE] = 0x00;
@@ -89,9 +82,9 @@ static void bme280_load_hardcoded_defaults(bme280_state_t *s) {
 static void bme280_lazy_init(void) {
     if (!g_bme.inited) {
         memset(&g_bme, 0, sizeof(g_bme));
-        bme280_load_hardcoded_defaults(&g_bme);
+        bme280_load_defaults(&g_bme);
         g_bme.inited = true;
-        dbg("[bme280] hardcoded slave initialized\n");
+        dev_debug("[bme280] slave initialized\n");
     }
 }
 
@@ -99,75 +92,60 @@ static void bme280_lazy_init(void) {
 extern "C" {
 #endif
 
-// Called when master sends a byte. Return 0=ACK, 1=NACK.
+// -------------------------------
+// REQUIRED FIXED SYMBOLS (DO NOT RENAME)
+// -------------------------------
+
+// Return 0 for ACK, 1 for NACK.
 int STM32F4_send(uint8_t data) {
     bme280_lazy_init();
 
     if (g_bme.expect_reg_addr) {
-        // First byte after START_SEND is the register pointer.
         g_bme.reg_ptr = data;
         g_bme.expect_reg_addr = false;
         return 0; // ACK
     }
 
-    // Payload write to current register
+    // payload write into current reg
     uint8_t reg = g_bme.reg_ptr;
     g_bme.regs[reg] = data;
 
-    // Handle soft reset
+    // Soft reset behavior
     if (reg == REG_RESET && data == RESET_CMD) {
-        // Keep calibration deterministic; reset control/data/status to defaults.
-        uint8_t saved_cal_88_0 = g_bme.regs[0x88];
-        uint8_t saved_cal_a1   = g_bme.regs[0xA1];
-        uint8_t saved_cal_e1_0 = g_bme.regs[0xE1];
-
-        bme280_load_hardcoded_defaults(&g_bme);
-
-        // Re-apply any explicitly-trace-matched calibration bytes (redundant but clear)
-        g_bme.regs[0x88] = saved_cal_88_0 ? saved_cal_88_0 : 0x93;
-        g_bme.regs[0xA1] = saved_cal_a1   ? saved_cal_a1   : 0x55;
-        g_bme.regs[0xE1] = saved_cal_e1_0 ? saved_cal_e1_0 : 0x80;
-
+        bme280_load_defaults(&g_bme);
         return 0;
     }
 
-    // Auto-increment for multi-byte writes
+    // auto-increment
     g_bme.reg_ptr = (uint8_t)(g_bme.reg_ptr + 1);
-    return 0; // ACK
+    return 0;
 }
 
-// Called when master reads a byte from slave.
 uint8_t STM32F4_receive(void) {
     bme280_lazy_init();
 
     uint8_t reg = g_bme.reg_ptr;
     uint8_t val = g_bme.regs[reg];
 
-    // Hard guarantee: STATUS is stable 0x00 (matches your trace expectation)
+    // Keep STATUS deterministic for your trace matching
     if (reg == REG_STATUS) {
         val = 0x00;
     }
 
-    // Sequential read behavior
     g_bme.reg_ptr = (uint8_t)(g_bme.reg_ptr + 1);
     return val;
 }
 
-// Called on bus events.
 int STM32F4_event(enum i2c_event event) {
     bme280_lazy_init();
 
     switch (event) {
         case I2C_START_SEND:
-            // Next byte is register pointer
             g_bme.expect_reg_addr = true;
             break;
-
         case I2C_START_RECV:
-            // Read phase: keep reg_ptr as set
             g_bme.expect_reg_addr = false;
             break;
-
         case I2C_FINISH:
         case I2C_NACK:
         default:
@@ -176,6 +154,13 @@ int STM32F4_event(enum i2c_event event) {
     }
     return 0;
 }
+
+// -------------------------------
+// Name-based aliases: Name=bme280
+// -------------------------------
+int bme280_send(uint8_t data) { return STM32F4_send(data); }
+uint8_t bme280_receive(void)  { return STM32F4_receive(); }
+int bme280_event(enum i2c_event event) { return STM32F4_event(event); }
 
 #ifdef __cplusplus
 } // extern "C"
