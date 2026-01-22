@@ -214,9 +214,6 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     # ------------------------ GDB command ------------------------
     gdb_cmd, launch_gdb, binary = get_gdb_cmd(machine, out_path)
 
-    print_cmd = " ".join(cmd)
-    print(print_cmd)
-    # import sys; sys.exit(1)
     return cmd, gdb_cmd, launch_gdb, binary
 
 

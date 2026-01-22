@@ -286,6 +286,18 @@ static int twintrace_init(ConfigSection* model_info)
     for (int i = 0; i < model_info->overall_range_count; i++) {
         dev_register_device_model(ranges[i].start, ranges[i].end, &twintrace_model_def);
     }
+    for (int di = 0; di < model_info->device_count; di++) {
+        DeviceModels* d = &model_info->devices[di];
+
+        if (d->irq_count > 0 && d->irqs) {
+            for (int j = 0; j < d->irq_count; j++) {
+                dev_register_interrupt_device_model((int)d->irqs[j], &twintrace_model_def);
+            }
+        }
+
+        //TODO: and note: break (meaning: only first device’s IRQs are registered).
+        break;
+    }
 
     g_mode = model_info->twintrace_mode;
     g_bin_path = model_info->twintrace_bin;

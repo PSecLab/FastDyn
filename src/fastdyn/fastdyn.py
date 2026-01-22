@@ -239,6 +239,13 @@ class DeviceHandler:
     args: Optional[Any] = None           # could be str/list/dict depending on your parser
     scroll: Optional[str] = None         # path to .so (your example uses this for elder)
 
+@dataclass
+class Slave:
+    device: str                         # The device ID/name
+    model: list[str]                    # MUST be a list (e.g., ["elder"])
+    params: Dict[str, Any] = field(default_factory=dict)
+    device_scroll: Optional[str] = None # The path/identifier for the slave
+
 class Device:
     def __init__(self, name, machine_obj):
         self.device_name = name
@@ -412,6 +419,33 @@ class Device:
         self.irq_range.sort()
         return True
 
+    def add_slave(self, slave_data: dict):
+            """
+            Expects a dictionary containing at least 'device' and 'model'.
+            All other keys (except 'device_scroll') are moved into 'params'.
+            """
+            if not hasattr(self, 'slaves') or self.slaves is None:
+                self.slaves = []
+
+            # 1. Extract metadata
+            device_id = slave_data.get('device')
+            models = slave_data.get('model', [])
+            scroll = slave_data.get('device_scroll')
+
+            # 2. Extract everything else into params
+            # This takes every key in the TOML entry EXCEPT the metadata ones
+            metadata_keys = {'device', 'model', 'device_scroll'}
+            params = {k: v for k, v in slave_data.items() if k not in metadata_keys}
+
+            # 3. Create and store the object
+            new_slave = Slave(
+                device=str(device_id),
+                model=list(models) if isinstance(models, list) else [models],
+                params=params,  # Now contains 'address', 'cs_id', etc.
+                device_scroll=scroll
+            )
+            self.slaves.append(new_slave)
+            return True
 
 class MemoryType(Enum):
     SRAM = "SRAM"

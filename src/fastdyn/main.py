@@ -153,7 +153,7 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
 
         if work_dir is not None:
             if not os.path.isdir(work_dir):
-                log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+                log.warning(f"The output directory: {work_dir} passed by the user does not exist.")
         else:
             work_dir = "fastdyn_work"
 
@@ -196,19 +196,19 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
             cm_dir_name="out_cm"
             )
 
-        #TODO: Refactor and clean later
-        # but we still need to check if the other requested peripherals exist or not!
-        for periph in peripheral:
-            periph_path = os.path.join(cm_path, periph)
-            if os.path.exists(periph_path):
-                continue
-            else:
-                log.error(f"Requested Peripheral {periph} does not exist!")
-                sys.exit(1)
-
         #generate the prompt - we will generate a prompt such that it covers all the peripherals requested by the user
         #TODO: Refactor and clean later
         if len(peripheral) > 1:
+            #TODO: Refactor and clean later
+            # but we still need to check if the other requested peripherals exist or not!
+            for periph in peripheral:
+                periph_path = os.path.join(cm_path, periph)
+                if os.path.exists(periph_path):
+                    continue
+                else:
+                    log.error(f"Requested Peripheral {periph} does not exist!")
+                    sys.exit(1)
+
             pg_path = pg.initial_prompt_gen_multiple_periphs(
                 analysis_dir=cm_path,
                 model_name = model_name,
@@ -219,7 +219,7 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
         else:
             pg_path = pg.initial_prompt_gen(
                 analysis_dir=cm_path,
-                peripheral=peripheral,
+                peripheral=peripheral[0],
                 out_dir=work_dir
             )
 
@@ -378,7 +378,7 @@ def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripher
             pg_path = pg.iteration_prompt_gen(
                 diff_obj=diff_obj,
                 device_model_path=dev_model,
-                peripheral=peripheral,
+                peripheral=peripheral[0],
                 out_dir=work_dir,
             )
         else:

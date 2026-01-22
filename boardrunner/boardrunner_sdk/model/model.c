@@ -1,450 +1,478 @@
-// Device Model for GPIO (STM32F103xx) - GPIOA + GPIOC
+// Device Model for I2C1 (STM32F103xx)
 //
-// Observable / interactive behavior:
-// - Exposes FIFO endpoints:
-//     /tmp/gpioc_in   : host -> model (simulate PC13 button; 0=press/low, 1=release/high)
-//     /tmp/gpioa_out  : model -> host (logs PA ODR changes; useful for LED observation)
-//     /tmp/gpioc_out  : model -> host (logs PC ODR changes)
-// - Periodic timer polls *_in FIFOs non-blocking and updates IDR accordingly.
+// Inferred Register Functions:
+//   CR1   : PE/START/STOP/ACK/SWRST control
+//   CR2   : timing/config
+//   OAR1/2: own address config
+//   DR    : address/data TX and data RX
+//   SR1   : SB/ADDR/BTF/RXNE/TXE status (polled by firmware)
+//   SR2   : MSL/BUSY/TRA status (read clears ADDR after SR1 read)
+//   CCR/TRISE: timing
 //
-// Notes:
-// - Implements STM32F1-style CRL/CRH pin decode (MODE/CNF).
-// - In input pull-up/pull-down mode (CNF=2, MODE=0), the default level follows ODR
-//   unless an external override is active (from FIFO input).
-// - For output pins, IDR reflects ODR (reasonable approximation absent external wiring).
-//
-// Build: include <device.h> and <boardrunner/vio.h> for API access.
+// Key behaviors matched to trace:
+//   - START: SR1.SB=1 (0x01)
+//   - Address byte written to DR: SR1 becomes 0x86 (ADDR|TXE|BTF)
+//   - Reading SR2 after SR1 read clears ADDR and enters TX or RX phase
+//   - TX phase: SR1 0x84 (TXE|BTF), api_i2c_send on DR writes
+//   - RX phase: SR1 0x44 (RXNE|BTF), api_i2c_recv provides DR reads
+//   - STOP in RX is DEFERRED until the staged RX byte is consumed via DR read
+//     (fixes SR2 spinning at 0x3 BUSY after single-byte receive)
 
 #include <device.h>
 #include <boardrunner/vio.h>
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <string.h>
+#include <stdio.h>
 
-#ifndef hwaddr
-typedef uint64_t hwaddr; // fallback if not provided by headers
-#endif
+#define I2C1_BASE 0x40005400u
 
-#define GPIOA_BASE 0x40010800u
-#define GPIOC_BASE 0x40011000u
+#define REG_CR1    0x00
+#define REG_CR2    0x04
+#define REG_OAR1   0x08
+#define REG_OAR2   0x0C
+#define REG_DR     0x10
+#define REG_SR1    0x14
+#define REG_SR2    0x18
+#define REG_CCR    0x1C
+#define REG_TRISE  0x20
 
-#define GPIO_CRL_OFF   0x00u
-#define GPIO_CRH_OFF   0x04u
-#define GPIO_IDR_OFF   0x08u
-#define GPIO_ODR_OFF   0x0Cu
-#define GPIO_BSRR_OFF  0x10u
-#define GPIO_BRR_OFF   0x14u
-#define GPIO_LCKR_OFF  0x18u
+// CR1 bits
+#define CR1_PE      (1u << 0)
+#define CR1_START   (1u << 8)
+#define CR1_STOP    (1u << 9)
+#define CR1_ACK     (1u << 10)
+#define CR1_SWRST   (1u << 15)
 
-#define GPIO_PORT_MAGIC 0x4750494Fu  // 'GPIO'
-#define GPIO_BANK_MAGIC 0x47424E4Bu  // 'GBNK'
+// SR1 bits (subset)
+#define SR1_SB      (1u << 0)
+#define SR1_ADDR    (1u << 1)
+#define SR1_BTF     (1u << 2)
+#define SR1_RXNE    (1u << 6)
+#define SR1_TXE     (1u << 7)
+#define SR1_AF      (1u << 10)
 
-#define GPIO_POLL_PERIOD_NS 1000000ull  // 1ms
+// SR2 bits (subset)
+#define SR2_MSL     (1u << 0)
+#define SR2_BUSY    (1u << 1)
+#define SR2_TRA     (1u << 2)
 
-typedef struct GPIOPortState {
-    uint32_t magic;
-    uint32_t base;       // absolute base
-    char     name;       // 'A' or 'C'
+typedef enum {
+    ST_IDLE = 0,
+    ST_START_SENT,
+    ST_ADDR_SENT,
+    ST_TX,
+    ST_RX,
+} i2c_state_e;
 
-    uint32_t crl;
-    uint32_t crh;
-    uint16_t idr_cached; // last computed
-    uint16_t odr;
-    uint32_t lckr;
+typedef struct {
+    // visible regs
+    uint32_t CR1, CR2, OAR1, OAR2, CCR, TRISE;
+    uint8_t  DR;
+    uint32_t SR1, SR2;
 
-    // External override (host-driven) for input pins:
-    // ext_mask bit=1 means externally driven; ext_level gives level when driven.
-    uint16_t ext_mask;
-    uint16_t ext_level;
+    // backend bus
+    I2CBus bus;
+    bool   bus_inited;
 
-    // Host I/O
-    int fifo_in_fd;
-    int fifo_out_fd;
-    char fifo_in_path[64];
-    char fifo_out_path[64];
+    // internal state
+    i2c_state_e st;
+    bool xfer_active;
+    bool is_recv;
+    uint8_t addr7;
 
-    uint64_t poll_timer;
-} GPIOPortState;
+    // ADDR clear handshake tracking
+    bool pending_addr_clear;
 
-typedef struct GPIOBank {
-    uint32_t magic;
-    GPIOPortState a;
-    GPIOPortState c;
-    bool initialized;
-} GPIOBank;
+    // RX staging
+    bool    rx_valid;
+    uint8_t rx_byte;
 
-static GPIOBank g_gpio;
+    // STOP deferral for RX
+    bool stop_pending;
+} i2c1_state_t;
 
-static void dbg_u32(const char *tag, char port, uint32_t val) {
-    char buf[128];
-    // Keep messages short but useful.
-    snprintf(buf, sizeof(buf), "[gpio%c] %s=0x%08x\n", port, tag, (unsigned)val);
-    dev_debug(buf);
+static i2c1_state_t g_i2c1;
+
+static inline uint32_t i2c_offs(hwaddr addr) {
+    uint64_t a = (uint64_t)addr;
+    if (a >= (uint64_t)I2C1_BASE) return (uint32_t)(a - (uint64_t)I2C1_BASE);
+    return (uint32_t)a;
 }
 
-static void dbg_u16(const char *tag, char port, uint16_t val) {
-    char buf[128];
-    snprintf(buf, sizeof(buf), "[gpio%c] %s=0x%04x\n", port, tag, (unsigned)val);
-    dev_debug(buf);
+static void i2c1_reset(i2c1_state_t *s) {
+    s->CR1 = 0;
+    s->CR2 = 0;
+    s->OAR1 = 0;
+    s->OAR2 = 0;
+    s->CCR = 0;
+    s->TRISE = 0x2;
+
+    s->DR = 0;
+    s->SR1 = 0;
+    s->SR2 = 0;
+
+    s->st = ST_IDLE;
+    s->xfer_active = false;
+    s->is_recv = false;
+    s->addr7 = 0;
+
+    s->pending_addr_clear = false;
+
+    s->rx_valid = false;
+    s->rx_byte = 0;
+
+    s->stop_pending = false;
 }
 
-// Decode pin config nibble for STM32F1:
-// nibble bits: [CNF1 CNF0 MODE1 MODE0]
-static inline void gpio_get_pin_cfg(const GPIOPortState *p, int pin, uint8_t *mode, uint8_t *cnf) {
-    uint32_t reg = (pin < 8) ? p->crl : p->crh;
-    int shift = (pin & 7) * 4;
-    uint8_t nib = (reg >> shift) & 0xFu;
-    *mode = (uint8_t)(nib & 0x3u);
-    *cnf  = (uint8_t)((nib >> 2) & 0x3u);
-}
-
-static inline bool gpio_is_input(uint8_t mode) {
-    return mode == 0;
-}
-
-static uint16_t gpio_compute_idr(GPIOPortState *p) {
-    uint16_t idr = 0;
-
-    for (int pin = 0; pin < 16; pin++) {
-        uint16_t bit = (uint16_t)(1u << pin);
-
-        // External override wins.
-        if (p->ext_mask & bit) {
-            if (p->ext_level & bit) idr |= bit;
-            continue;
-        }
-
-        uint8_t mode, cnf;
-        gpio_get_pin_cfg(p, pin, &mode, &cnf);
-
-        if (!gpio_is_input(mode)) {
-            // Output mode: approximate pin state as ODR.
-            if (p->odr & bit) idr |= bit;
-            continue;
-        }
-
-        // Input mode:
-        // CNF meanings in input mode:
-        // 00: analog
-        // 01: floating
-        // 10: pull-up/pull-down (selected by ODR bit)
-        // 11: reserved
-        if (cnf == 2) {
-            // Pull-up/pull-down selected by ODR bit
-            if (p->odr & bit) idr |= bit; // pull-up => 1 when not driven
-            else              idr &= (uint16_t)~bit; // pull-down => 0
-        } else {
-            // Floating/analog: default high to avoid spurious "pressed" unless driven.
-            idr |= bit;
-        }
+static void i2c1_end_transfer(i2c1_state_t *s) {
+    if (s->xfer_active) {
+        api_i2c_end_transfer(&s->bus);
     }
 
-    p->idr_cached = idr;
-    return idr;
+    s->xfer_active = false;
+    s->is_recv = false;
+    s->addr7 = 0;
+
+    s->pending_addr_clear = false;
+
+    s->rx_valid = false;
+    s->stop_pending = false;
+
+    // clear master/busy/tra and primary status bits we synthesize
+    s->SR2 &= ~(SR2_MSL | SR2_BUSY | SR2_TRA);
+    s->SR1 &= ~(SR1_SB | SR1_ADDR | SR1_RXNE | SR1_TXE | SR1_BTF | SR1_AF);
+
+    s->st = ST_IDLE;
 }
 
-static void gpio_write_out_log(GPIOPortState *p, uint16_t changed_mask) {
-    if (p->fifo_out_fd < 0) return;
+static void i2c1_issue_start(i2c1_state_t *s) {
+    // Treat repeated-start as a fresh selection at backend layer.
+    if (s->xfer_active) {
+        api_i2c_end_transfer(&s->bus);
+        s->xfer_active = false;
+    }
 
-    char msg[160];
-    int64_t t = qemu_plugin_get_virtual_timer();
-    snprintf(msg, sizeof(msg),
-             "t=%lldns gpio%c ODR=0x%04x changed=0x%04x\n",
-             (long long)t, p->name, (unsigned)p->odr, (unsigned)changed_mask);
+    s->stop_pending = false;
 
-    (void)api_fifo_write(p->fifo_out_fd, msg, (int)strlen(msg));
+    s->st = ST_START_SENT;
+
+    s->SR2 |= (SR2_MSL | SR2_BUSY);
+    s->SR1 |= SR1_SB;
+
+    s->SR1 &= ~(SR1_ADDR | SR1_RXNE | SR1_TXE | SR1_BTF | SR1_AF);
+    s->pending_addr_clear = false;
+
+    s->rx_valid = false;
 }
 
-static inline uint32_t gpio_addr_to_offset(uint32_t abs_addr, uint32_t base) {
-    return abs_addr - base;
-}
+static void i2c1_enter_data_phase(i2c1_state_t *s) {
+    // clear ADDR once SR1 then SR2 read sequence occurs
+    s->SR1 &= ~SR1_ADDR;
+    s->pending_addr_clear = false;
 
-static GPIOPortState *gpio_port_from_access(void *opaque, hwaddr addr, uint32_t *out_off) {
-    // 1) If opaque is a GPIOPortState, use it (supports per-port instantiation where addr may be offset).
-    if (opaque) {
-        GPIOPortState *ptry = (GPIOPortState *)opaque;
-        if (ptry->magic == GPIO_PORT_MAGIC && ptry->base != 0) {
-            uint32_t a = (uint32_t)addr;
-            uint32_t off = (a < 0x100u) ? a : gpio_addr_to_offset(a, ptry->base);
-            *out_off = off;
-            return ptry;
-        }
-        // 2) If opaque is a GPIOBank, use it.
-        GPIOBank *btry = (GPIOBank *)opaque;
-        if (btry->magic == GPIO_BANK_MAGIC) {
-            // fallthrough to absolute mapping below using that bank (but we use global anyway)
-        }
-    }
-
-    // 3) Default: absolute mapping against known bases (works when QEMU passes absolute addresses).
-    uint32_t a = (uint32_t)addr;
-
-    if (a >= GPIOA_BASE && a < (GPIOA_BASE + 0x20u)) {
-        *out_off = a - GPIOA_BASE;
-        return &g_gpio.a;
-    }
-    if (a >= GPIOC_BASE && a < (GPIOC_BASE + 0x20u)) {
-        *out_off = a - GPIOC_BASE;
-        return &g_gpio.c;
-    }
-
-    // 4) If it looks like an offset access but opaque wasn't a port, assume GPIOA.
-    if (a < 0x20u) {
-        *out_off = a;
-        return &g_gpio.a;
-    }
-
-    *out_off = 0;
-    return NULL;
-}
-
-// FIFO input protocol:
-// - If byte is 0x00 or 0x01: treated as "PC13 button" for GPIOC:
-//     0x00 => press  (drive PC13 low)
-//     0x01 => release(drive PC13 high)
-// - If (byte & 0x80) != 0: generic pin event for that port:
-//     pin   = byte & 0x0F
-//     level = (byte >> 4) & 1
-//     drive = (byte >> 5) & 1   (1=drive externally, 0=release to internal pull/default)
-//   Example: drive pin 13 low: 0x80 | (1<<5) | (0<<4) | 13  = 0xAD
-static void gpio_handle_input_byte(GPIOPortState *p, uint8_t b) {
-    if (p->name == 'C' && (b == 0x00u || b == 0x01u)) {
-        uint16_t bit = (uint16_t)(1u << 13);
-        p->ext_mask |= bit;
-        if (b == 0x01u) p->ext_level |= bit;   // release => high
-        else            p->ext_level &= (uint16_t)~bit; // press => low
-
-        char buf[128];
-        snprintf(buf, sizeof(buf), "[gpioC] host button PC13 -> %s\n",
-                 (b == 0x00u) ? "PRESSED (low)" : "RELEASED (high)");
-        dev_debug(buf);
+    if (!s->xfer_active) {
+        s->st = ST_IDLE;
         return;
     }
 
-    if (b & 0x80u) {
-        int pin = (int)(b & 0x0Fu);
-        int level = (int)((b >> 4) & 1u);
-        int drive = (int)((b >> 5) & 1u);
-        if (pin < 0 || pin > 15) return;
+    if (s->is_recv) {
+        s->st = ST_RX;
+        s->SR2 &= ~SR2_TRA;
 
-        uint16_t bit = (uint16_t)(1u << pin);
-        if (drive) {
-            p->ext_mask |= bit;
-            if (level) p->ext_level |= bit;
-            else       p->ext_level &= (uint16_t)~bit;
-        } else {
-            p->ext_mask &= (uint16_t)~bit; // release
+        // Prefetch 1 byte so firmware sees SR1=0x44 then reads DR
+        uint8_t b = api_i2c_recv(&s->bus);
+        s->rx_byte = b;
+        s->rx_valid = true;
+        s->DR = b;
+
+        s->SR1 |= (SR1_RXNE | SR1_BTF);
+        s->SR1 &= ~SR1_TXE;
+    } else {
+        s->st = ST_TX;
+        s->SR2 |= SR2_TRA;
+
+        s->SR1 |= (SR1_TXE | SR1_BTF);
+        s->SR1 &= ~SR1_RXNE;
+    }
+}
+
+static void i2c1_handle_address_byte(i2c1_state_t *s, uint8_t addr_byte) {
+    s->addr7 = (uint8_t)((addr_byte >> 1) & 0x7Fu);
+    s->is_recv = ((addr_byte & 0x01u) != 0);
+
+    int rc = api_i2c_start_transfer(&s->bus, s->addr7, s->is_recv);
+    if (rc != 0) {
+        // NACK from backend: set AF, stay in start state
+        s->SR1 |= SR1_AF;
+        s->xfer_active = false;
+        s->st = ST_START_SENT;
+        return;
+    }
+
+    s->xfer_active = true;
+    s->st = ST_ADDR_SENT;
+
+    // ADDR visible until SR1 then SR2 read
+    s->SR1 |= SR1_ADDR;
+
+    // Address-phase in trace reads as 0x86 (ADDR|TXE|BTF)
+    s->SR1 |= (SR1_TXE | SR1_BTF);
+    s->SR1 &= ~SR1_RXNE;
+
+    if (s->is_recv) s->SR2 &= ~SR2_TRA;
+    else s->SR2 |= SR2_TRA;
+
+    s->pending_addr_clear = false;
+}
+
+static uint16_t i2c1_sr1_dynamic(i2c1_state_t *s) {
+    uint32_t sr1 = s->SR1;
+
+    if (s->xfer_active) {
+        if (s->st == ST_RX && s->is_recv) {
+            // Ensure a byte is staged; keep SR1 at 0x44 while data pending/ready.
+            if (!s->rx_valid) {
+                uint8_t b = api_i2c_recv(&s->bus);
+                s->rx_byte = b;
+                s->rx_valid = true;
+                s->DR = b;
+            }
+            sr1 |= (SR1_RXNE | SR1_BTF);
+            sr1 &= ~SR1_TXE;
+            s->SR1 = sr1;
+        } else if (s->st == ST_TX && !s->is_recv) {
+            sr1 |= (SR1_TXE | SR1_BTF);
+            sr1 &= ~SR1_RXNE;
+            s->SR1 = sr1;
         }
-
-        char buf[160];
-        snprintf(buf, sizeof(buf),
-                 "[gpio%c] host pin%d %s %s\n",
-                 p->name, pin, drive ? "DRIVE" : "RELEASE", level ? "HIGH" : "LOW");
-        dev_debug(buf);
     }
+
+    return (uint16_t)(sr1 & 0xFFFFu);
 }
 
-static void gpio_poll_fifo_cb(void *data) {
-    GPIOPortState *p = (GPIOPortState *)data;
-    if (!p || p->magic != GPIO_PORT_MAGIC) return;
-    if (p->fifo_in_fd < 0) return;
-
-    uint8_t b;
-    // Drain all available bytes.
-    while (api_fifo_read_nonblock(p->fifo_in_fd, &b) == 1) {
-        gpio_handle_input_byte(p, b);
+static uint16_t i2c1_sr2_dynamic(i2c1_state_t *s) {
+    uint32_t sr2 = s->SR2;
+    if (s->xfer_active) {
+        sr2 |= (SR2_MSL | SR2_BUSY);
+        if (s->is_recv) sr2 &= ~SR2_TRA;
+        else sr2 |= SR2_TRA;
     }
+    return (uint16_t)(sr2 & 0xFFFFu);
 }
 
-// Device Model for GPIO
+// This function will emulation all device reads
+uint64_t i2c1_read(void *opaque, hwaddr addr, unsigned size) {
+    (void)opaque;
+    i2c1_state_t *s = &g_i2c1;
 
-// This function will emulate all device reads
-uint64_t gpio_read(void *opaque, hwaddr addr, unsigned size) {
-    uint32_t off = 0;
-    GPIOPortState *p = gpio_port_from_access(opaque, addr, &off);
-    if (!p) {
-        dev_debug("[gpio] read to unknown address\n");
-        return 0;
-    }
-
-    uint32_t val32 = 0;
+    uint32_t off = i2c_offs(addr);
+    uint32_t val = 0;
 
     switch (off) {
-    case GPIO_CRL_OFF:
-        val32 = p->crl;
-        break;
-    case GPIO_CRH_OFF:
-        val32 = p->crh;
-        break;
-    case GPIO_IDR_OFF: {
-        uint16_t idr = gpio_compute_idr(p);
-        val32 = (uint32_t)idr; // lower 16 bits
-        break;
-    }
-    case GPIO_ODR_OFF:
-        val32 = (uint32_t)p->odr;
-        break;
-    case GPIO_BSRR_OFF:
-        // Not a real readable register in many uses; return 0 for safety.
-        val32 = 0;
-        break;
-    case GPIO_BRR_OFF:
-        val32 = 0;
-        break;
-    case GPIO_LCKR_OFF:
-        val32 = p->lckr;
-        break;
-    default:
-        // For unmapped offsets, be conservative.
-        val32 = 0;
-        break;
+        case REG_CR1:   val = s->CR1; break;
+        case REG_CR2:   val = s->CR2; break;
+        case REG_OAR1:  val = s->OAR1; break;
+        case REG_OAR2:  val = s->OAR2; break;
+        case REG_CCR:   val = s->CCR; break;
+        case REG_TRISE: val = s->TRISE; break;
+
+        case REG_SR1: {
+            uint16_t sr1 = i2c1_sr1_dynamic(s);
+            val = sr1;
+
+            // Track SR1->SR2 read ordering for ADDR clear
+            if (sr1 & SR1_ADDR) {
+                s->pending_addr_clear = true;
+            }
+            break;
+        }
+
+        case REG_SR2: {
+            uint16_t sr2 = i2c1_sr2_dynamic(s);
+            val = sr2;
+
+            // SR2 read clears ADDR if SR1 was read first
+            if (s->pending_addr_clear) {
+                i2c1_enter_data_phase(s);
+            }
+            break;
+        }
+
+        case REG_DR: {
+            if (s->rx_valid) {
+                val = (uint32_t)s->rx_byte;
+                s->rx_valid = false;
+
+                // After consuming the staged byte, clear RX flags
+                s->SR1 &= ~(SR1_RXNE | SR1_BTF);
+
+                // If STOP was requested for RX, end transfer *after* the byte is consumed
+                // (fixes firmware looping on SR2 BUSY==1).
+                if (s->stop_pending) {
+                    // For the single-byte path, ACK is typically 0 when STOP is asserted.
+                    if ((s->CR1 & CR1_ACK) == 0) {
+                        i2c1_end_transfer(s);
+                    } else {
+                        // If ACK is still set, treat as multi-byte and keep going.
+                        // Stage next byte immediately so SR1 becomes 0x44 again.
+                        uint8_t b = api_i2c_recv(&s->bus);
+                        s->rx_byte = b;
+                        s->rx_valid = true;
+                        s->DR = b;
+                        s->SR1 |= (SR1_RXNE | SR1_BTF);
+                        s->SR1 &= ~SR1_TXE;
+                    }
+                } else {
+                    // Normal multi-byte receive: if ACK=1, stage next byte immediately
+                    if (s->xfer_active && s->is_recv && (s->CR1 & CR1_ACK)) {
+                        uint8_t b = api_i2c_recv(&s->bus);
+                        s->rx_byte = b;
+                        s->rx_valid = true;
+                        s->DR = b;
+                        s->SR1 |= (SR1_RXNE | SR1_BTF);
+                        s->SR1 &= ~SR1_TXE;
+                    }
+                }
+            } else {
+                val = (uint32_t)s->DR;
+            }
+            break;
+        }
+
+        default: {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "[i2c1] Unhandled READ off=0x%02x size=%u\n", off, size);
+            dev_debug(buf);
+            val = 0;
+            break;
+        }
     }
 
-    // Respect access size (best-effort).
-    if (size == 1) return (uint8_t)(val32 & 0xFFu);
-    if (size == 2) return (uint16_t)(val32 & 0xFFFFu);
-    return (uint64_t)val32;
+    if (size == 1) return (uint64_t)(val & 0xFFu);
+    if (size == 2) return (uint64_t)(val & 0xFFFFu);
+    return (uint64_t)(val & 0xFFFFu);
 }
 
 // This function will emulate all device writes
-void gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
-    uint32_t off = 0;
-    GPIOPortState *p = gpio_port_from_access(opaque, addr, &off);
-    if (!p) {
-        dev_debug("[gpio] write to unknown address\n");
-        return;
-    }
+void i2c1_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
+    (void)opaque;
+    (void)size;
+    i2c1_state_t *s = &g_i2c1;
 
-    // Mask incoming value by size
-    uint32_t v = (uint32_t)value;
-    if (size == 1) v &= 0xFFu;
-    else if (size == 2) v &= 0xFFFFu;
+    uint32_t off = i2c_offs(addr);
+    uint32_t v16 = (uint32_t)(value & 0xFFFFu);
 
     switch (off) {
-    case GPIO_CRL_OFF:
-        p->crl = v;
-        dbg_u32("CRL", p->name, p->crl);
-        break;
+        case REG_CR1: {
+            uint32_t old = s->CR1;
+            s->CR1 = (v16 & 0xFFFFu);
 
-    case GPIO_CRH_OFF:
-        p->crh = v;
-        dbg_u32("CRH", p->name, p->crh);
-        break;
+            // software reset
+            if (s->CR1 & CR1_SWRST) {
+                bool keep_bus = s->bus_inited;
+                I2CBus keep = s->bus;
+                i2c1_reset(s);
+                s->bus_inited = keep_bus;
+                s->bus = keep;
+                s->CR1 = (v16 & 0xFFFFu);
+                break;
+            }
 
-    case GPIO_ODR_OFF: {
-        uint16_t new_odr = (uint16_t)(v & 0xFFFFu);
-        uint16_t changed = (uint16_t)(p->odr ^ new_odr);
-        p->odr = new_odr;
-        if (changed) {
-            dbg_u16("ODR", p->name, p->odr);
-            gpio_write_out_log(p, changed);
+            // PE falling edge -> end transfer
+            if (!(s->CR1 & CR1_PE) && (old & CR1_PE)) {
+                i2c1_end_transfer(s);
+            }
+
+            // START rising edge
+            if ((v16 & CR1_START) && !(old & CR1_START)) {
+                i2c1_issue_start(s);
+            }
+
+            // STOP rising edge
+            if ((v16 & CR1_STOP) && !(old & CR1_STOP)) {
+                // Defer STOP during RX until DR read consumes staged byte
+                if (s->xfer_active && s->is_recv) {
+                    s->stop_pending = true;
+
+                    // Keep RX flags asserted if we already staged a byte
+                    if (s->st == ST_RX && s->rx_valid) {
+                        s->SR1 |= (SR1_RXNE | SR1_BTF);
+                        s->SR1 &= ~SR1_TXE;
+                    }
+                } else {
+                    i2c1_end_transfer(s);
+                }
+            }
+
+            // self-clearing START/STOP bits in emulation
+            s->CR1 &= ~(CR1_START | CR1_STOP);
+            break;
         }
-        break;
-    }
 
-    case GPIO_BSRR_OFF: {
-        // Lower 16 bits set, upper 16 bits reset.
-        uint16_t set_mask   = (uint16_t)(v & 0xFFFFu);
-        uint16_t reset_mask = (uint16_t)((v >> 16) & 0xFFFFu);
+        case REG_CR2:   s->CR2 = (v16 & 0xFFFFu); break;
+        case REG_OAR1:  s->OAR1 = (v16 & 0xFFFFu); break;
+        case REG_OAR2:  s->OAR2 = (v16 & 0xFFFFu); break;
+        case REG_CCR:   s->CCR = (v16 & 0xFFFFu); break;
+        case REG_TRISE: s->TRISE = (v16 & 0xFFFFu); break;
 
-        uint16_t old = p->odr;
-        uint16_t newv = (uint16_t)((old | set_mask) & (uint16_t)~reset_mask);
-        uint16_t changed = (uint16_t)(old ^ newv);
-        p->odr = newv;
+        case REG_DR: {
+            uint8_t b = (uint8_t)(value & 0xFFu);
+            s->DR = b;
 
-        // Debug: useful for observing LED patterns in trace-like style.
-        char buf[160];
-        snprintf(buf, sizeof(buf),
-                 "[gpio%c] BSRR write=0x%08x set=0x%04x reset=0x%04x ODR:0x%04x->0x%04x\n",
-                 p->name, (unsigned)v, (unsigned)set_mask, (unsigned)reset_mask,
-                 (unsigned)old, (unsigned)newv);
-        dev_debug(buf);
+            // Address byte right after START
+            if (s->st == ST_START_SENT || (s->SR1 & SR1_SB)) {
+                s->SR1 &= ~SR1_SB;
+                i2c1_handle_address_byte(s, b);
+                break;
+            }
 
-        if (changed) gpio_write_out_log(p, changed);
-        break;
-    }
+            // If firmware writes data before clearing ADDR, be forgiving
+            if ((s->SR1 & SR1_ADDR) && s->xfer_active) {
+                i2c1_enter_data_phase(s);
+            }
 
-    case GPIO_BRR_OFF: {
-        // Reset bits directly.
-        uint16_t reset_mask = (uint16_t)(v & 0xFFFFu);
-        uint16_t old = p->odr;
-        uint16_t newv = (uint16_t)(old & (uint16_t)~reset_mask);
-        uint16_t changed = (uint16_t)(old ^ newv);
-        p->odr = newv;
+            // TX data phase
+            if (s->xfer_active && !s->is_recv) {
+                s->SR1 &= ~(SR1_TXE | SR1_BTF);
 
-        char buf[140];
-        snprintf(buf, sizeof(buf),
-                 "[gpio%c] BRR write=0x%04x ODR:0x%04x->0x%04x\n",
-                 p->name, (unsigned)reset_mask, (unsigned)old, (unsigned)newv);
-        dev_debug(buf);
+                int ack = api_i2c_send(&s->bus, b);
+                if (ack != 0) s->SR1 |= SR1_AF;
+                else s->SR1 &= ~SR1_AF;
 
-        if (changed) gpio_write_out_log(p, changed);
-        break;
-    }
+                // ready for next byte: 0x84
+                s->SR1 |= (SR1_TXE | SR1_BTF);
+                s->st = ST_TX;
+            }
+            break;
+        }
 
-    case GPIO_LCKR_OFF:
-        p->lckr = v;
-        dbg_u32("LCKR", p->name, p->lckr);
-        break;
+        // allow W1C-like clearing (coarse)
+        case REG_SR1: {
+            uint32_t w = (uint32_t)(value & 0xFFFFu);
+            uint32_t clear_mask = w & 0xFF00u;
+            s->SR1 &= ~clear_mask;
+            break;
+        }
 
-    default:
-        // Unknown offset: ignore but log (helps reverse engineering).
-        dev_debug("[gpio] write to unknown offset\n");
-        break;
+        default: {
+            char buf[140];
+            snprintf(buf, sizeof(buf),
+                     "[i2c1] Unhandled WRITE off=0x%02x size=%u val=0x%llx\n",
+                     off, size, (unsigned long long)value);
+            dev_debug(buf);
+            break;
+        }
     }
 }
 
-static void gpio_port_init(GPIOPortState *p, char name, uint32_t base,
-                           const char *fifo_in, const char *fifo_out) {
-    memset(p, 0, sizeof(*p));
-    p->magic = GPIO_PORT_MAGIC;
-    p->name = name;
-    p->base = base;
+void i2c1_init(ConfigSection* model_info) {
+    memset(&g_i2c1, 0, sizeof(g_i2c1));
+    i2c1_reset(&g_i2c1);
 
-    // Reset-like defaults that match observed initial reads.
-    p->crl = 0x44444444u;
-    p->crh = 0x44444444u;
-    p->odr = 0x0000u;
-    p->lckr = 0x00000000u;
+    g_i2c1.bus = api_i2c_init_bus(model_info);
+    g_i2c1.bus_inited = true;
 
-    // Default inputs high (safe for "button not pressed").
-    p->ext_mask = 0;
-    p->ext_level = 0xFFFFu;
-
-    snprintf(p->fifo_in_path, sizeof(p->fifo_in_path), "%s", fifo_in);
-    snprintf(p->fifo_out_path, sizeof(p->fifo_out_path), "%s", fifo_out);
-
-    p->fifo_in_fd = api_fifo_open(p->fifo_in_path);
-    p->fifo_out_fd = api_fifo_open(p->fifo_out_path);
-
-    // Start periodic poll timer for interactivity.
-    p->poll_timer = qemu_plugin_timer_new_period_ns(gpio_poll_fifo_cb, p, GPIO_POLL_PERIOD_NS);
-
-    char buf[200];
-    snprintf(buf, sizeof(buf),
-             "[gpio%c] init base=0x%08x fifo_in=%s fifo_out=%s poll=%lluns\n",
-             p->name, (unsigned)p->base, p->fifo_in_path, p->fifo_out_path,
-             (unsigned long long)GPIO_POLL_PERIOD_NS);
-    dev_debug(buf);
-}
-
-void gpio_init(ConfigSection* model_info) {
-    (void)model_info;
-
-    // Guard against double init (common when models are reloaded).
-    if (g_gpio.initialized && g_gpio.magic == GPIO_BANK_MAGIC) {
-        dev_debug("[gpio] already initialized\n");
-        return;
-    }
-
-    memset(&g_gpio, 0, sizeof(g_gpio));
-    g_gpio.magic = GPIO_BANK_MAGIC;
-    g_gpio.initialized = true;
-
-    gpio_port_init(&g_gpio.a, 'A', GPIOA_BASE, "/tmp/gpioa_in", "/tmp/gpioa_out");
-    gpio_port_init(&g_gpio.c, 'C', GPIOC_BASE, "/tmp/gpioc_in", "/tmp/gpioc_out");
-
-    dev_debug("[gpio] bank init complete (GPIOA + GPIOC)\n");
+    dev_debug("[i2c1] init done\n");
 }

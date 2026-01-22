@@ -158,6 +158,12 @@ def parser(machine_name, toml_config, svd_path):
                 end=range[1]
             )
 
+        #add slaves in case of I2C and SPI
+        slaves_list = device_info.get('slaves', [])
+        for slave_entry in slaves_list:
+            # Passes the whole dict: {'device': 'BM2E80', 'address': '0x76', ...}
+            device_handler.add_slave(slave_entry)
+
         #add irqs if added by the user
         if device_info.get('irq') is not None:
             for irq in device_info.get('irq'):

@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 user_obserability_prompt = "NOTE AND REQUIREMENT: We need this model to be observable/user interactive."
 non_user_obserability_prompt = "NOTE AND REQUIREMENT: We DON'T need this model to be observable/user interactive."
+runtime_trace_request = "If you need, ask the user and user can give you complete complete runtime mmio trace for the peripheral model, it is compressed and contains all the transitions."
 
 # Define the QEMU API context
 qemu_api_list = """
@@ -540,7 +541,7 @@ A concise, one-paragraph summary of this peripheral's likely purpose and overall
 A bulleted list of the important registers mentioned in the traces and their inferred functions.
 
 ### 3. C Device Model Source Code
-The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <devmodels_apis.h> will give you access to all APIs i mentioned.
+The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs i mentioned.
 
 ```c
 // Device Model for {peripheral_name}
@@ -700,7 +701,7 @@ A concise, one-paragraph summary of this peripheral's likely purpose and overall
 A bulleted list of the important registers mentioned in the traces and their inferred functions.
 
 ### 3. C Device Model Source Code
-The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <devmodels_apis.h> will give you access to all APIs i mentioned.
+The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs i mentioned.
 
 ```c
 // Device Model for {peripheral_name}

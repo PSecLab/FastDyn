@@ -7,32 +7,33 @@ static uint64_t classic_read(void *opaque, hwaddr address, unsigned size, uint64
     (void)opaque;
 
     uint64_t value = 0;
-    switch (address)
-    {
-        case (hwaddr)0x58024804: // PWR control status register 1 (PWR_CSR1)
-        case (hwaddr)0x58024818: // PWR D3 domain control register (PWR_D3CR)
-            return 0x2000;
+    // switch (address)
+    // {
+    //     case (hwaddr)0x58024804: // PWR control status register 1 (PWR_CSR1)
+    //     case (hwaddr)0x58024818: // PWR D3 domain control register (PWR_D3CR)
+    //         return 0x2000;
 
-        case (hwaddr)0x58024400: // RCC source control register (RCC_CR)
-            value |= (1UL << 2);
-            value |= (1UL << 17);
-            value |= (1UL << 13);
-            value |= (1UL << 25);
-            value |= (1UL << 27);
-            value |= (1UL << 29);
-            return value;
+    //     case (hwaddr)0x58024400: // RCC source control register (RCC_CR)
+    //         value |= (1UL << 2);
+    //         value |= (1UL << 17);
+    //         value |= (1UL << 13);
+    //         value |= (1UL << 25);
+    //         value |= (1UL << 27);
+    //         value |= (1UL << 29);
+    //         return value;
 
-        case (hwaddr)0x58024410: // RCC clock configuration register (RCC_CFGR)
-            value |= (1UL << 3); // HSE used as system clock
-            value |= (1UL << 4);
-            return value;
+    //     case (hwaddr)0x58024410: // RCC clock configuration register (RCC_CFGR)
+    //         value |= (1UL << 3); // HSE used as system clock
+    //         value |= (1UL << 4);
+    //         return value;
 
-        case (hwaddr)0x52002000: // Flash access control register (FLASH_ACR)
-            return 0x2;
+    //     case (hwaddr)0x52002000: // Flash access control register (FLASH_ACR)
+    //         return 0x2;
 
-        default:
-            return value;
-    }
+    //     default:
+    //         return value;
+    // }
+    return value;
 }
 
 static void classic_write(void *opaque, hwaddr address, uint64_t value, unsigned size, uint64_t pc) {
