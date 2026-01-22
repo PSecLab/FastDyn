@@ -1200,11 +1200,11 @@ void parse_rules_file(const char *filename) {
             fprintf(stderr, "Max rules limit reached (%d), skipping rest\n", MAX_RULES);
             break;
         }
-
+#if ENABLE_LIBFUZZ
         if (!strcmp("anchor", cb_name)) {
             initialize_anchor(args);
         }
-
+#endif
         rules[rules_count].address = strtoull(addr_str, NULL, 0);
         rules[rules_count].func = cb;
 
