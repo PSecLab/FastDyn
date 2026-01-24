@@ -384,15 +384,15 @@ def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripher
         else:
             log.info("Both hardware log and emulation log matched!")
     else:
-        for periph in peripheral:
-            pg_path = pg.iteration_prompt_gen_multiple_periph(
-                cm_path_hardware=cm_path_hardware,
-                cm_path_emulation=cm_path_emulation,
-                model_name=model_name,
-                device_model_path=dev_model,
-                peripherals=peripheral,
-                out_dir=work_dir,
-            )
+        # for periph in peripheral:
+        pg_path = pg.iteration_prompt_gen_multiple_periph(
+            cm_path_hardware=cm_path_hardware,
+            cm_path_emulation=cm_path_emulation,
+            model_name=model_name,
+            device_model_path=dev_model,
+            peripherals=peripheral,
+            out_dir=work_dir,
+        )
 
 @cli.command(
     'fuzz',

@@ -14,6 +14,10 @@ fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 user_obserability_prompt = "NOTE AND REQUIREMENT: We need this model to be observable/user interactive."
 non_user_obserability_prompt = "NOTE AND REQUIREMENT: We DON'T need this model to be observable/user interactive."
 runtime_trace_request = "If you need, ask the user and user can give you complete complete runtime mmio trace for the peripheral model, it is compressed and contains all the transitions."
+unimp_read_write_apis = """"
+- `uint64_t my_unimp_read(void *opaque, hwaddr address, unsigned size)`: Signature for a callback that receives VM MMIO read. address is the address of the MMIO access and size is size of access.
+- `void my_unimp_write(void *opaque, hwaddr address, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
+"""
 
 # Define the QEMU API context
 qemu_api_list = """
@@ -27,8 +31,6 @@ qemu_api_list = """
 - `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
 - `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
 - `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
-- `uint64_t my_unimp_read(void *opaque, hwaddr address, unsigned size)`: Signature for a callback that receives VM MMIO read. address is the address of the MMIO access and size is size of access.
-- `void my_unimp_write(void *opaque, hwaddr address, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
 - `void dev_debug(char *str)`: Any debug messages must be logged using this function.
 - `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for the pseudo-terminal device /tmp/usart1_pty
 - `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
@@ -438,18 +440,20 @@ def iteration_prompt_gen_multiple_periph(
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
     return str(output_path)
 
-def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path):
+def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path, show_prompt=True, max_model_chars=120000):
     '''
     Based on the difference object, create a prompt telling the LLM that we see difference here and matches here..
     generate a model with these differences in mind.
     '''
     platform_name = diff_obj.platform_name
     peripheral_name = peripheral
+    device_model = ''
 
-    with open(device_model_path, 'r') as file:
-        device_model = ''
-        for line in file:
-            device_model += line
+    if show_prompt:
+        device_model = Path(device_model_path).read_text(encoding="utf-8", errors="replace")
+        if max_model_chars and len(device_model) > max_model_chars:
+            device_model = "\n--- START OF CURRENT GENERATED DEVICE MODEL ---\n" + device_model[:max_model_chars] + "\n/* ... truncated ... */\n" + "\n--- END OF CURRENT GENERATED DEVICE MODEL ---\n"
+
 
     final_prompt = f'''
 Take this prompt independent from previous prompt history.
@@ -471,6 +475,8 @@ If a required API is missing from the registry, stop and do not generate the mod
 
 If you need more info about the firmware, stop here and ask the user to give you the firmware code, dont generate the device model.
 
+{runtime_trace_request}
+
 If you believe the issue is not in the model but the device (slave) attached to it, stop and ask the user for the slave model and observe the slave model first and correct the slave model as well if it has issues, don't generate the master model!
 The slave model will just have following supporting functions and not any more registration functions which **MUST NOT** be changed
 //In case of an I2C slave
@@ -484,10 +490,6 @@ The slave model will just have following supporting functions and not any more r
 
 ## Commands:
 After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
-
---- START OF CURRENT GENERATED DEVICE MODEL ---
-{device_model}
---- END OF CURRENT GENERATED DEVICE MODEL ---
 
 --- START OF ANALYSIS DATA ---
 
