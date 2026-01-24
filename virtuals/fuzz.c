@@ -4,20 +4,14 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 
 extern int coverage;
 
-// Create the fuzzer thread and return a handle
-void *fuzz_get(uint32_t id, char *numbers);
-
-// Reads input bytes from rust, returns bytes read
-uint32_t fuzz_receive_input(void *handle, char* buf, uint32_t len);
-
-// Shut down the fuzzer and free the handle
-void fuzz_free(void *handle);
+uint32_t last_anchor_id = -1;
 
 static void vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
 {
@@ -35,7 +29,7 @@ void virt_assert(unsigned int cpu_index, void *udata)
 
     // Currently reserving 0xDEADBEEF for a crash, we should have a better systems
     // For example, all exceptions?
-    add_observed_value(0xDEADBEEF);
+    fuzz_report_assert(last_anchor_id);
 
     const char *str = (const char *)udata;
 
@@ -50,8 +44,9 @@ void virt_assert(unsigned int cpu_index, void *udata)
     qemu_set_register(addr, 15);
 }
 
-void* prev_fuzzer = NULL;
-int fuzzer_init_done = 0;
+static char g_fuzzing_buf[1024];
+static char g_fuzzing_input[1024];
+
 void anchor(unsigned int cpu_index, void *udata)
 {
     // Currently reserving 0xDEADBEEF for a crash, we should have a better systems
@@ -61,52 +56,48 @@ void anchor(unsigned int cpu_index, void *udata)
     }
     if (!udata) return;
 
-    // dump coverage, clearing coverage if fuzzer hasn't started yet
-    if (!dump_trace_info(prev_fuzzer)) { 
-        utils_die("Rust side closed PC channel");
+    // Previous anchor done now that we've reached another
+    if (last_anchor_id != -1) {
+        fuzz_finish(last_anchor_id);
     }
 
     const char *input_str = (const char *)udata;
 	//TODO: Fix this buffer thing
-    char buf[1024];
-    strncpy(buf, input_str, sizeof(buf));
-    buf[sizeof(buf) - 1] = '\0';
+    strncpy(g_fuzzing_buf, input_str, sizeof(g_fuzzing_buf) - 1);
+    g_fuzzing_buf[sizeof(g_fuzzing_buf) - 1] = '\0';
 
     // Split into filename and numbers
-    char *anchor_id = strtok(buf, ":");
+    char *anchor_id = strtok(g_fuzzing_buf, ":");
+    if (anchor_id == NULL) {
+        utils_die("Couldn't get the anchor id from string");
+    }
     char *numbers = strtok(NULL, ":");
-
-    // 2- Fuzz
-    if (!anchor_id || !numbers) {
-        fprintf(stderr, "[anchor] Invalid input format: %s\n", input_str);
-        return;
+    if (numbers == NULL) {
+        utils_die("Couldn't get the target registers/memory from string");
     }
 
-    // Reserve handle for fuzzer
-    void *hFuzzer = fuzz_get(strtoul(anchor_id, NULL, 0), numbers);
-    if (!hFuzzer) {
-        utils_die("Failed initialization, or freed before finished");
-    }
+    last_anchor_id = strtoul(anchor_id, NULL, 0);
 
-    prev_fuzzer = hFuzzer;
+    //printf("[anchor] CPU %u, id: %d\n", cpu_index, last_anchor_id);
 
-    printf("[anchor] CPU %u, id: %s\n", cpu_index, anchor_id);
-
-    uint32_t read_count = fuzz_receive_input(hFuzzer, buf, 1024) + 1; // +1 since originally was written for counting the null terminator
-    int idx = 0;
+    uint32_t read_count = fuzz_buffer_read(last_anchor_id, g_fuzzing_input, 1024);
+    memset(g_fuzzing_input + read_count, 0, ((read_count + 3) & ~3) - read_count); // zero pad up to a 4 byte aligned size
 
     // Parse each number
+    int idx = 0;
     char *token = strtok(numbers, ",");
-    while (token) {
+    while (token && read_count) {
         unsigned long value = strtoul(token, NULL, 0);
         if (value < 100) {
-            qemu_set_register(*(uint32_t*)(buf +idx), value);
+            //qemu_set_register(try_this_value++, 0);
+            uint32_t write_value = 0;
+            memcpy(&write_value, g_fuzzing_input + idx, 4);
+            qemu_set_register(write_value, value);
         } else {
-            qemu_plugin_write_memory(value, (uint8_t *)&buf[idx], 4);
+            qemu_plugin_write_memory(value, (uint8_t *)&g_fuzzing_input[idx], 4);
         }
         idx +=4;
-		if (idx >= read_count) {
-            printf("[anchor] not enough bytes\n");
+		if (idx >= read_count) { // no more bytes left, whether or not there are more fuzzing targets
             break;
 		}
         token = strtok(NULL, ",");
