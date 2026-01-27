@@ -6,7 +6,7 @@
 0x8134b5c adc_voltage *
 0x8134b64 adc_voltage *
 0x81376a8 write_channel 
-0x80cc744 init_wheel_encoder 
+0x80cc744 init_wheel_encoder 1
 0x80ccc44 copy_wheel_encoder_state_to_frontend 
 0x81199bc ins_block_read *
 0x802d8b0 compass_calibrate *
@@ -28,3 +28,4 @@
 0x80bb2b0 ap_fs_write *
 0x80bb270 ap_fs_close *
 0x8010cdc ignore_cpu_failsafe_disarm *
+0x802bd5c read_mag_when_published 

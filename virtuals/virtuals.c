@@ -113,6 +113,14 @@ cb_entry_t cb_registry[] = {
     { "ap_fs_read", ap_fs_read},
     { "ap_fs_write", ap_fs_write},
     { "ap_fs_fsync", ap_fs_fsync},
+    // copter allocate motors
+    { "copter_allocate_motors", copter_allocate_motors},
+    // arming
+    { "arming_check_enabled", arming_check_enabled},
+    // scheduler debug
+    { "scheduler_trace", scheduler_trace},
+    // debug magnetometer
+    { "read_mag_when_published", read_mag_when_published},
 #endif
 };
 
