@@ -27,9 +27,10 @@ void virt_assert(unsigned int cpu_index, void *udata)
     if (!udata)
         return;
 
+    printf("Asserted\n");
+
     // Currently reserving 0xDEADBEEF for a crash, we should have a better systems
     // For example, all exceptions?
-    fuzz_report_assert(last_anchor_id);
 
     const char *str = (const char *)udata;
 
@@ -41,7 +42,14 @@ void virt_assert(unsigned int cpu_index, void *udata)
 
     // Skip the '*' and parse the rest as hex or decimal
     uint64_t addr = strtoull(str + 1, NULL, 0);
-    qemu_set_register(addr, 15);
+    if (addr != 0) { // set pc to supplied address
+        fuzz_report_assert(last_anchor_id, false);
+        qemu_set_register(addr, 15);
+    } else { // for address == 0, perform a reset
+        fuzz_report_assert(last_anchor_id, true);
+        fuzz_finish(last_anchor_id);
+        while (true); // wait for fuzzer to exit the process
+    }
 }
 
 static char g_fuzzing_buf[1024];
@@ -55,11 +63,6 @@ void anchor(unsigned int cpu_index, void *udata)
         utils_die("Coverage not enabled, cannot assert coverage data");
     }
     if (!udata) return;
-
-    // Previous anchor done now that we've reached another
-    if (last_anchor_id != -1) {
-        fuzz_finish(last_anchor_id);
-    }
 
     const char *input_str = (const char *)udata;
 	//TODO: Fix this buffer thing
@@ -76,11 +79,22 @@ void anchor(unsigned int cpu_index, void *udata)
         utils_die("Couldn't get the target registers/memory from string");
     }
 
+    // FILE *fuzz_file = fopen("./fuzz_out/fuzzer.log", "a");
+    // if (fuzz_file == NULL) {
+    //     perror("Failed to open file");
+    //     return 1;  // exit if file cannot be opened
+    // }
+    // fprintf(fuzz_file, "[anchor] CPU %u, id: %d\n", cpu_index, last_anchor_id);
+    // fclose(fuzz_file);
+
+    // finish last anchor
+    if (last_anchor_id != -1) {
+        fuzz_finish(last_anchor_id);
+    }
+
     last_anchor_id = strtoul(anchor_id, NULL, 0);
 
-    //printf("[anchor] CPU %u, id: %d\n", cpu_index, last_anchor_id);
-
-    uint32_t read_count = fuzz_buffer_read(last_anchor_id, g_fuzzing_input, 1024);
+    uint32_t read_count = fuzz_buffer_read(last_anchor_id, g_fuzzing_input, sizeof(g_fuzzing_input));
     memset(g_fuzzing_input + read_count, 0, ((read_count + 3) & ~3) - read_count); // zero pad up to a 4 byte aligned size
 
     // Parse each number
@@ -89,11 +103,12 @@ void anchor(unsigned int cpu_index, void *udata)
     while (token && read_count) {
         unsigned long value = strtoul(token, NULL, 0);
         if (value < 100) {
-            //qemu_set_register(try_this_value++, 0);
+            //vale < 100 means its a register number to write to
             uint32_t write_value = 0;
             memcpy(&write_value, g_fuzzing_input + idx, 4);
             qemu_set_register(write_value, value);
-        } else {
+        } else if (value < 0xFFFFFFFF) {
+            //value of 0xFFFFFFFF means do nothing, less than that means write to address
             qemu_plugin_write_memory(value, (uint8_t *)&g_fuzzing_input[idx], 4);
         }
         idx +=4;
