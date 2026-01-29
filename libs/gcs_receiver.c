@@ -19,6 +19,7 @@
 #define RED   "\033[31m"
 #define RESET "\033[0m"
 
+
 static pthread_t gcs_listener_tid;
 static bool gcs_listener_running = false;
 
@@ -198,7 +199,7 @@ static void* gcs_listener(void *rb) {
                     continue;
                 }
                 // Also feed byte to MAVLink parser
-                mavlink_input_byte(buffer[i]);
+                // mavlink_input_byte(buffer[i]);
             }
         }
     }
@@ -256,7 +257,6 @@ int send_mavlink_payload(uint32_t message_id,
         return -1;
     }
     return mav_finalize_message_chan_send(send_sockfd, &gcs_addr, message_id, payload, length, crc_extra, sequence);
-
 }
 
 void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_input_t *gps) {

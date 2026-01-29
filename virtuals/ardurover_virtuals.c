@@ -1426,3 +1426,128 @@ void read_mag_when_published(unsigned int cpu_index, void *udata) {
     printf("Magnetometer published values: X=%.3f, Y=%.3f, Z=%.3f\n",
            mag_values[0], mag_values[1], mag_values[2]);
 }
+
+// static char AFL_ADDR[] = "127.0.0.1";
+// static int AFL_SEND_PORT = 13371;
+// static int AFL_RECV_PORT = 13370;
+
+// static bool first_time_fuzzing = true;
+
+// /**
+//  * @brief mavlink parser start
+//  * Essentially block until we get a new packet *
+//  * Must be called like this from virtuals.txt
+//  *
+//  * <address/symbol> parser_wait_for_fuzzed_mavlink_packet
+//  */
+// void fuzz_mavlink_parser_ready(unsigned int cpu_index, void *udata)
+// {
+//     (void)cpu_index;
+//     (void)udata;
+
+//     static int send_sock = -1;
+//     static int recv_sock = -1;
+//     static struct sockaddr_in afl_send_addr;
+//     static struct sockaddr_in afl_recv_addr;
+
+//     /* ---------------- first-time setup ---------------- */
+//     if (first_time_fuzzing) {
+//         fprintf(stderr, "[AFL] Initializing fuzzing sockets\n");
+
+//         /* Disable timer interrupts (your existing logic) */
+//         fprintf(stderr, "Disabling timer interrupts for fuzzing session\n");
+//         uint32_t nvic_icer_addr = 0xe000e180;
+//         uint32_t timer_irq_num = 66;
+//         uint32_t icers[8] = {0};
+//         qemu_plugin_read_memory(nvic_icer_addr, (uint8_t *)icers, sizeof(icers));
+//         icers[timer_irq_num / 32] |= (1U << (timer_irq_num % 32));
+//         qemu_plugin_write_memory(nvic_icer_addr, (uint8_t *)icers, sizeof(icers));
+
+//         /* Create send socket */
+//         send_sock = socket(AF_INET, SOCK_DGRAM, 0);
+//         if (send_sock < 0) {
+//             perror("socket(send)");
+//             return;
+//         }
+
+//         memset(&afl_send_addr, 0, sizeof(afl_send_addr));
+//         afl_send_addr.sin_family = AF_INET;
+//         afl_send_addr.sin_port = htons(AFL_SEND_PORT);
+//         inet_aton(AFL_ADDR, &afl_send_addr.sin_addr);
+
+//         /* Create recv socket */
+//         recv_sock = socket(AF_INET, SOCK_DGRAM, 0);
+//         if (recv_sock < 0) {
+//             perror("socket(recv)");
+//             return;
+//         }
+
+//         memset(&afl_recv_addr, 0, sizeof(afl_recv_addr));
+//         afl_recv_addr.sin_family = AF_INET;
+//         afl_recv_addr.sin_port = htons(AFL_RECV_PORT);
+//         afl_recv_addr.sin_addr.s_addr = INADDR_ANY;
+
+//         if (bind(recv_sock,
+//                  (struct sockaddr *)&afl_recv_addr,
+//                  sizeof(afl_recv_addr)) < 0) {
+//             perror("bind(recv)");
+//             return;
+//         }
+
+//         first_time_fuzzing = false;
+//     }
+
+//     /* ---------------- signal AFL we are ready ---------------- */
+//     uint8_t ready = 0xAA;
+//     ssize_t sent = sendto(
+//         send_sock,
+//         &ready,
+//         sizeof(ready),
+//         0,
+//         (struct sockaddr *)&afl_send_addr,
+//         sizeof(afl_send_addr));
+
+//     if (sent < 0) {
+//         perror("[AFL] sendto");
+//         return;
+//     }
+
+//     /* ---------------- block until fuzz input ready ---------------- */
+//     uint8_t buf[MAX_MAVLINK_PKT];
+//     ssize_t len = recvfrom(recv_sock, buf, sizeof(buf), 0, NULL, NULL);
+
+//     if (len <= 0) {
+//         perror("[AFL] recvfrom");
+//         return;
+//     }
+// }
+
+// static volatile uint32_t HARD_FAULT_ADDR = 0x08004280; // example hard fault address
+
+// /**
+//  * @brief fuzzing end
+//  * The status code is sent back to the afl harness to tell us if we crashed or not
+//  * 0 = normal exit
+//  * 1 = hard fault
+//  *
+//  * Place this at the end of the parser loop and at the hard fault handler
+//  *
+//  * Must be called like this from virtuals.txt
+//  *
+//  * <address/symbol> fuzzing_end
+//  */
+// void fuzz_mavlink_parser_end(unsigned int cpu_index, void *udata) {
+//     // mark that we are done
+//     uint32_t pc = qemu_get_register(ARM_V7M_PC);
+//     uint32_t status_code = 0;
+//     if (pc == HARD_FAULT_ADDR)
+//     {
+//         fprintf(stderr, "Fuzzing ended due to hard fault at address 0x%08X\n", pc);
+//         status_code = 1;
+//     }
+//     else
+//     {
+//         fprintf(stderr, "Fuzzing ended normally at address 0x%08X\n", pc);
+//     }
+//     // TODO: send status_code back to afl harness (port 1337)
+// }

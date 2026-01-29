@@ -18,6 +18,8 @@
 #define SYS_ID  1
 #define COMP_ID 1
 
+extern volatile bool fuzzed_packet_ready;
+
 // /**
 //  * @brief IMU data structure.
 //  */
@@ -77,6 +79,23 @@ int mav_finalize_message_chan_send(int sockfd,
                                    uint8_t length,
                                    uint8_t crc_extra,
                                    uint8_t *sequence);
+
+/**
+ * @brief Create a fuzzed MAVLink packet and send it over UDP.
+ *
+ * This function constructs a MAVLink v2 packet with potentially fuzzed payload data
+ * and sends it to the specified receiver address.
+ *
+ * @param msgid      MAVLink message ID (24-bit).
+ * @param payload    Pointer to payload data buffer.
+ * @param length     Length of payload in bytes.
+ * @param real_length Actual length of payload in bytes to be used in CRC calculation.
+ * @return 0 on success, -1 on failure.
+ */
+int create_fuzzed_mavlink_packet(uint32_t msgid,
+                                const uint8_t *payload,
+                                uint8_t length,
+                                uint8_t real_length);
 
 /**
  * @brief Start the GCS listener thread if not already running.
