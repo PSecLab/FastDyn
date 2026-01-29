@@ -10,15 +10,16 @@ use libafl::monitors::tui::TuiMonitor;
 #[cfg(not(feature = "tui"))]
 use libafl::monitors::SimpleMonitor;
 use libafl::{
-    corpus::{InMemoryCorpus, OnDiskCorpus},
+    corpus::{CachedOnDiskCorpus, Corpus, InMemoryCorpus, OnDiskCorpus},
+    Error,
     events::SimpleEventManager,
     executors::{Executor, ExitKind, WithObservers},
     feedback_and_fast,
     feedbacks::{CrashFeedback, MaxMapFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    generators::RandPrintablesGenerator,
-    inputs::{BytesInput, HasTargetBytes, Input, InputConverter},
-    mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
+    generators::{Generator, RandPrintablesGenerator},
+    inputs::{BytesInput, HasTargetBytes, Input, InputConverter, ValueInput},
+    mutators::{ByteFlipMutator, havoc_mutations::havoc_mutations, MutationResult, Mutator, numeric::{DecMutator, IncMutator}, scheduled::HavocScheduledMutator, scheduled::SingleChoiceScheduledMutator},
     observers::StdMapObserver,
     schedulers::QueueScheduler,
     stages::{mutational::StdMutationalStage, AflStatsStage, CalibrationStage},
@@ -29,6 +30,7 @@ use libafl_bolts::{
     current_nanos,
     nonzero,
     rands::StdRand,
+    serdeany::SerdeAny,
     tuples::tuple_list,
     AsSlice,
 };
@@ -118,6 +120,7 @@ where
         let buf = target.as_slice();
 
         let mut vec = buf.to_vec().into_boxed_slice();
+
         let input = Box::new(FuzzInput {
             len: vec.len(),
             data: vec.as_mut_ptr(),
@@ -127,44 +130,62 @@ where
 
         let input_ptr = Box::into_raw(input);
         
-        loop {
-            let pushed = unsafe { fuzz_buffer_write(self.fuzz_buffer, input_ptr) };
-            if pushed {
-                break;
-            }
+        unsafe { fuzz_buffer_write(self.fuzz_buffer, input_ptr); }
 
-            // Give the consumer time to read
-            std::hint::spin_loop();
+        const SPIN_ITERS: usize = 10_000;
+        let mut spins = 0;
+        while unsafe { (*self.fuzz_buffer).status.load(Ordering::Acquire) } != 0 { // wait until C empties buffer, then its done
+            if spins < SPIN_ITERS {
+                std::hint::spin_loop();
+            } else {
+                std::thread::yield_now();
+            }
+            spins = spins + 1;
         }
 
         // if fuzzing target doesn't finish quickly, move to a slower less cpu-intensive option
-        const SPIN_ITERS: usize = 1_000;
-        const YIELD_ITERS: usize = 10_000;
-        let mut spins = 0;
-        loop {
-            let finished = unsafe { fuzz_check_empty(self.fuzz_buffer) };
-            if finished {
-                break;
-            }
+        // const SPIN_ITERS: usize = 1_000;
+        // const YIELD_ITERS: usize = 10_000;
+        // let mut spins = 0;
+        // loop {
+        //     let finished = unsafe { fuzz_check_empty(self.fuzz_buffer) };
+        //     if finished {
+        //         break;
+        //     }
 
-            // Give firmware time to reach next anchor
-            if spins < SPIN_ITERS {
-                std::hint::spin_loop();
-            } else if spins < YIELD_ITERS {
-                std::thread::yield_now();
-            } else {
-                std::thread::sleep(std::time::Duration::from_micros(500));
-            }
-        }
+        //     // Give firmware time to reach next anchor
+        //     if spins < SPIN_ITERS {
+        //         std::hint::spin_loop();
+        //     } else if spins < YIELD_ITERS {
+        //         std::thread::yield_now();
+        //     } else {
+        //         std::thread::sleep(std::time::Duration::from_micros(500));
+        //     }
 
-	    // Build transitions
-		let mut crash = false;
+        //     spins = spins + 1;
+        // }
+
         unsafe {
             let value = fuzz_check_assert(self.fuzz_buffer); 
-            if value != 0 {
-                crash = true;
+            if value == 1 {
+                return Ok(ExitKind::Crash);
+            } else if value == 2 { // fatal error, exit
+                let fuzz_file = Arc::new(Mutex::new(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("./fuzz_out/fuzzer.log")
+                        .expect("Failed to open file"),
+                ));
+
+                let mut file = fuzz_file.lock().unwrap();
+                writeln!(file, "Fatal error on input {:?}", buf).unwrap();
+
+                return Err(Error::ShuttingDown);
             }
         }
+
+        return Ok(ExitKind::Ok);
 
 	    //println!("Unique nodes: {}", edges.len());
 
@@ -183,20 +204,23 @@ where
 	    //println!("Wrote trace_graph.dot");
 
 		//TODO: This graph should go in CVG.
-
-		if crash {
-			Ok(ExitKind::Crash)
-		} else {
-        	Ok(ExitKind::Ok)
-		}
     }
 }
+
+use libafl::mutators::mutations::{
+    BitFlipMutator,
+    ByteIncMutator,
+    ByteDecMutator,
+    BytesSetMutator,
+};
+
 
 pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
     let fuzz_buffer;
     unsafe {
         fuzz_buffer = fuzz_buffer_create(anchor_id);
     }
+
     // Create an observation channel using the signals map
     let observer = unsafe { StdMapObserver::new("cvg", &mut CVG) };
 
@@ -219,15 +243,30 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         MaxMapFeedback::with_name("on_crash", &observer)
     );
 
+    let corpus_path = PathBuf::from("./fuzz_out/corpus");
+    let crashes_path = PathBuf::from("./fuzz_out/crashes");
+
+    //let mut corpus = OnDiskCorpus::<BytesInput>::new(corpus_path.clone()).unwrap();
+    let mut corpus = InMemoryCorpus::new();
+    let mut crash_corpus = OnDiskCorpus::<BytesInput>::new(crashes_path.clone()).unwrap();
+
+    for entry in std::fs::read_dir(&corpus_path).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let bytes = std::fs::read(&path).unwrap();
+            corpus.add(BytesInput::new(bytes).into()).unwrap();
+        }
+    }
+
     // create a State from scratch
     let mut state = StdState::new(
         // RNG
         StdRand::with_seed(current_nanos()),
-        // Corpus that will be evolved, we keep it in memory for performance
-        InMemoryCorpus::new(),
+        // Corpus that will be evolved, we keep it on disk so we can recover from
+        corpus,
         // Corpus in which we store solutions (crashes in this example),
         // on disk so the user can get them after stopping the fuzzer
-        OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
+        crash_corpus,
         // States of the feedbacks.
         // The feedbacks can report the data that should persist in the State.
         &mut feedback,
@@ -235,6 +274,23 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         &mut objective,
     )
     .unwrap();
+
+    // let fuzz_file = Arc::new(Mutex::new(
+    //     OpenOptions::new()
+    //         .create(true)
+    //         .append(true)
+    //         .open("fuzzer.log")
+    //         .expect("Failed to open file"),
+    // ));
+
+    // let mon = SimpleMonitor::new({
+    //     let fuzz_file = fuzz_file.clone();  // clone Arc for closure
+    //     move |s| {
+    //         let mut f = fuzz_file.lock().unwrap(); // lock Mutex
+    //         writeln!(f, "{s}").unwrap();      // write string + newline
+    //     }
+    // });
+
 
     // The Monitor trait define how the fuzzer stats are displayed to the user
     #[cfg(not(feature = "tui"))]
@@ -271,20 +327,23 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
     let mut executor = WithObservers::new(executor, tuple_list!(observer));
 
     // Generator of printable bytearrays
-    let nz = NonZeroUsize::new(input_size)
-        .expect("input_size must be non-zero");
-    let mut generator = RandPrintablesGenerator::with_min_size(nz, nz);
+    // let nz = NonZeroUsize::new(input_size)
+    //     .expect("input_size must be non-zero");
+    //let mut generator = RandPrintablesGenerator::with_min_size(nz, nz);
+    // let mut generator = RandPrintablesGenerator::with_min_size(NonZeroUsize::new(4).expect(""), NonZeroUsize::new(32).expect(""));
 
-    // Generate 8 initial inputs
-    state
-        .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
-        .expect("Failed to generate the initial corpus");
+    // state // generate 8 initial inputs
+    //     .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
+    //     .expect("Failed to generate the initial corpus");
+
 
     // Setup a mutational stage with a basic bytes mutator
-    let mutator = HavocScheduledMutator::new(havoc_mutations());
+
+    let havoc_mutator = HavocScheduledMutator::new(havoc_mutations());
+
     let mut stages = tuple_list!(
         calibration_stage,
-        StdMutationalStage::new(mutator),
+        StdMutationalStage::new(havoc_mutator),
         stats_stage,
     );
 
@@ -301,7 +360,7 @@ pub extern "C" fn fuzz_init(anchor_id: u32, cstr: *const c_char) -> u32 {
 
     let input_size = (r_str.chars().filter(|&c| c == ',').count() + 1) * 4;
 
-    let thread = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         fuzzer_thread_main(anchor_id, input_size);
     });
 
