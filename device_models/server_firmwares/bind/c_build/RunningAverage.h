@@ -33,21 +33,21 @@ public:
   // bool     fillValue(const float value, const uint16_t number);
   // float    getValue(const uint16_t position);
 
-  // float    getAverage();            //  iterates over all elements.
-  // float    getFastAverage() const;  //  reuses previous calculated values.
+  float    getAverage();            //  iterates over all elements.
+  float    getFastAverage() const;  //  reuses previous calculated values.
 
   // //  return statistical characteristics of the running average
-  // float    getStandardDeviation() const;
-  // float    getStandardError() const;
-  // float    getCoefficientOfVariation() const;
+  float    getStandardDeviation() const;
+  float    getStandardError() const;
+  float    getCoefficientOfVariation() const;
 
   // //  returns min/max added to the data-set since last clear
   // float    getMin() const { return _min; };
   // float    getMax() const { return _max; };
 
   // //  returns min/max/sum from the values in the internal buffer
-  // float    getMinInBuffer() const;
-  // float    getMaxInBuffer() const;
+  float    getMinInBuffer() const;
+  float    getMaxInBuffer() const;
   // float    getSum() const { return _sum; };
 
   // //  return true if buffer is full
@@ -66,9 +66,9 @@ public:
 
   //  get some stats from the last count additions.
   float    getAverageLast(const uint32_t count);
-  // float    getStandardDeviationLast(const uint16_t count);
-  // float    getMinInBufferLast(const uint16_t count);
-  // float    getMaxInBufferLast(const uint16_t count);
+  float    getStandardDeviationLast(const uint32_t count);
+  float    getMinInBufferLast(const uint32_t count);
+  float    getMaxInBufferLast(const uint32_t count);
 
   // //       Experimental 0.4.3
   // float    getAverageSubset(const uint16_t start, const uint16_t count);
@@ -87,3 +87,4 @@ protected:
 
 
 //  -- END OF FILE --
+
