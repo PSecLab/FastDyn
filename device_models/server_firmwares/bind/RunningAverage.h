@@ -1,0 +1,89 @@
+#pragma once
+//
+//    FILE: RunningAverage.h
+//  AUTHOR: Rob Tillaart
+// VERSION: 0.4.8
+//    DATE: 2011-01-30
+// PURPOSE: Arduino library to calculate the running average by means of a circular buffer
+//     URL: https://github.com/RobTillaart/RunningAverage
+//
+//  The library stores N individual values in a circular buffer,
+//  to calculate the running average.
+
+
+// #include "Arduino.h"
+#include<stdint.h>
+#include <stdlib.h>
+#include <math.h>
+
+
+#define RUNNINGAVERAGE_LIB_VERSION    (F("0.4.8"))
+
+
+class RunningAverage
+{
+public:
+  explicit RunningAverage(const uint32_t size);
+  ~RunningAverage();
+
+  //  return false if internal buffer not allocated.
+  bool     clear();
+  // bool     add(const float value)    { return addValue(value); };
+  // bool     addValue(const float value);
+  // bool     fillValue(const float value, const uint16_t number);
+  // float    getValue(const uint16_t position);
+
+  // float    getAverage();            //  iterates over all elements.
+  // float    getFastAverage() const;  //  reuses previous calculated values.
+
+  // //  return statistical characteristics of the running average
+  // float    getStandardDeviation() const;
+  // float    getStandardError() const;
+  // float    getCoefficientOfVariation() const;
+
+  // //  returns min/max added to the data-set since last clear
+  // float    getMin() const { return _min; };
+  // float    getMax() const { return _max; };
+
+  // //  returns min/max/sum from the values in the internal buffer
+  // float    getMinInBuffer() const;
+  // float    getMaxInBuffer() const;
+  // float    getSum() const { return _sum; };
+
+  // //  return true if buffer is full
+  // bool     bufferIsFull() const { return _count == _size; };
+
+  // float    getElement(const uint16_t index) const;
+
+  // uint16_t getSize() const { return _size; }
+  // uint16_t getCount() const { return _count; }
+
+  // //  use not all elements just a part from 0..partial-1
+  // //  (re)setting partial will clear the internal buffer.
+  // bool     setPartial(const uint16_t partial = 0);  //  0 ==> use all
+  // uint16_t getPartial()   { return _partial; };
+
+
+  //  get some stats from the last count additions.
+  float    getAverageLast(const uint32_t count);
+  // float    getStandardDeviationLast(const uint16_t count);
+  // float    getMinInBufferLast(const uint16_t count);
+  // float    getMaxInBufferLast(const uint16_t count);
+
+  // //       Experimental 0.4.3
+  // float    getAverageSubset(const uint16_t start, const uint16_t count);
+
+
+protected:
+  uint32_t _size;
+  uint32_t _count;
+  uint32_t _index;
+  uint32_t _partial;
+  float    _sum;
+  float*   _array;
+  float    _min;
+  float    _max;
+};
+
+
+//  -- END OF FILE --
