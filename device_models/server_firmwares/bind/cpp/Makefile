@@ -28,7 +28,7 @@ GCCLIB             := $(TOOLCHAIN)/lib/gcc/arm-none-eabi/13.3.1/thumb/v7-m/nofp
 SYSLIB             := $(TOOLCHAIN)/arm-none-eabi/lib/thumb/v7-m/nofp
 
 # ---------------- Sources ----------------
-CPP_SOURCES := main.cpp RunningAverage.cpp
+CPP_SOURCES := main.cpp RunningAverage.cpp Adafruit_AHRS_Madgwick.cpp Adafruit_AHRS_Mahony.cpp
 C_SOURCES   := syscalls.c
 ASM_SOURCES := startup.s
 
