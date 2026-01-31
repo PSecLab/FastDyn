@@ -172,6 +172,17 @@ int get_latest_sitl_state(sitl_state_data_t *state_data);
  */
 int get_imu_batch(imu_batch_t *imu_batch);
 
+/**
+ * @brief Sets the program counter for hardfault simulation
+ *
+ * This function sets the program counter (PC) value to simulate
+ * a hardfault occurring at that address in the Gazebo simulation.
+ *
+ * @param pc The program counter address to set
+ * @return 1 on success, 0 on failure
+ */
+int set_hardfault_pc(uint32_t pc);
+
 #ifdef __cplusplus
 }
 #endif

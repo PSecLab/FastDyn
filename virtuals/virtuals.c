@@ -121,6 +121,8 @@ cb_entry_t cb_registry[] = {
     { "scheduler_trace", scheduler_trace},
     // debug magnetometer
     { "read_mag_when_published", read_mag_when_published},
+    // hardfault status
+    { "set_hardfault_status", set_hardfault_status},
 #endif
 };
 

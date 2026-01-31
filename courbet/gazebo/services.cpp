@@ -9,6 +9,7 @@
 #include <gz/msgs/empty.pb.h>
 #include <gz/msgs/pose.pb.h>
 #include <gz/msgs/pose_v.pb.h>
+#include <gz/msgs/uint32.pb.h>
 #include <boost/circular_buffer.hpp>
 #include <iostream>
 #include <mutex>
@@ -597,6 +598,42 @@ private:
   bool received_{false};
 };
 
+/**
+ * @brief Status for hardfault
+ *
+ * This structure just lets us know if we hardfaulted and stores the corresponding instruction address.
+ */
+class HFService
+{
+public:
+  HFService(gz::transport::Node &node,
+             const std::string &service_name)
+  {
+    node.Advertise("/set_hardfault_pc", &HFService::OnServiceRequest, this);
+    node.Advertise("/get_hf_status", &HFService::OnIsHardFault, this);
+  }
+private:
+  bool OnServiceRequest(const gz::msgs::UInt32 &req,
+                       gz::msgs::Empty &rep)
+  {
+    hardfault_address_ = req.data();
+    return true;
+  }
+  bool OnIsHardFault(const gz::msgs::Empty &,
+                     gz::msgs::StringMsg &rep)
+  {
+    // return format is "<bool>,<address>?"
+    std::string status = "false,0";
+    if (hardfault_address_ != 0) {
+      status = "true," + std::to_string(hardfault_address_);
+    }
+    rep.set_data(status);
+    return true;
+  }
+
+  uint64_t hardfault_address_{0};
+};
+
 
 int main(int argc, char **argv)
 {
@@ -617,6 +654,10 @@ int main(int argc, char **argv)
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
+    joint_states_topic = "NONE";
+  } else if (model_name == "iris") {
+    navsat_topic = "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/navsat_sensor/navsat";
+    mag_topic =    "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
   } else if (model_name == "bicopter") {
     navsat_topic = "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/navsat_sensor/navsat";

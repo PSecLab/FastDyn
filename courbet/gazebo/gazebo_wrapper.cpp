@@ -5,6 +5,7 @@
 #include <gz/msgs/boolean.pb.h>
 #include <gz/msgs/model.pb.h>
 #include <gz/msgs/magnetometer.pb.h>
+#include <gz/msgs/uint32.pb.h>
 #include <gz/msgs/navsat.pb.h>
 #include <cmath>
 #include <cstdio>
@@ -327,6 +328,17 @@ int get_imu_batch(imu_batch_t *imu_batch) {
 
     return 1;
 
+}
+
+int set_hardfault_pc(uint32_t pc) {
+    gz::transport::Node node;
+    gz::msgs::UInt32 request;
+    request.set_data(pc);
+
+    gz::msgs::Empty response;
+    bool result;
+    bool executed = node.Request("/set_hardfault_pc", request, 5000, response, result);
+    return 1;
 }
 
 } // extern "C"
