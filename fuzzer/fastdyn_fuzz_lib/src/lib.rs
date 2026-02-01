@@ -48,6 +48,13 @@ use std::sync::{
 use std::sync::{RwLock, Mutex, Arc};
 use std::ptr;
 use lazy_static::lazy_static;
+use std::sync::{atomic::{AtomicBool, Ordering}};
+
+static STOP_FLAG: AtomicBool = AtomicBool::new(false);
+
+lazy_static::lazy_static! {
+    static ref FUZZ_THREAD: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+}
 
 /// Coverage map with explicit assignments due to the lack of instrumentation
 static mut SIGNALS: [u8; 16] = [0; 16];
@@ -129,7 +136,7 @@ where
         Box::leak(vec);
 
         let input_ptr = Box::into_raw(input);
-        
+
         unsafe { fuzz_buffer_write(self.fuzz_buffer, input_ptr); }
 
         const SPIN_ITERS: usize = 10_000;
@@ -166,7 +173,7 @@ where
         // }
 
         unsafe {
-            let value = fuzz_check_assert(self.fuzz_buffer); 
+            let value = fuzz_check_assert(self.fuzz_buffer);
             if value == 1 {
                 return Ok(ExitKind::Crash);
             } else if value == 2 { // fatal error, exit
@@ -189,7 +196,7 @@ where
 
 	    //println!("Unique nodes: {}", edges.len());
 
-		/* DEBUG COnditional  
+		/* DEBUG COnditional
     	// Output to GraphViz DOT format
 	    let mut dot = String::from("digraph trace_graph {\n  node [shape=circle, fontsize=10];\n");
 	    for (from, targets) in &edges {
@@ -347,9 +354,19 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         stats_stage,
     );
 
-    fuzzer
-        .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
-        .expect("Error in the fuzzing loop");
+//     fuzzer
+//         .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
+//         .expect("Error in the fuzzing loop")
+    loop {
+        if STOP_FLAG.load(Ordering::SeqCst) {
+            break;
+        }
+
+        if let Err(err) = fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, &mut mgr) {
+            eprintln!("Fuzzing error: {:?}", err);
+            break;
+        }
+    }
 }
 
 #[no_mangle]
@@ -360,9 +377,24 @@ pub extern "C" fn fuzz_init(anchor_id: u32, cstr: *const c_char) -> u32 {
 
     let input_size = (r_str.chars().filter(|&c| c == ',').count() + 1) * 4;
 
-    std::thread::spawn(move || {
+    STOP_FLAG.store(false, Ordering::SeqCst);
+
+    let handle = std::thread::spawn(move || {
         fuzzer_thread_main(anchor_id, input_size);
     });
+
+    *FUZZ_THREAD.lock().unwrap() = Some(handle);
+
+    return 1;
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_stop() -> u32 {
+    STOP_FLAG.store(true, Ordering::SeqCst);
+
+    if let Some(handle) = FUZZ_THREAD.lock().unwrap().take() {
+        handle.join().unwrap();
+    }
 
     return 1;
 }
