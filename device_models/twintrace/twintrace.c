@@ -169,7 +169,7 @@ static void* dev_thread_fn(void* arg)
             int firing_line = (int)hw_read_reg(hw, 0);
             irq_pending = firing_line;
             pthread_mutex_unlock(&hw_mutex);
-            qemu_plugin_raise_irq(firing_line, false);
+            qemu_plugin_raise_irq(firing_line + 16, false);
         } else {
             pthread_mutex_unlock(&hw_mutex);
             sleep(5);

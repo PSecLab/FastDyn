@@ -163,7 +163,7 @@ class CPU:
                                             # level = DEBUG
                                             # output = stderr
                                             """
-        self.symbol_dict = None
+        self.symbol_dict = {}
 
     def add_virtual_instruction(self, vi: Union["VirtualInstruction", str, Sequence[Union["VirtualInstruction", str]]]) -> bool:
         items = vi if isinstance(vi, (list, tuple)) else [vi]

@@ -1,74 +1,222 @@
 # ==============================================================================
-#                              Memory Configuration
+# Machine (machine-wide + QEMU target options)
 # ==============================================================================
-[Memory]
-main_ram_size = "512M"
-shared_ram_size = "512K"
-ram_base_addr = "0x20000000"
-shared_ram_base_addr = "0x30000000"
-shared_mem_path = "/dev/shm"        # Directory for memory backend files
-main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
-shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
-init_nsvtor = "0x08000000"
+[Machine]
+platform = "STM32F429"
 
-# ==============================================================================
-#                                CPU Configuration
-# ==============================================================================
-[CPU]
-# --- Core Emulation & Plugin Settings ---
-arch = "arm"
-machine = "cortexm"
-cpu = "cortex-m7"
-plugin_library = "build/libfastdyn.so"
-# monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-platform = "STM32F7x9"
-binary = "/home/hammad/work/rehosting/FastDyn/boardrunner/boardrunner_examples/examples/STM32F769i-eval/LWIP/firmwares/STM32F769I_EVAL.elf"
-# binary = "/scratch/Fastdyn/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
-# --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
-enable_gdb = false
-stop_on_start = false
-launch_gdb = false
+
 monitor_port = 5555
-qmp_socket = "/tmp/qmp.sock"
-log_file = "qemu.log"
-log_options = "in_asm,op"
-semihosting = true
+qmp_socket   = "/tmp/qmp.sock"
+
+enable_gdb    = false
+stop_on_start = false
+launch_gdb    = false
+
+semihosting        = true
 semihosting_config = "enable=on,target=native"
 
-# --- Embedded CPU Behavior Configurations ---
-logger_content = """
-# --- Plugin Logger Configuration ---
-# level = DEBUG
-# output = stderr
-"""
+coverage = true
+bbl_coverage = true
+finline  = ""
 
+# ==============================================================================
+# Memory
+# ==============================================================================
+[Memory]
+
+  # ---------------------------------------------------------------------------
+  # Main memory (required)
+  #
+  # Used by:  -machine <...>,memory-backend=<id>
+  # Also maps: ram_baseaddr0 / ram_backend0
+  # ---------------------------------------------------------------------------
+  [Memory.main]
+  id           = "ram0"
+  base_address = "0x20000000"
+  memory_size  = "512M"
+  memory_type  = "SRAM"
+
+  backend     = "file"                 # file | ram | memfd
+  memory_file = "/dev/shm/my_m4_ram3"  # only when backend="file"
+
+  share    = true
+  prealloc = false
+
+
+  # ---------------------------------------------------------------------------
+  # Extra memory banks (optional)
+  #
+  # Each bank becomes:
+  #   -object memory-backend-*
+  #   -global <machine>-soc.ram_baseaddrN=<base_address>
+  #   -global <machine>-soc.ram_backendN=<id>
+  # ---------------------------------------------------------------------------
+  [[Memory.ram1]]
+  id           = "ram1"
+  index        = 1
+  base_address = "0x30000000"
+  memory_size  = "512K"
+  memory_type  = "SRAM"
+
+  backend     = "file"
+  memory_file = "/dev/shm/my_m4_ram"
+
+  share    = true
+  prealloc = false
+
+# ==============================================================================
+# CPUs
+# ==============================================================================
+[CPU]
+
+  # ---------------------------------------------------------------------------
+  # CPU 0
+  # ---------------------------------------------------------------------------
+  [[CPU.cpu0]]
+  arch    = "arm"
+  machine = "cortexm"
+  cpu     = "cortex-m7"
+
+  binary     = "//home/hammad/work/side-channel/stm32/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
+  init_nsvtor = "0x08000000"
+
+#   map_file        = "/data/Code/rehosting/FastDyn/courbet/rover_v422_map.txt"
+  plugin_library  = "build/libfastdyn.so"
+  monitor_elf     = "../ws/monitor.elf"
+
+  log_file    = "qemu.log"
+  log_options = "in_asm,op"
+
+  twintrace = "None" #options are record, replay or None
+  hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
+
+  logger_content = """
+  # --- Plugin Logger Configuration ---
+  # level  = DEBUG
+  # output = stderr
+  """
+    # 2758
+    # [[CPU.cpu0.virtuals]]
+    # at          = "0x08008ee2"
+    # instruction = "anchor"
+    # args        = ["1:0xFFFFFFFF"]
+
+    [[CPU.cpu0.virtuals]]
+    at          = "0x0800086c"
+    instruction = "anchor"
+    args        = ["1:0xFFFFFFFF"]
+
+    [[CPU.cpu0.virtuals]]
+    at          = "0x0800106a"
+    instruction = "assert"
+    args        = ["*0"]
+
+    [[CPU.cpu0.virtuals]]
+    at          = "0x0800106c"
+    instruction = "assert"
+    args        = ["*0"]
+
+    [[CPU.cpu0.virtuals]]
+    at          = "0x0800106e"
+    instruction = "assert"
+    args        = ["*0"]
+
+    [[CPU.cpu0.virtuals]]
+    at          = "0x08001070"
+    instruction = "assert"
+    args        = ["*0"]
+
+
+    [[CPU.cpu0.virtuals]] #error handler
+    at          = "0x08000dc8"
+    instruction = "assert"
+    args        = ["*0"]
+
+
+    # [[CPU.cpu0.modifiers]]
+    # at          = "0x08008efa"
+    # patch       = "r15 0x08008ee2"
+
+    # [[CPU.cpu0.modifiers]]
+    # at          = "0x08008f0e"
+    # patch       = "r15 0x08008ee2"
+
+    # [[CPU.cpu0.modifiers]]
+    # at          = "0x080091ac"
+    # patch       = "r15 0x08008ee2"
+
+    # [[CPU.cpu0.modifiers]]
+    # at          = "0x080091b6"
+    # patch       = "r15 0x08008ee2"
+
+    # [[CPU.cpu0.modifiers]]
+    # at          = "0x0800935a"
+    # patch       = "r15 0x08008ee2"
+
+    # [[CPU.cpu0.virtuals]]
+    # at          = "0x0800106a" # hard fault
+    # instruction = "assert"
+    # args        = ["*0x0"] # restart
+
+    # [[CPU.cpu0.virtuals]]
+    # at          = "0x08000cec" # led handler
+    # instruction = "assert"
+    # args        = ["*0xFFFFFFFF"]
+
+    # [[CPU.cpu0.virtuals]]
+    # at          = "0x1"
+    # instruction = "anchor"
+    # args        = ["1:0xFFFFFFFF"]
+
+    # # [[CPU.cpu0.virtuals]]
+    # # at          = "0x08001C82"
+    # # instruction = "anchor"
+    # # args        = ["1:2"] # fuzz the register it reads to rather than the memory
+
+    # # [[CPU.cpu0.modifiers]]
+    # # at          = "0x080017AA"
+    # # patch       = "*0x40020810 0x00003fc3"
+
+    # [[CPU.cpu0.modifiers]] #skip pin reading
+    # at          = "0x0800059C"
+    # patch       = "r15 0x800059E"
+
+    # [[CPU.cpu0.modifiers]] # Make it skip the read we are doing manually
+    # at          = "0x08000886"
+    # patch       = "r15 0x0800088A"
+
+    # [[CPU.cpu0.modifiers]] # Make it seem like packet is received
+    # at          = "0x08000880"
+    # patch       = "r15 0x08000882"
 
 
 # ==============================================================================
-#                              Device Configuration
+# Device model defaults (global settings per model type)
 # ==============================================================================
+[Device.Models]
 
-# --- Model-Specific Configurations ---
-# Define the global arguments for each type of plugin device model here.
+  [Device.Models.elder]
+  # (empty by default)
 
-[Device.Models.elder]
-    # The libhw backend is a global argument for the elder model.
+  [Device.Models.passthrough]
+  backend = "stlink"
 
-[Device.Models.passthrough]
-    backend = "stlink"
+  [Device.Models.classic]
+  # (empty by default)
 
-[Device.Models.classic]
+  [Device.Models.twintrace]
+  backend = "stlink"
     # The classic model has no global arguments.
 
-[Device.Models.unhandled]
-    # This model explicitly marks memory as unhandled.
+  [Device.Models.unhandled]
+  # (empty by default)
 
 #ethernet model
 [Device.ethernet]
-    irq = "0-100"
+    irq = [[0, 100]]
     # irq = "61"                                  # ETH Global Interrupt (Vector 77 = IRQ 61)
-    ranges = ["0x40028000-0x40029FFF"]          # Covers MAC, MMC, and DMA registers
+    ranges = [["0x40028000", "0x40029FFF"]]          # Covers MAC, MMC, and DMA registers
     description = "STM32F7 Ethernet MAC, MMC, and DMA (Synopsys IP)"
 
     # This string is passed to your plugin's init function
@@ -81,7 +229,7 @@ tap_interface = "tap0"
     [[Device.ethernet.handlers]]
         model   = "elder"
         enabled = true                          # Set to TRUE to use your generated .so
-        scroll = "/home/hammad/work/rehosting/FastDyn/boardrunner/boardrunner_sdk/build/model.so"  # UPDATE THIS PATH
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"  # UPDATE THIS PATH
 
     [[Device.ethernet.handlers]]
         model   = "passthrough"
@@ -90,13 +238,13 @@ tap_interface = "tap0"
 [Device.unhandled_space]
     # Existing IRQ config remains the same
     # irq = "0-15:20-25:41:53"
-    irq = "0-100"
+    irq = [[0, 100]]
 
     # THE UPDATED RANGES:
     ranges = [
-        "0x40000000-0x40027FFF",    # Range 2a: From start to just before Ethernet
-        "0x4002A000-0xE00FFFFF",    # Range 2b: From just after Ethernet -> To end of Peripherals
-        "0xE0000000-0xEFFFFFFF"     # Range 3: System space (Unchanged)
+        ["0x40000000", "0x40027FFF"],    # Range 2a: From start to just before Ethernet
+        ["0x4002A000", "0xE00FFFFF"],    # Range 2b: From just after Ethernet -> To end of Peripherals
+        ["0xE0000000", "0xEFFFFFFF"]     # Range 3: System space (Unchanged)
     ]
 
     description = "Memory regions explicitly not handled by any model (Ethernet hole created)."

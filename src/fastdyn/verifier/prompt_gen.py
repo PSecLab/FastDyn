@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 user_obserability_prompt = "NOTE AND REQUIREMENT: We need this model to be observable/user interactive."
 non_user_obserability_prompt = "NOTE AND REQUIREMENT: We DON'T need this model to be observable/user interactive."
-runtime_trace_request = "If you need, ask the user and user can give you complete complete runtime mmio trace for the peripheral model, it is compressed and contains all the transitions."
+runtime_trace_request = "If you need, ask the user and user can give you complete complete runtime mmio trace either of actual hardware or emulated run for the peripheral model, it is compressed and contains all the transitions."
 unimp_read_write_apis = """"
 - `uint64_t my_unimp_read(void *opaque, hwaddr address, unsigned size)`: Signature for a callback that receives VM MMIO read. address is the address of the MMIO access and size is size of access.
 - `void my_unimp_write(void *opaque, hwaddr address, uint64_t value, unsigned size)`: Signature for a callback that receives VM MMIO writes.
@@ -108,7 +108,7 @@ int api_tap_send(int fd, const uint8_t *buf, int len);
 int api_tap_recv_nonblock(int fd, uint8_t *buf, int max_len);
 """
 
-def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir, user_obs=''):
+def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir, runtime_trace, user_obs=''):
     fastdyn_log.info("Generating Prompt for LLM")
     global qemu_api_list
 
@@ -117,6 +117,7 @@ def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, o
         model_name=model_name,
         peripherals=peripherals,
         qemu_api_list=qemu_api_list,
+        runtime_trace = runtime_trace,
         user_obs = user_obs,
     )
 
@@ -127,7 +128,7 @@ def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, o
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
     return str(output_path)
 
-def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list, user_obs):
+def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list, runtime_trace, user_obs):
     """
     Generates a detailed prompt for an LLM based on analysis files in a directory.
     `peripherals` can be a tuple/list (Click multiple=True) or a single string.
@@ -153,61 +154,79 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     for periph in peripherals:
         peripheral_directory = os.path.join(analysis_dir, periph)
         peripheral_name = os.path.basename(peripheral_directory)
+        if not runtime_trace:
+            init_data    = read_file_content(os.path.join(peripheral_directory, "init.txt"))
+            state_data   = read_file_content(os.path.join(peripheral_directory, "state.txt"))
+            entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
 
-        init_data    = read_file_content(os.path.join(peripheral_directory, "init.txt"))
-        state_data   = read_file_content(os.path.join(peripheral_directory, "state.txt"))
-        entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
+            isr_path = os.path.join(peripheral_directory, "isr_analysis.txt")
+            isr_analysis_data = read_file_content(isr_path) if os.path.exists(isr_path) else "No ISR analysis file was found."
 
-        isr_path = os.path.join(peripheral_directory, "isr_analysis.txt")
-        isr_analysis_data = read_file_content(isr_path) if os.path.exists(isr_path) else "No ISR analysis file was found."
+            loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
+            if not loop_files:
+                loop_data = "No repeating loop patterns were detected for this peripheral."
+            else:
+                loop_chunks = []
+                for loop_file in loop_files:
+                    loop_chunks.append(
+                        f"--- Contents of {os.path.basename(loop_file)} ---\n{read_file_content(loop_file)}"
+                    )
+                loop_data = "\n\n".join(loop_chunks)
 
-        loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
-        if not loop_files:
-            loop_data = "No repeating loop patterns were detected for this peripheral."
+            block = textwrap.dedent(f"""\
+            ## Peripheral Name
+            {peripheral_name}
+
+            ## Initialization Sequence (`init.txt`)
+            This file contains all accesses that occur before the main runtime loop begins.
+            ```
+            {init_data}
+            ```
+
+            ## Detected Runtime Loops (`loop_pattern_*.txt`)
+            These files contain the most common repeating sequences of operations during runtime.
+            ```
+            {loop_data}
+            ```
+
+            ## Stateful Behavior Analysis (`state.txt`)
+            This file identifies programming patterns like Read-Modify-Write (RMW), which indicate stateful registers.
+            ```
+            {state_data}
+            ```
+
+            ## Register Entropy Analysis (`entropy.txt`)
+            This file measures the randomness of values read from registers. High entropy suggests data registers,
+            while low entropy suggests status registers.
+            ```
+            {entropy_data}
+            ```
+
+            ## ISR Analysis (`isr_analysis.txt`)
+            This file contains information about IRQs.
+            ```
+            {isr_analysis_data}
+            ```
+            """)
+            blocks.append(block)
+
         else:
-            loop_chunks = []
-            for loop_file in loop_files:
-                loop_chunks.append(
-                    f"--- Contents of {os.path.basename(loop_file)} ---\n{read_file_content(loop_file)}"
-                )
-            loop_data = "\n\n".join(loop_chunks)
+            compressed_trace = compress_trace_file(os.path.join(peripheral_directory, "runtime_full_trace.txt"))
+            if len(compressed_trace) >= 10000:
+                compressed_trace = 'Note: Following trace trimmed to 10000 chars to keep the prompt size low, ask user if you want further trace\n' + compressed_trace[0:10000]
 
-        block = textwrap.dedent(f"""\
-        ## Peripheral Name
-        {peripheral_name}
+            block = textwrap.dedent(f"""\
+            ## Peripheral Name
+            {peripheral_name}
 
-        ## Initialization Sequence (`init.txt`)
-        This file contains all accesses that occur before the main runtime loop begins.
-        ```
-        {init_data}
-        ```
+            ## Compressed Runtime Trace (`init.txt`)
+            This file contains all accesses that occur at runtime (the ones which repeat are compressed)
+            ```
+            {compressed_trace}
+            ```
+            """)
 
-        ## Detected Runtime Loops (`loop_pattern_*.txt`)
-        These files contain the most common repeating sequences of operations during runtime.
-        ```
-        {loop_data}
-        ```
-
-        ## Stateful Behavior Analysis (`state.txt`)
-        This file identifies programming patterns like Read-Modify-Write (RMW), which indicate stateful registers.
-        ```
-        {state_data}
-        ```
-
-        ## Register Entropy Analysis (`entropy.txt`)
-        This file measures the randomness of values read from registers. High entropy suggests data registers,
-        while low entropy suggests status registers.
-        ```
-        {entropy_data}
-        ```
-
-        ## ISR Analysis (`isr_analysis.txt`)
-        This file contains information about IRQs.
-        ```
-        {isr_analysis_data}
-        ```
-        """)
-        blocks.append(block)
+            blocks.append(block)
 
     prompt_start = textwrap.dedent(f"""\
     Take this prompt independent from previous prompt history.
@@ -375,6 +394,8 @@ def iteration_prompt_gen_multiple_periph(
     You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
     You have read the reference manual for {platform_name} with special familiarity with {", ".join(peripherals)}.
 
+    Make sure to generate a working (high fidelity) model, not just a mimic of trace, traces are given just to give an idea.
+    {runtime_trace_request}
     Your task is to analyze the following logs and correct the C device model for {model_name}.
 
     ## Backward-pass / Correction
@@ -778,3 +799,122 @@ def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
     return output_path
+
+import re
+
+def compress_trace(file_content):
+    """
+    Compresses trace logs by:
+    1. Removing timestamps.
+    2. Stripping variable 'pc=...' addresses for comparison (robust loop detection).
+    3. Detecting single-line repeats AND multi-line block loops.
+    """
+
+    # 1. Helper to normalize a line for comparison (Key Generation)
+    def get_comparison_key(line):
+        # Remove timestamp [ 123.456]
+        line = re.sub(r'^\[\s*[\d\.]+\]\s*', '', line)
+        # Remove pc=0x..., pc=... (ignoring case)
+        # Matches ", pc=0x123" or " pc=123" at end of line or middle
+        line = re.sub(r',?\s*pc=0x[\da-fA-F]+', '', line)
+        line = re.sub(r',?\s*pc=[\da-fA-F]+', '', line)
+        # Normalize whitespace (tabs/spaces to single space) to handle \xa0 or double spaces
+        return " ".join(line.strip().split())
+
+    # 2. Helper to clean line for display (keep PC, remove timestamp)
+    def clean_display_line(line):
+        return re.sub(r'^\[\s*[\d\.]+\]\s*', '', line).strip()
+
+    lines = [line for line in file_content.split('\n') if line.strip()]
+    if not lines:
+        return ""
+
+    # Pre-calculate keys for all lines to make comparison fast
+    # keys is a list of normalized strings (no timestamp, no PC)
+    keys = [get_comparison_key(line) for line in lines]
+    display_lines = [clean_display_line(line) for line in lines]
+
+    n = len(lines)
+    output = []
+    i = 0
+
+    while i < n:
+        best_len = 0
+        best_reps = 1
+
+        # Look ahead for the longest/best repeating pattern starting at i
+        # We limit pattern length to 50 lines to keep performance sane,
+        # but you can increase this if you have huge loops.
+        max_search_len = min(50, (n - i) // 2)
+
+        for length in range(1, max_search_len + 1):
+            # Check how many times the block of 'length' repeats
+            reps = 1
+            pattern = keys[i : i + length]
+
+            current_idx = i + length
+            while current_idx + length <= n:
+                candidate = keys[current_idx : current_idx + length]
+                if candidate == pattern:
+                    reps += 1
+                    current_idx += length
+                else:
+                    break
+
+            # Heuristic: Prefer covering more total lines (reps * length)
+            # If equal coverage, prefer smaller pattern (e.g. "A" x4 over "AA" x2)
+            if reps > 1:
+                current_span = reps * length
+                best_span = best_reps * best_len
+                if current_span > best_span:
+                    best_len = length
+                    best_reps = reps
+
+        # If a repetition was found
+        if best_reps > 1:
+            # Add the block once
+            for j in range(best_len):
+                # If it's a single line repeat, handle the (xN) format
+                if best_len == 1:
+                    output.append(f"{display_lines[i+j]} (x{best_reps})")
+                else:
+                    output.append(display_lines[i+j])
+
+            # If it was a multi-line block, add the summary line
+            if best_len > 1:
+                output.append(f"(repeated block x{best_reps})")
+
+            i += best_len * best_reps
+        else:
+            # No repetition, just add the line
+            output.append(display_lines[i])
+            i += 1
+
+    return "\n".join(output)
+
+
+def compress_trace_file(path: str, **kwargs) -> str:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return compress_trace(f.read(), **kwargs)
+
+# --- Test with your snippet ---
+if __name__ == "__main__":
+    # This input mixes timestamps, different PCs for the same logical read, and repeats
+    raw_input = """
+[  5.034448] INTERRUPT on DMA1, Vector=11 (0xB)
+[  5.034469] READ  to DMA1->ISR (0x40020000) value=0x3, pc=0x8000AC0
+[  5.035181] READ  to DMA1->CCR1 (0x40020008) value=0x25AF, pc=0x8000AC8
+[  5.035569] READ  to DMA1->CCR1 (0x40020008) value=0x25AF, pc=0x8000B3E
+[  5.036023] WRITE to DMA1->IFCR (0x40020004) value=0x2, pc=0x8000B80
+[  5.039544] INTERRUPT on DMA1, Vector=11 (0xB)
+[  5.039578] READ  to DMA1->ISR (0x40020000) value=0x3, pc=0x8000AC0
+[  5.040258] READ  to DMA1->CCR1 (0x40020008) value=0x25AF, pc=0x8000AC8
+[  5.040492] READ  to DMA1->CCR1 (0x40020008) value=0x25AF, pc=0x8000B3E
+[  5.040724] WRITE to DMA1->IFCR (0x40020004) value=0x2, pc=0x8000B80
+[  5.043327] INTERRUPT on DMA1, Vector=11 (0xB)
+[  5.043375] READ  to DMA1->ISR (0x40020000) value=0x3, pc=0x8000AC0
+[  5.044048] READ  to DMA1->CCR1 (0x40020008) value=0x25AF, pc=0x8000AC8
+[  5.044272] READ  to DMA1->CCR1 (0x40020008) value=0x25AF, pc=0x8000B3E
+[  5.044501] WRITE to DMA1->IFCR (0x40020004) value=0x2, pc=0x8000B80
+"""
+    print(compress_trace(raw_input))

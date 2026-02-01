@@ -4,9 +4,12 @@ import re
 import struct
 from pathlib import Path
 
-# Matches both:
+# Matches all:
 #   address = 0x..., size = 4 bytes, value = 0x..., pc=0x...
 #   address=0x...,  size=4 bytes,   value=0x..., pc=0x...
+#   interrupt=0x.. Status=0 (Taken)
+#   interrupt=0x.. Status=1 (Received)
+
 LINE_RE = re.compile(
     r"""
     icount=(?P<icount>\d+)

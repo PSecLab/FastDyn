@@ -214,6 +214,7 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
                 model_name = model_name,
                 peripherals=peripheral,
                 out_dir=work_dir,
+                runtime_trace = True,
                 user_obs='' #TODO: Update later
             )
         else:

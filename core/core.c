@@ -55,6 +55,7 @@ int isdigit(int c);
 #include <unistd.h>
 #include <stdatomic.h>
 
+uint32_t test_info;
 static _Atomic uint64_t g_icount = 0;
 
 static const char * runtime;
@@ -835,10 +836,9 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 // ---------------------------
 static uint32_t *g_observed_values = NULL; // Buffer for new values
 static size_t g_observed_count = 0;        // Number of values currently buffered
-static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
-static uint32_t g_prev_pc = 0;
 
 #if ENABLE_LIBFUZZ
+static uint32_t g_prev_pc = 0;
 typedef enum {
     FUZZ_EMPTY = 0, // buffer is ready for fuzzer to give an input
     FUZZ_READY = 1, // buffer is ready for anchor to read input
@@ -981,7 +981,8 @@ void initialize_anchor(char* args) {
 
     char tmp[301] = {0};
 
-    char *ignored_id = strtok(args, ":"); // consume the assigned id, we're just going to assign from 0 up and overwrite this
+    strtok(args, ":"); // consume the assigned id, we're just going to assign from 0 up and overwrite this
+
     char *numbers = strtok(NULL, ":");
     if (numbers == NULL) {
         utils_die("Failed to read anchor targets");
@@ -1013,6 +1014,7 @@ void add_observed_value(uint32_t val) {
 }
 
 #else
+static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
 
 void add_observed_value(uint32_t val) {
     if (g_observed_count >= g_observed_capacity) {

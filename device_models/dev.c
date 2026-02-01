@@ -221,9 +221,19 @@ void dev_notify_irq(int number) {
 	time_t sec;
     long usec;
     dev_get_timestamp(&sec, &usec);
-#ifdef DEV_LOGGER
-	utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
-              sec, usec, number);
+    uint64_t icount = core_get_icount();
+
+    #ifdef DEV_LOGGER
+    if (number != 15) {
+        if (twintrace_mode != TT_OFF) {
+
+        utils_log_to_file(io_logger, "[%5ld.%06ld] icount=%" PRIu64" [%s] Interrupt Taken: \t Vector = 0x%08X\n",
+                sec, usec, icount, number);
+        } else {
+        utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
+                sec, usec, number);
+        }
+    }
 #endif
 	DeviceModel* dev = irq_lut[number];
 	if (dev != NULL) {
@@ -238,9 +248,18 @@ void dev_notify_irq(int number) {
 void dev_irqret_hook(int number) {
     time_t sec;
     long usec;
+    uint64_t icount = core_get_icount();
+
     dev_get_timestamp(&sec, &usec);
-    utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
-              sec, usec, number);
+    if (number != 0xF) {
+        if (twintrace_mode != TT_OFF) {
+        utils_log_to_file(io_logger, "[%5ld.%06ld] icount=%" PRIu64" Interrupt Served: \t Vector = 0x%08X\n",
+                sec, usec, icount, number);
+        } else {
+        utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
+                sec, usec, number);
+        }
+    }
 
 	DeviceModel* dev = irq_lut[number];
 	if (dev != NULL) {
