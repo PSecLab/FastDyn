@@ -17,7 +17,7 @@ use libafl::{
     feedback_and_fast,
     feedbacks::{CrashFeedback, MaxMapFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    generators::{Generator, RandPrintablesGenerator},
+    generators::{Generator, RandPrintablesGenerator, RandBytesGenerator},
     inputs::{BytesInput, HasTargetBytes, Input, InputConverter, ValueInput},
     mutators::{ByteFlipMutator, havoc_mutations::havoc_mutations, MutationResult, Mutator, numeric::{DecMutator, IncMutator}, scheduled::HavocScheduledMutator, scheduled::SingleChoiceScheduledMutator},
     observers::StdMapObserver,
@@ -129,12 +129,20 @@ where
         Box::leak(vec);
 
         let input_ptr = Box::into_raw(input);
-        
+
         unsafe { fuzz_buffer_write(self.fuzz_buffer, input_ptr); }
 
         const SPIN_ITERS: usize = 10_000;
+        // timeout for 60 seconds using wall time
+        let start_time = std::time::Instant::now();
+        let mut timed_out = false;
         let mut spins = 0;
         while unsafe { (*self.fuzz_buffer).status.load(Ordering::Acquire) } != 0 { // wait until C empties buffer, then its done
+            if start_time.elapsed().as_secs() > 60 {
+                timed_out = true;
+                break;
+            }
+
             if spins < SPIN_ITERS {
                 std::hint::spin_loop();
             } else {
@@ -166,7 +174,21 @@ where
         // }
 
         unsafe {
-            let value = fuzz_check_assert(self.fuzz_buffer); 
+            if timed_out {
+                let fuzz_file = Arc::new(Mutex::new(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/root/rooney/FastDyn/fuzz_out/timeout.log")
+                        .expect("Failed to open file"),
+                ));
+
+                let mut file = fuzz_file.lock().unwrap();
+                writeln!(file, "Timeout on input {:?}", buf).unwrap();
+
+                return Err(Error::ShuttingDown);
+            }
+            let value = fuzz_check_assert(self.fuzz_buffer);
             if value == 1 {
                 return Ok(ExitKind::Crash);
             } else if value == 2 { // fatal error, exit
@@ -174,7 +196,7 @@ where
                     OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open("./fuzz_out/fuzzer.log")
+                        .open("/root/rooney/FastDyn/fuzz_out/fuzzer.log")
                         .expect("Failed to open file"),
                 ));
 
@@ -189,7 +211,7 @@ where
 
 	    //println!("Unique nodes: {}", edges.len());
 
-		/* DEBUG COnditional  
+		/* DEBUG COnditional
     	// Output to GraphViz DOT format
 	    let mut dot = String::from("digraph trace_graph {\n  node [shape=circle, fontsize=10];\n");
 	    for (from, targets) in &edges {
@@ -243,11 +265,11 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         MaxMapFeedback::with_name("on_crash", &observer)
     );
 
-    let corpus_path = PathBuf::from("./fuzz_out/corpus");
-    let crashes_path = PathBuf::from("./fuzz_out/crashes");
+    let corpus_path = PathBuf::from("/root/rooney/FastDyn/fuzz_out/corpus");
+    let crashes_path = PathBuf::from("/root/rooney/FastDyn/fuzz_out/crashes");
 
-    //let mut corpus = OnDiskCorpus::<BytesInput>::new(corpus_path.clone()).unwrap();
-    let mut corpus = InMemoryCorpus::new();
+    let mut corpus = OnDiskCorpus::<BytesInput>::new(corpus_path.clone()).unwrap();
+    // let mut corpus = InMemoryCorpus::new();
     let mut crash_corpus = OnDiskCorpus::<BytesInput>::new(crashes_path.clone()).unwrap();
 
     for entry in std::fs::read_dir(&corpus_path).unwrap() {
@@ -332,9 +354,14 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
     //let mut generator = RandPrintablesGenerator::with_min_size(nz, nz);
     // let mut generator = RandPrintablesGenerator::with_min_size(NonZeroUsize::new(4).expect(""), NonZeroUsize::new(32).expect(""));
 
-    // state // generate 8 initial inputs
-    //     .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
-    //     .expect("Failed to generate the initial corpus");
+    let mut generator = RandBytesGenerator::with_min_size(
+        NonZeroUsize::new(14).unwrap(),
+        NonZeroUsize::new(259).unwrap(),
+    );
+
+    state // generate 8 initial inputs
+        .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
+        .expect("Failed to generate the initial corpus");
 
 
     // Setup a mutational stage with a basic bytes mutator
