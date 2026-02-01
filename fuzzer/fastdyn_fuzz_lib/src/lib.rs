@@ -188,7 +188,7 @@ where
                 let mut file = fuzz_file.lock().unwrap();
                 writeln!(file, "Fatal error on input {:?}", buf).unwrap();
 
-                return Err(Error::ShuttingDown);
+                return Ok(ExitKind::Crash);
             }
         }
 
