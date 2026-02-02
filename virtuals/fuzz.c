@@ -81,7 +81,7 @@ void virt_assert(unsigned int cpu_index, void *udata)
         fuzz_report_assert(last_anchor_id, true);
         fuzz_finish(last_anchor_id);
         fuzz_stop();
-        while (true); // wait for fuzzer to exit the process
+        utils_die("Fuzzer requested reset");
     }
 }
 
@@ -218,7 +218,7 @@ fuzz:
         ((uint32_t)g_fuzzing_input[3] & 0xFF);
     // get crc extra from mavlink message entry
     const mavlink_msg_entry_t *mavlink_msg_entry = mavlink_get_msg_entry(msgid);
-    if (mavlink_msg_entry == NULL || msgid == 126 || msgid == 32) {
+    if (mavlink_msg_entry == NULL) {
         // fprintf(stderr, "Unknown MAVLink message ID: %u\n", msgid);
         fuzz_finish(last_anchor_id);
         goto fuzz;
@@ -229,10 +229,10 @@ fuzz:
     uint8_t sys_id = g_fuzzing_input[4];
     uint8_t comp_id = g_fuzzing_input[5];
 
-    if (msgid == 75 && sys_id == 126 && comp_id == 42) {
-        fuzz_finish(last_anchor_id);
-        goto fuzz;
-    }
+    // if (msgid == 75 && sys_id == 126 && comp_id == 42) {
+    //     fuzz_finish(last_anchor_id);
+    //     goto fuzz;
+    // }
     // payload is rest of data
     const uint8_t *payload = (const uint8_t *)&g_fuzzing_input[6];
     // real length is total - 6 bytes

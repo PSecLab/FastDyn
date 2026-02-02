@@ -17,7 +17,7 @@ use libafl::{
     feedback_and_fast,
     feedbacks::{CrashFeedback, MaxMapFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    generators::{Generator, RandPrintablesGenerator},
+    generators::{Generator, RandPrintablesGenerator, RandBytesGenerator},
     inputs::{BytesInput, HasTargetBytes, Input, InputConverter, ValueInput},
     mutators::{ByteFlipMutator, havoc_mutations::havoc_mutations, MutationResult, Mutator, numeric::{DecMutator, IncMutator}, scheduled::HavocScheduledMutator, scheduled::SingleChoiceScheduledMutator},
     observers::StdMapObserver,
@@ -43,7 +43,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::{
     mpsc::{Sender, Receiver, channel},
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicU32},
 };
 use std::sync::{RwLock, Mutex, Arc};
 use std::ptr;
@@ -140,8 +140,16 @@ where
         unsafe { fuzz_buffer_write(self.fuzz_buffer, input_ptr); }
 
         const SPIN_ITERS: usize = 10_000;
+        // timeout for 60 seconds using wall clock
+        let start_time = std::time::Instant::now();
+        let mut timed_out = false;
         let mut spins = 0;
         while unsafe { (*self.fuzz_buffer).status.load(Ordering::Acquire) } != 0 { // wait until C empties buffer, then its done
+            if start_time.elapsed().as_secs() > 60 {
+                timed_out = true;
+                break;
+            }
+
             if spins < SPIN_ITERS {
                 std::hint::spin_loop();
             } else {
@@ -173,6 +181,23 @@ where
         // }
 
         unsafe {
+            if timed_out {
+                let fuzz_file = Arc::new(Mutex::new(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/root/rooney/FastDyn/fuzz_out/timeout.log")
+                        .expect("Failed to open file"),
+                ));
+
+                let mut file = fuzz_file.lock().unwrap();
+                writeln!(file, "Timeout on input {:?}", buf).unwrap();
+
+                // set the stop flag to exit gracefully
+                STOP_FLAG.store(true, Ordering::SeqCst);
+
+                return Ok(ExitKind::Crash);
+            }
             let value = fuzz_check_assert(self.fuzz_buffer);
             if value == 1 {
                 return Ok(ExitKind::Crash);
@@ -250,8 +275,8 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         MaxMapFeedback::with_name("on_crash", &observer)
     );
 
-    let corpus_path = PathBuf::from("./fuzz_out/corpus");
-    let crashes_path = PathBuf::from("./fuzz_out/crashes");
+    let corpus_path = PathBuf::from("/root/rooney/FastDyn/fuzz_out/corpus");
+    let crashes_path = PathBuf::from("/root/rooney/FastDyn/fuzz_out/crashes");
 
     //let mut corpus = OnDiskCorpus::<BytesInput>::new(corpus_path.clone()).unwrap();
     let mut corpus = InMemoryCorpus::new();
@@ -335,13 +360,14 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
 
     // Generator of printable bytearrays
     // let nz = NonZeroUsize::new(input_size)
-    //     .expect("input_size must be non-zero");
-    //let mut generator = RandPrintablesGenerator::with_min_size(nz, nz);
-    // let mut generator = RandPrintablesGenerator::with_min_size(NonZeroUsize::new(4).expect(""), NonZeroUsize::new(32).expect(""));
+    let mut generator = RandBytesGenerator::with_min_size(
+        NonZeroUsize::new(16).unwrap(),
+        NonZeroUsize::new(262).unwrap(),
+    );
 
-    // state // generate 8 initial inputs
-    //     .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
-    //     .expect("Failed to generate the initial corpus");
+    state // generate 8 initial inputs
+        .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
+        .expect("Failed to generate the initial corpus");
 
 
     // Setup a mutational stage with a basic bytes mutator
