@@ -385,7 +385,7 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
 //         .expect("Error in the fuzzing loop")
     loop {
         if STOP_FLAG.load(Ordering::SeqCst) {
-            break;
+            panic!("Fuzzer stopping as requested");
         }
 
         if let Err(err) = fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, &mut mgr) {
@@ -423,4 +423,10 @@ pub extern "C" fn fuzz_stop() -> u32 {
     }
 
     return 1;
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_is_running() -> u32 {
+    let is_running = FUZZ_THREAD.lock().unwrap().is_some();
+    return if is_running { 1 } else { 0 };
 }
