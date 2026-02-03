@@ -814,7 +814,7 @@ private:
     return true;
   }
 
-  uint64_t hardfault_address_{0};
+  std::atomic<uint64_t> hardfault_address_{0};
 };
 
 
