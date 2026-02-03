@@ -6,6 +6,7 @@
 #include <gz/msgs/model.pb.h>
 #include <gz/msgs/magnetometer.pb.h>
 #include <gz/msgs/navsat.pb.h>
+#include <gz/msgs/uint32.pb.h>
 #include <cmath>
 #include <cstdio>
 #include "gazebo_wrapper.h"
@@ -248,6 +249,17 @@ int get_latest_sitl_state(sitl_state_data_t *state_data) {
     if (!parse_sitl_state(response.data(), *state_data)) {
         return 0;
     }
+    return 1;
+}
+
+int set_hardfault_pc(uint32_t pc) {
+    gz::transport::Node node;
+    gz::msgs::UInt32 request;
+    request.set_data(pc);
+
+    gz::msgs::Empty response;
+    bool result;
+    bool executed = node.Request("/set_hardfault_pc", request, 5000, response, result);
     return 1;
 }
 

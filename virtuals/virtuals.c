@@ -113,6 +113,8 @@ cb_entry_t cb_registry[] = {
     { "ap_fs_read", ap_fs_read},
     { "ap_fs_write", ap_fs_write},
     { "ap_fs_fsync", ap_fs_fsync},
+    // hardfault status
+    { "set_hardfault_status", set_hardfault_status},
 #endif
 };
 

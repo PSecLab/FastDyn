@@ -1,5 +1,6 @@
 project('fastdyn', 'c')
 cc = meson.get_compiler('c')
+# cpp = meson.get_compiler('cpp')
 
 # suppress MAVLink packed warnings
 add_project_arguments('-Wno-address-of-packed-member', language : 'c')
@@ -118,7 +119,6 @@ srcs += files(
 if ENABLE_LIBGZ
 srcs += files(
   'libs/gcs_receiver.c',
-
 )
 endif
 

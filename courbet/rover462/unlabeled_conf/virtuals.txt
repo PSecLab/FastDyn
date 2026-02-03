@@ -28,3 +28,4 @@
 0x80bb2b0 ap_fs_write *
 0x80bb270 ap_fs_close *
 0x8010cdc ignore_cpu_failsafe_disarm *
+0x8004280 set_hardfault_status

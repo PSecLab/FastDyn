@@ -7,6 +7,9 @@ mod phi_stage;
 mod new_input;
 mod input_generator;
 mod lambda_mutational;
+mod hardfault_observer;
+mod hardfault_objective;
+mod mission_execution;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
@@ -25,7 +28,7 @@ use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
 };
 
-use std::process::{Command, Child};
+use std::process::{Command, Child, Stdio};
 
 use scirs2_optimize::global::{ 
     BayesianOptimizationOptions,
@@ -42,6 +45,8 @@ use cpexp_state::CPExpState;
 use phi_stage::PhiStage;
 use new_input::{CPExpInput, ParamInput, EnvInput, TargetInput};
 use lambda_mutational::LambdaMutationalStage;
+
+use mission_execution::execute_misison;
 
 /// Coverage map with explicit assignments due to the lack of instrumentation
 const SIGNALS_LEN: usize = 16;
@@ -79,33 +84,72 @@ fn search_space_from_input_library(input_lib: &CPExpInput) -> Space {
 pub fn main() {
     env_logger::init();
 
+    // INPUT YOUR PATHS HERE
+    let run_services_path = "/root/fire/fuzz_testing/FastDyn/courbet/gazebo/"; // run_and_attach_services.sh
+    let qemu_build_path = "/root/fire/fuzz_testing/qemu/build"; // ../fd_rover.sh
+    let mav_c2_path = "/root/fire/fuzz_testing/FastDyn/courbet/mavlink/"; // mav_command_and_control.py
+
     let mut harness = |input: &TargetInput| {
 
         println!("Hello from harness!");
         println!("Raw Ardu parameters: {:?}", input.get_param_bytes());
         println!("Converted Ardu parameters: {:?}", TargetInput::bytes_to_f32_vec(input.get_param_bytes()));
         println!("Input environment config: {:?}", input.get_env_config());
+
         
-        // TODO: Run the simulation and apply inputs here!
-        // For now, just start ./my_ackermann
-        let ackermann_path = "/home/ere/fire/PRehost/gazebo/my_ackermann_w_state.sh";
-        let spawn_gz = Command::new(ackermann_path).spawn();
-        if spawn_gz.is_err() {
-            panic!("Error: Failed to start my_ackermann process: {}", spawn_gz.err().unwrap());
-        }
+        
+        // let ackermann_path = "/root/fire/PRehost/gazebo/my_ackermann_w_state.sh";
+        // let spawn_gz = Command::new(ackermann_path).spawn();
+        // if spawn_gz.is_err() {
+        //     panic!("Error: Failed to start my_ackermann process: {}", spawn_gz.err().unwrap());
+        // }
 
         // Right now we don't need to track the child but whateva
         // let mut gz_process = spawn_gz.unwrap();
 
-        ExitKind::Ok
+        // Start the processes
+        // let spawn_services = Command::new("./run_and_attach_services.sh")
+        //     .current_dir(run_services_path)
+        //     .arg("rover")
+        //     .stdout(Stdio::null())
+        //     .spawn();
+        // if spawn_services.is_err() {
+        //     panic!("Error: Failed to start services: {}", spawn_services.err().unwrap());
+        // }
+
+        // let spawn_c2 = Command::new("python3")
+        //     .current_dir(mav_c2_path)
+        //     .arg("mav_command_and_control.py")
+        //     .stdout(Stdio::null())
+        //     .spawn();
+        // if spawn_c2.is_err() {
+        //     panic!("Error: Failed to start mav_command_and_control.py: {}", spawn_c2.err().unwrap());
+        // }
+
+        // let spawn_fd = Command::new("bash")
+        //     .current_dir(qemu_build_path)
+        //     .arg("../fd_rover.sh")
+        //     .stdout(Stdio::null())
+        //     .spawn();
+        // if spawn_fd.is_err() {
+        //     panic!("Error: Failed to start FastDyn QEMU: {}", spawn_fd.err().unwrap());
+        // }
+
+        // TODO: Send paramater values
+        // TODO: Spawn a python process to 
+
+        // The harness is not allowed to block, so we cannot wait for the processes to die here.
+        // Instead, we will kill them in the PhysicalObserver post_exec function after trace is recorded.
+
+        // ExitKind::Ok
     };
 
     // Create an observation channel using the signals map
     let observer = unsafe { ConstMapObserver::from_mut_ptr("signals", nonnull_raw_mut!(SIGNALS)) };
 
     let physical_observer = PhysicalObserver::new(
-        0.1,               // time step
-        10.0,              // time limit
+        0.5,               // time step
+        60.0,              // time limit
         "./trace_logs",  // directory to store the trace logs
     );
 

@@ -136,23 +136,9 @@ where
         }
         self.recorder_process = None;
 
-        // Also, kill the gazebo process
-        let kill_gazebo = Command::new("pkill")
-            .args([
-                "-2",
-                "-f",
-                "my_ackermann_w_state.sh",
-            ])
-            .status()
-            .expect("Failed to execute pkill command for gazebo");
-
-        if !kill_gazebo.success() {
-            panic!("Error: pkill gazebo command failed!");
-        }
-
         // Janky ass way to ensure everything is dead before starting again
         // TODO find an elegant solution
-        sleep(Duration::from_millis(3000));
+        // sleep(Duration::from_millis(3000));
 
         // println!("All done!");
 

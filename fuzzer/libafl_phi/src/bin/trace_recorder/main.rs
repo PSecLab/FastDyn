@@ -1,6 +1,4 @@
-mod gz_state_parser;
-
-use gz_state_parser::{get_raw_gz_data, extract_block_from_gz_data, get_nested_pose};
+use baby_fuzzer::gz_state_parser::{get_raw_gz_data, get_raw_hf_status, extract_block_from_gz_data, get_nested_pose};
 
 use core::panic;
 use std::{env, io::Write};
@@ -12,15 +10,8 @@ use gz_msgs::{
     clock::Clock, imu::IMU, magnetometer::Magnetometer, navsat::NavSat, pose::Pose, pose_v::Pose_V
 };
 
-/*
-    Parses an extracted clock block string from gazebo data and returns the sim time in seconds.
-*/
-fn get_sim_time(clock_block: &str) -> f64 {
-    let clock_proto: Clock = parse_from_str::<Clock>(clock_block).unwrap();
-    let sim_sec: i64 = clock_proto.sim.sec;
-    let sim_nsec: i32 = clock_proto.sim.nsec;
-    (sim_sec as f64) + (sim_nsec as f64) * 1e-9
-}
+use std::process::Command;
+use std::thread::sleep;
 
 /*
     Writes a single line representing the state of the simulated CPS to the CSV file.
@@ -31,12 +22,17 @@ fn record_state_at_time(gz_data: &str, file: &File) -> f64 {
     // First, extract all the blocks from the raw gz data
     let clock_block: String = extract_block_from_gz_data(gz_data, "clock");
     let pose_block: String = extract_block_from_gz_data(gz_data, "pose");
+    println!("EXTRACTED POSE BLOCK: {}", pose_block);
     // let imu_block: String = extract_block_from_gz_data(gz_data, "imu");
     // let magnetometer_block: String = extract_block_from_gz_data(gz_data, "mag");
     // let navsat_block: String = extract_block_from_gz_data(gz_data, "navsat");
 
     // Parse the blocks into their respective protobuf messages
-    let pose_proto: Pose = get_nested_pose(pose_block, "vehicle");
+
+    // let pose_proto: Pose = get_nested_pose(pose_block, "pose");
+    let pose_proto: Pose_V = parse_from_str::<Pose_V>(&pose_block).unwrap();
+    let pose_proto: Pose = pose_proto.pose[0].clone();
+
     // let imu_proto: IMU = parse_from_str::<IMU>(&imu_block).unwrap();
     // let magnetometer_proto: Magnetometer = parse_from_str::<Magnetometer>(&magnetometer_block).unwrap();
     // let navsat_proto: NavSat = parse_from_str::<NavSat>(&navsat_block).unwrap();
@@ -60,6 +56,60 @@ fn record_state_at_time(gz_data: &str, file: &File) -> f64 {
     writer.flush().unwrap();
 
     sim_time
+
+}
+
+fn kill_target_processes() {
+    // Since we cannot block in the harness, we'll just have trace_recorder kill all those processes.
+    // Processes to kill:
+    // - run_and_attach_services.sh
+    // - fd_rover.sh
+    // - mav_command_and_control.py
+
+    // Kill the run_services bash script
+    Command::new("pkill")
+        .args([
+            "-9",
+            "run_and_attach",
+        ])
+        .status()
+        .expect("Failed to execute pkill command for run_and_attach");
+
+    Command::new("pkill")
+        .args([
+            "-9",
+            "ruby",
+        ])
+        .status()
+        .expect("Failed to execute pkill command for ruby");
+
+    Command::new("pkill")
+        .args([
+            "-9",
+            "services",
+        ])
+        .status()
+        .expect("Failed to execute pkill command for services");
+
+    // Kill fd_rover
+    Command::new("pkill")
+        .args([
+            "-9",
+            "qemu",
+        ])
+        .status()
+        .expect("Failed to execute pkill command for fd_rover");
+
+    // Mavproxy
+    Command::new("pkill")
+        .args([
+            "-9",
+            "mav",
+        ])
+        .status()
+        .expect("Failed to execute pkill command for mav");
+
+    println!("All target processes killed.");
 
 }
 
@@ -106,11 +156,14 @@ fn main() {
 
     // Poll until we get a valid sim time from gazebo
     let mut node: Node = Node::new().unwrap();
+    // println!("NODE CREATED");
 
     let mut current_sim_time: f64;
     loop {
 
         let gz_data: String = get_raw_gz_data(&mut node);
+
+        println!("GOT GZ DATA: {gz_data}");
 
         if gz_data.is_empty() {
             continue;
@@ -119,6 +172,8 @@ fn main() {
         let clock_block: String = extract_block_from_gz_data(&gz_data, "clock");
         let sim_time: f64 = get_sim_time(&clock_block);
         current_sim_time = sim_time;
+
+        // println!("GOT SIM TIME: {}", current_sim_time);
 
         if current_sim_time == 0.0 {
             // Still not ready to record data, keep polling!
@@ -135,9 +190,11 @@ fn main() {
         }
     }
 
+    // println!("RECORDING MAIN LOOP");
+
     // Keep recording trace data until time is up!
     while current_sim_time + time_step <= sim_time_limit { // + time_step to account for sleep delay
-        // TODO: Record data at each time step
+
         let gz_data: String = get_raw_gz_data(&mut node);
         if gz_data.is_empty() {
             panic!("Error: Failed to get gazebo data during trace recording!");
@@ -147,5 +204,21 @@ fn main() {
 
         std::thread::sleep(std::time::Duration::from_secs_f64(time_step));
     };
+
+    // Also, kill the gazebo process
+        // let kill_gazebo = Command::new("pkill")
+        //     .args([
+        //         "-2",
+        //         "-f",
+        //         "my_ackermann_w_state.sh",
+        //     ])
+        //     .status()
+        //     .expect("Failed to execute pkill command for gazebo");
+
+        // if !kill_gazebo.success() {
+        //     panic!("Error: pkill gazebo command failed!");
+        // }
+
+    kill_target_processes();
 
 }
