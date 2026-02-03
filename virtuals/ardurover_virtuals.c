@@ -207,9 +207,9 @@ void hrt_micros64(unsigned int cpu_index, void *udata) {
     uint64_t micros = nanos / 1000;
     uint32_t micros_upper_32 = (uint32_t)(micros >> 32);
     uint32_t micros_lower_32 = (uint32_t)(micros & 0xFFFFFFFF);
-    // int seconds = (int)(micros / 1000000);
+    // float seconds = (micros / 1000000);
     // printf("hrt_micros64: %llu microseconds\n", (unsigned long long)micros);
-    // printf("  (approx %d seconds)\n", seconds);
+    // printf("  (approx %f seconds)\n", seconds);
 
     qemu_set_register(micros_upper_32, ARM_V7M_R1);
     qemu_set_register(micros_lower_32, ARM_V7M_R0);
@@ -461,10 +461,23 @@ static void gps_thread_func(void *arg)
  */
 void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
 {
+    (void) cpu_index;
+    (void) udata;
+    // const char *vehicle = (const char *)udata;
+
     static bool requested_timer = false;
     // const char *msg = "Hello from GPS MAVLink!";
     uint8_t gps_type = 14; // Default to GPS_TYPE_MAVLINK
+
+
+    // if (strcmp(vehicle, "submarine") == 0)
+    // {
+    //     qemu_set_register(gps_type, ARM_V7M_R3); // GPS_TYPE_UBLOX
+    // }
+    // else
+    // {
     qemu_set_register(gps_type, ARM_V7M_R6);
+    // }
     // printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
     if (!requested_timer) {
         requested_timer = true;
@@ -978,7 +991,7 @@ void gcs_send_banner_once(unsigned int cpu_index, void *udata) {
 static RingBuffer ring_buffer;
 static bool ring_buffer_initialized = false;
 
-#define RING_BUFFER_SIZE 512
+#define RING_BUFFER_SIZE 1024
 
 /**
  * @brief Read a byte from a UART used by GCS
@@ -1007,7 +1020,10 @@ void gcs_read(unsigned int cpu_index, void *udata) {
     }
 
     if (!found) {
-        // fall through without returning
+        // return -1 for no data
+        qemu_set_register((uint32_t)(-1), ARM_V7M_R0);
+        uint32_t lr = qemu_get_register(ARM_V7M_LR);
+        qemu_set_register(lr, ARM_V7M_PC);
         return;
     }
 
@@ -1046,7 +1062,10 @@ void gcs_bytes_available(unsigned int cpu_index, void *udata) {
     }
 
     if (!found) {
-        // fall through without returning
+        // return 0 bytes available
+        qemu_set_register(0, ARM_V7M_R0);
+        uint32_t lr = qemu_get_register(ARM_V7M_LR);
+        qemu_set_register(lr, ARM_V7M_PC);
         return;
     }
 
@@ -1330,6 +1349,152 @@ void ap_fs_fsync(unsigned int cpu_index, void *udata) {
     qemu_set_register(lr, ARM_V7M_PC);
 }
 
+/**
+ * @brief Allocate motors for copter frame
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> copter_allocate_motors
+ */
+void copter_allocate_motors(unsigned int cpu_index, void *udata) {
+    // uint32_t frame_class_addr = 0x20008284; // AP_Copter::FrameClass static instance
+    // uint32_t frame_class = 11; // dual
+    uint8_t frame_class = 1; // quad
+    uint32_t copter_base = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    uint32_t g2_ref = copter_base + 0x42c8;
+    uint32_t g2_addr = 0;
+    qemu_plugin_read_memory(g2_ref, (uint8_t*)&g2_addr, sizeof(uint32_t));
+    uint32_t frame_class_addr = g2_addr + 0xaac;
+    if (0x20008284 != frame_class_addr) {
+        fprintf(stderr, "Copter frame class address mismatch: expected 0x20008284, got 0x%08X\n", frame_class_addr);
+    }
+    qemu_plugin_write_memory(0x20008284, (uint8_t*)&frame_class, sizeof(uint8_t));
+}
+
+/**
+ * @brief Set the frame type for copter
+ */
+
+// void copter_set_frame_type(unsigned int cpu_index, void *udata) {
+//     uint32_t copter_base = (uint32_t)qemu_get_register(ARM_V7M_R0);
+//     uint32_t g2
+// }
+
+/**
+ * @brief Enable arming check for RC
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> arming_check_enabled *
+ */
+void arming_check_enabled(unsigned int cpu_index, void *udata) {
+    uint32_t rc_check = (1U << 6); // bit 6
+    uint32_t check_id = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    if (rc_check == check_id) {
+        // enable RC check
+        qemu_set_register(1, ARM_V7M_R0);
+        uint32_t lr = qemu_get_register(ARM_V7M_LR);
+        qemu_set_register(lr, ARM_V7M_PC);
+    }
+}
+
+// get trace and output to file
+// trace include uint32_t time_available at r3
+// and name [r6+8]
+void scheduler_trace(unsigned int cpu_index, void *udata) {
+    uint32_t max_time_micros = (uint32_t)qemu_get_register(ARM_V7M_R3);
+    uint32_t name_ptr = 0;
+    uint32_t r6 = (uint32_t)qemu_get_register(ARM_V7M_R6);
+    qemu_plugin_read_memory(r6 + 8, (uint8_t*)&name_ptr, sizeof(uint32_t));
+    char name[17] = {0};
+    qemu_plugin_read_memory(name_ptr, (uint8_t*)name, sizeof(name) - 1);
+    // read time available at 0x2000215c
+    uint32_t time_available = 0;
+    qemu_plugin_read_memory(0x2000215c, (uint8_t*)&time_available, sizeof(uint32_t));
+    FILE *trace_file = fopen("scheduler_trace.log", "a");
+    if (trace_file) {
+        fprintf(trace_file, "Task: %s, Max Allowed: %u us, Time Available: %u \n", name, max_time_micros, time_available);
+        fclose(trace_file);
+    }
+}
+
+/**
+ * @brief Read magnetometer values when published
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> read_mag_when_published
+ */
+void read_mag_when_published(unsigned int cpu_index, void *udata) {
+    float mag_values[3] = {0.0f, 0.0f, 0.0f};
+    uint32_t mag_pointer_addr = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    qemu_plugin_read_memory(mag_pointer_addr, (uint8_t*)mag_values, sizeof(mag_values));
+    printf("Magnetometer published values: X=%.3f, Y=%.3f, Z=%.3f\n",
+           mag_values[0], mag_values[1], mag_values[2]);
+}
+
+/**
+ * @brief Set hardfault pc
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> set_hardfault_pc
+ */
+void set_hardfault_status(unsigned int cpu_index, void *udata) {
+    // we have just entered the hardfault handler
+    // use the stack pointer to find the faulting pc
+    uint32_t sp = qemu_get_register(ARM_V7M_SP);
+    uint32_t faulting_pc = 0;
+    qemu_plugin_read_memory(sp + 24, (uint8_t*)&faulting_pc, sizeof(uint32_t));
+    fprintf(stderr, "Hardfault at PC: 0x%08X\n", faulting_pc);
+    set_hardfault_pc(faulting_pc);
+}
+
+// static char g_fuzzing_buf[1024];
+// static char g_fuzzing_input[1024];
+
+/**
+ * @brief mavlink anchor for fuzzing the parser
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> disable_systick_interrupt *
+ */
+// void anchor(unsigned int cpu_index, void *udata)
+// {
+//     // Currently reserving 0xDEADBEEF for a crash, we should have a better systems
+//     // For example, all exceptions?
+//     if (!coverage) {
+//         utils_die("Coverage not enabled, cannot assert coverage data");
+//     }
+//     if (!udata) return;
+
+//     const char *input_str = (const char *)udata;
+// 	//TODO: Fix this buffer thing
+//     strncpy(g_fuzzing_buf, input_str, sizeof(g_fuzzing_buf) - 1);
+//     g_fuzzing_buf[sizeof(g_fuzzing_buf) - 1] = '\0';
+
+//     // Split into filename and numbers
+//     char *anchor_id = strtok(g_fuzzing_buf, ":");
+//     if (anchor_id == NULL) {
+//         utils_die("Couldn't get the anchor id from string");
+//     }
+//     char *numbers = strtok(NULL, ":");
+//     if (numbers == NULL) {
+//         utils_die("Couldn't get the target registers/memory from string");
+//     }
+
+//     // finish last anchor
+//     if (last_anchor_id != -1) {
+//         fuzz_finish(last_anchor_id);
+//     }
+
+//     last_anchor_id = strtoul(anchor_id, NULL, 0);
+
+//     uint32_t read_count = fuzz_buffer_read(last_anchor_id, g_fuzzing_input, sizeof(g_fuzzing_input) - strlen(http_prefix) - strlen(http_suffix));
+
+//     int return_code = create_fuzzed_mavlink_packet
+// }
 /**
  * @brief Set hardfault pc
  *

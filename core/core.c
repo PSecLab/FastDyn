@@ -818,6 +818,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 #include <stdio.h>
 #include <time.h>
 #include <pthread.h>
+#include <immintrin.h>
 
 // ---------------------------
 // Configuration / defaults
@@ -839,9 +840,9 @@ static uint32_t g_prev_pc = 0;
 
 #if ENABLE_LIBFUZZ
 typedef enum {
-    FUZZ_EMPTY, // buffer is ready for fuzzer to give an input
-    FUZZ_READY, // buffer is ready for anchor to read input
-    FUZZ_BUSY, // anchor as successfully read input
+    FUZZ_EMPTY = 0, // buffer is ready for fuzzer to give an input
+    FUZZ_READY = 1, // buffer is ready for anchor to read input
+    FUZZ_BUSY = 2, // anchor as successfully read input
 } fuzz_state_t;
 
 typedef struct fuzz_input {
@@ -852,7 +853,7 @@ typedef struct fuzz_input {
 // Designed for a system where producer and consumer are each single threaded
 typedef struct fuzz_buffer {
     _Atomic fuzz_state_t state;
-    _Atomic uint32_t assert; // 0 = input didn't reach assert, 1 = input reached assert
+    _Atomic uint32_t assert; // 0 = input didn't reach assert, 1 = assert, 2 = fatal assert
     fuzz_input_t *buffer;
 } fuzz_buffer_t;
 
@@ -918,9 +919,8 @@ int fuzz_buffer_read(uint32_t anchor_id, char* out, size_t len) {
     fuzz_buffer_t *fb = fuzz_buffers[anchor_id];
     pthread_rwlock_unlock(&anchor_lock);
 
-    fuzz_state_t state = atomic_load_explicit(&fb->state, memory_order_acquire);
-    if (state != FUZZ_READY) {
-        return 0;
+    while (atomic_load_explicit(&fb->state, memory_order_acquire) != FUZZ_READY) {
+        _mm_pause();
     }
     if (fb->buffer == NULL) {
         fprintf(stderr, "Input is ready but buffer is null\n");
@@ -961,9 +961,13 @@ uint32_t fuzz_check_assert(fuzz_buffer_t *fb) {
     return assrt;
 }
 
-void fuzz_report_assert(uint32_t anchor_id) {
+void fuzz_report_assert(uint32_t anchor_id, bool fatal) {
     pthread_rwlock_rdlock(&anchor_lock);
-    atomic_store_explicit(&fuzz_buffers[anchor_id]->assert, 1, memory_order_release);
+    if (fatal) {
+        atomic_store_explicit(&fuzz_buffers[anchor_id]->assert, 2, memory_order_release);
+    } else {
+        atomic_store_explicit(&fuzz_buffers[anchor_id]->assert, 1, memory_order_release);
+    }
     pthread_rwlock_unlock(&anchor_lock);
 }
 
