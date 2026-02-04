@@ -7,6 +7,7 @@
 #include <gz/msgs/magnetometer.pb.h>
 #include <gz/msgs/uint32.pb.h>
 #include <gz/msgs/navsat.pb.h>
+#include <gz/msgs/uint32.pb.h>
 #include <cmath>
 #include <cstdio>
 #include "gazebo_wrapper.h"

@@ -6,7 +6,7 @@ use libafl::state::HasCurrentTestcase;
 use libafl::state::HasExecutions;
 use std::{borrow::Cow, num::NonZeroUsize};
 use libafl_bolts::Named;
-use crate::cpexp_input::TargetInput;
+use crate::new_input::TargetInput;
 use crate::cpexp_state::{HasOptimizeParams, HasOptimizer, HasInputLibrary, HasLatestRobustness};
 
 pub struct PhiStage {
@@ -94,11 +94,11 @@ where
 
 impl PhiStage {
 
-    pub fn new(executions: usize) -> Self {
+    pub fn new(max_execs: usize) -> Self {
         Self {
             name: Cow::from("PhiStage"),
             current_executions: 0,
-            max_executions: executions,
+            max_executions: max_execs,
             total_executions: 0,
         }
     }

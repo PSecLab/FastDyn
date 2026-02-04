@@ -2,11 +2,11 @@
 
 qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
-LIBGZ        ?= false
-LIBHW        ?= true
+LIBGZ        ?= true
+LIBHW        ?= false
 LIBFUZZ		 ?= false
-DEV          ?= true
-DEBUG_PRINT  ?= true
+DEV          ?= false
+DEBUG_PRINT  ?= false
 LIBPY        ?= false
 
 BOARD_RUNNER ?= true

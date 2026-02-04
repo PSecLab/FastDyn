@@ -5,10 +5,13 @@
 #include <gz/transport.hh>
 #include <gz/msgs/model.pb.h>
 #include <gz/msgs/magnetometer.pb.h>
+#include <gz/msgs/imu.pb.h>
+#include <gz/msgs/clock.pb.h>
 #include <gz/msgs/navsat.pb.h>
 #include <gz/msgs/empty.pb.h>
 #include <gz/msgs/pose.pb.h>
 #include <gz/msgs/pose_v.pb.h>
+#include <gz/msgs/any.pb.h>
 #include <gz/msgs/uint32.pb.h>
 #include <boost/circular_buffer.hpp>
 #include <iostream>
@@ -855,8 +858,105 @@ private:
     return true;
   }
 
-  uint64_t hardfault_address_{0};
+  // uint64_t hardfault_address_{0};
+  std::atomic<uint64_t> hardfault_address_{0};
+
 };
+
+/**
+ * @brief Multi-sensor service that aggregates the latest readings from
+ *        clock, pose, navsat, imu, and magnetometer topics and returns
+ *        them in a single service response.
+ *
+ * This is useful if you need a snapshot of multiple sensor streams at once
+ * without making multiple service calls.
+ */
+class MultiSensorService
+{
+public:
+  MultiSensorService(gz::transport::Node &node,
+                     const std::string &clock_topic,
+                     const std::string &pose_topic,
+                     const std::string &navsat_topic,
+                     const std::string &imu_topic,
+                     const std::string &mag_topic,
+                     const std::string &service_name)
+  {
+    node.Subscribe(clock_topic, &MultiSensorService::OnClockMsg, this);
+    node.Subscribe(pose_topic, &MultiSensorService::OnPoseMsg, this);
+    node.Subscribe(navsat_topic, &MultiSensorService::OnNavSatMsg, this);
+    node.Subscribe(imu_topic, &MultiSensorService::OnImuMsg, this);
+    node.Subscribe(mag_topic, &MultiSensorService::OnMagMsg, this);
+
+    node.Advertise(service_name, &MultiSensorService::OnServiceRequest, this);
+  }
+
+private:
+  // === Topic Callbacks ===
+  void OnClockMsg(const gz::msgs::Clock &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    clock_msg_ = msg;
+  }
+
+  void OnPoseMsg(const gz::msgs::Pose_V &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pose_msg_ = msg;
+  }
+
+  void OnNavSatMsg(const gz::msgs::NavSat &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    navsat_msg_ = msg;
+  }
+
+  void OnImuMsg(const gz::msgs::IMU &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    imu_msg_ = msg;
+  }
+
+  void OnMagMsg(const gz::msgs::Magnetometer &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    mag_msg_ = msg;
+  }
+
+  // === Service Handler ===
+  bool OnServiceRequest(const gz::msgs::Empty &,
+                        gz::msgs::Any &rep)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Build a JSON-like string for compact transport in gz::msgs::Any
+    // (Alternatively, define a custom protobuf message with these fields.)
+    std::ostringstream oss;
+    oss << "{"
+        << "\"clock\": " << clock_msg_.DebugString() << ","
+        << "\"pose\": " << pose_msg_.DebugString() << ","
+        << "\"navsat\": " << navsat_msg_.DebugString() << ","
+        << "\"imu\": " << imu_msg_.DebugString() << ","
+        << "\"mag\": " << mag_msg_.DebugString()
+        << "}";
+
+    rep.set_type(gz::msgs::Any_ValueType::Any_ValueType_STRING);
+    rep.set_string_value(oss.str());
+
+    return true;
+  }
+
+  // === Latest Messages ===
+  gz::msgs::Clock clock_msg_;
+  gz::msgs::Pose_V pose_msg_;
+  gz::msgs::NavSat navsat_msg_;
+  gz::msgs::IMU imu_msg_;
+  gz::msgs::Magnetometer mag_msg_;
+
+  std::mutex mutex_;
+};
+
+
 
 
 int main(int argc, char **argv)
@@ -931,6 +1031,11 @@ int main(int argc, char **argv)
     "/get_joint_state"
   );
 
+  HFService hfService(
+    node,
+    "/get_hf_status"
+  );
+
   ServoService servoService(
     node,
     "/set_run_until_time",
@@ -938,6 +1043,21 @@ int main(int argc, char **argv)
     model_name,
     9002,
     5200
+  );
+
+  std::string pose_topic = "/model/r1_rover/pose";
+  // std::string pose_topic = "/model/gs_drone/pose";
+  std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
+  std::string clock_topic = "/world/runway/clock";
+
+  MultiSensorService multiSensorService(
+      node,
+      clock_topic,
+      pose_topic,
+      navsat_topic,
+      imu_topic,
+      mag_topic,
+      "/get_trace_state"
   );
 
   node.Advertise("/set_noise_scale", &OnSetNoiseScaleRequest);

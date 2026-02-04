@@ -3,10 +3,9 @@ mod phi_feedback;
 mod phi_objective;
 mod cpexp_state;
 mod phi_stage;
-// mod cpexp_input;
-mod new_input;
-mod input_generator;
+mod cpexp_input;
 mod lambda_mutational;
+mod mission_execution;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
@@ -25,7 +24,7 @@ use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
 };
 
-use std::process::{Command, Child};
+use std::process::{Command, Child, Stdio};
 
 use scirs2_optimize::global::{ 
     BayesianOptimizationOptions,
@@ -38,21 +37,30 @@ use scirs2_core::ndarray::Array1;
 use phi_observer::PhysicalObserver;
 use phi_feedback::PhysicalFeedback;
 use phi_objective::PhysicalObjective;
-use cpexp_state::CPExpState;
+use cpexp_state::{CPExpState, HasInputLibrary};
 use phi_stage::PhiStage;
-use new_input::{CPExpInput, ParamInput, EnvInput, TargetInput};
+use cpexp_input::{CPExpInput, ParamInput, EnvInput, TargetInput, HasParamBytes, HasEnvConfig};
 use lambda_mutational::LambdaMutationalStage;
 
-/// Coverage map with explicit assignments due to the lack of instrumentation
-const SIGNALS_LEN: usize = 16;
-static mut SIGNALS: [u8; SIGNALS_LEN] = [0; SIGNALS_LEN];
-static mut SIGNALS_PTR: *mut u8 = &raw mut SIGNALS as _;
+use mission_execution::execute_mission;
 
-/// Assign a signal to the signals map
-fn signals_set(idx: usize) {
-    unsafe { write(SIGNALS_PTR.add(idx), 1) };
-}
+use libafl::executors::{Executor, WithObservers};
+use std::marker::PhantomData;
+use libafl::state::{HasCorpus, HasExecutions};
 
+// -------------------------------
+// CONSTANT VALUES
+const MISSION_TIMEOUT: f64 = 420.0; // seconds == 7 minutes for rover_rectangle.txt
+const RECORDING_TIMESTEP: f64 = 0.5; // seconds
+const TRACE_LOG_PATH: &str = "./trace_logs";
+const ROBUSTNESS_LOG_PATH: &str = "./robustness_logs";
+const CRASH_LOG_PATH: &str = "./crashes";
+// -------------------------------
+
+/*
+    Once the CPExpInput is built, you can use this helper function to automatically
+    create a search space object for the optimizer.
+*/
 fn search_space_from_input_library(input_lib: &CPExpInput) -> Space {
 
     let mut space = Space::new();
@@ -76,37 +84,63 @@ fn search_space_from_input_library(input_lib: &CPExpInput) -> Space {
     space
 }
 
+struct FastDynExecutor<S> {
+    phantom: PhantomData<S>,
+    // fuzz_buffer: *mut FuzzBuffer,
+}
+
+impl<S> FastDynExecutor<S> {
+    // pub fn new(_state: &S, fuzz_buffer: *mut FuzzBuffer) -> Self {
+    pub fn new(_state: &S,) -> Self {
+        Self {
+            phantom: PhantomData,
+            // fuzz_buffer,
+        }
+    }
+}
+
+impl<EM, S, Z> Executor<EM, TargetInput, S, Z> for FastDynExecutor<S>
+where
+    S: HasCorpus<TargetInput> + HasExecutions + HasInputLibrary,
+    // I: TargetInput// HasParamBytes + HasEnvConfig,
+{
+    fn run_target(
+        &mut self,
+        _fuzzer: &mut Z,
+        state: &mut S,
+        _mgr: &mut EM,
+        input: &TargetInput,
+    ) -> Result<ExitKind, libafl::Error> {
+
+        let executions = state.executions_mut();
+        *executions += 1;
+
+        let mission_timeout: f64 = MISSION_TIMEOUT; // seconds
+
+        let param_info = state.input_library().get_param_input().clone();
+        let mut param_names = String::new();
+        for param in param_info.iter() {
+            param_names.push_str(&param.get_name());
+            param_names.push(',');
+        }
+
+        Ok(execute_mission(input, param_names, mission_timeout))
+    }
+}
+
 pub fn main() {
     env_logger::init();
 
-    let mut harness = |input: &TargetInput| {
-
-        println!("Hello from harness!");
-        println!("Raw Ardu parameters: {:?}", input.get_param_bytes());
-        println!("Converted Ardu parameters: {:?}", TargetInput::bytes_to_f32_vec(input.get_param_bytes()));
-        println!("Input environment config: {:?}", input.get_env_config());
-        
-        // TODO: Run the simulation and apply inputs here!
-        // For now, just start ./my_ackermann
-        let ackermann_path = "/home/ere/fire/PRehost/gazebo/my_ackermann_w_state.sh";
-        let spawn_gz = Command::new(ackermann_path).spawn();
-        if spawn_gz.is_err() {
-            panic!("Error: Failed to start my_ackermann process: {}", spawn_gz.err().unwrap());
-        }
-
-        // Right now we don't need to track the child but whateva
-        // let mut gz_process = spawn_gz.unwrap();
-
-        ExitKind::Ok
-    };
-
-    // Create an observation channel using the signals map
-    let observer = unsafe { ConstMapObserver::from_mut_ptr("signals", nonnull_raw_mut!(SIGNALS)) };
+    // INPUT YOUR PATHS HERE
+    let run_services_path = "/root/fire/fuzz_testing/FastDyn/courbet/gazebo/"; // run_and_attach_services.sh
+    let qemu_build_path = "/root/fire/fuzz_testing/qemu/build"; // ../fd_rover.sh
+    let mav_c2_path = "/root/fire/fuzz_testing/FastDyn/courbet/mavlink/"; // mav_command_and_control.py
 
     let physical_observer = PhysicalObserver::new(
-        0.1,               // time step
-        10.0,              // time limit
-        "./trace_logs",  // directory to store the trace logs
+        RECORDING_TIMESTEP, // time step
+        MISSION_TIMEOUT, // mission time limit
+        TRACE_LOG_PATH, // directory to store the trace logs
+        ROBUSTNESS_LOG_PATH, // directory to store the robustness logs
     );
 
     // Feedback to rate the interestingness of an input
@@ -123,32 +157,40 @@ pub fn main() {
     // NOTE: Add Ardu parameters to space first, then env parameters!!
     // --------------------------------
 
+    // https://ardupilot.org/rover/docs/parameters.html
+
     let mut param_info_vec: Vec<ParamInput> = Vec::new();
 
     param_info_vec.push(ParamInput::new_float(
-        "stars",
-        (0.0, 5.0),
-        0.1,
+        "TELEM_DELAY",
+        (0.0, 30.0), // min, max
+        1.0, // increment
     ));
 
-    param_info_vec.push((ParamInput::new_categorical(
-        "powers_of_ten",
-        vec![1.0, 10.0, 100.0, 1000.0],
+    param_info_vec.push(ParamInput::new_float(
+        "FS_OPTIONS",
+        (0.0, 100.0), // min, max
+        0.0, // increment
+    ));
 
-    )));
+    // Example of categorical parameter input
+    // param_info_vec.push((ParamInput::new_categorical(
+    //     "powers_of_ten",
+    //     vec![1.0, 10.0, 100.0, 1000.0], // categories
+    // )));
 
     let mut env_info_vec: Vec<EnvInput> = Vec::new();
 
     env_info_vec.push(EnvInput::new(
         "wind_speed",
-        (0.0, 20.0),
-        false,
+        (0.0, 20.0), // min, max
+        false, // truncate = false --> float
     ));
 
     env_info_vec.push(EnvInput::new(
         "terrain_type",
         (0.0, 3.0), // 3 types: 0, 1, 2
-        true,
+        true, // truncate = true --> integer
     ));
 
     let input_library = CPExpInput::new(param_info_vec, env_info_vec);
@@ -160,7 +202,7 @@ pub fn main() {
     // println!("Search space: {:?}", space);
 
     // Create options object
-    let initial_points = 1;
+    let initial_points = 2; // This controls how many initial inputs are generated before fuzzing starts
     let mut opt = BayesianOptimizationOptions::default();
     opt.n_initial_points = initial_points.clone();
 
@@ -173,7 +215,7 @@ pub fn main() {
         InMemoryCorpus::new(),
         // Corpus in which we store solutions (crashes in this example),
         // on disk so the user can get them after stopping the fuzzer
-        OnDiskCorpus::new(PathBuf::from("./crashes")).unwrap(),
+        OnDiskCorpus::new(PathBuf::from(CRASH_LOG_PATH)).unwrap(),
         // States of the feedbacks.
         // The feedbacks can report the data that should persist in the State.
         &mut feedback,
@@ -183,7 +225,7 @@ pub fn main() {
         Some(bo),
         // Start with phi stage first?
         false,
-        // CPExpInput object for transforming inputs
+        // CPExpInput object for transforming TargetInputs (serializable) into usable values
         input_library,
 
     )
@@ -208,37 +250,34 @@ pub fn main() {
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
-    // Create the executor for an in-process function with just one observer
-    let mut executor = InProcessExecutor::new(
-        &mut harness,
-        tuple_list!(physical_observer, ), // observer, ),
-        &mut fuzzer,
-        &mut state,
-        &mut mgr,
-    )
-    .expect("Failed to create the Executor");
+    // let executor = FastDynExecutor::new(&state, fuzz_buffer);
+    let executor = FastDynExecutor::new(&state);
+    let mut executor = WithObservers::new(executor, tuple_list!(physical_observer, )); // cvg_observer, ));
 
-    // Generate 8 initial inputs
+    // Generate initial inputs using the optimizer
     state 
         .generate_initial_inputs(
             &mut fuzzer, 
             &mut executor, 
-            // &mut generator, 
             &mut mgr,
             initial_points,
         )
         .expect("Failed to generate the initial corpus");
 
-    // panic!("Stopping after initial input generation for debugging purposes.");
     for _ in 0..3 {
         println!("Starting the fuzzing loop!");
     }
 
-    let phi_stage = PhiStage::new(5);
-
     // Setup a mutational stage with a basic bytes mutator
     let mutator = HavocScheduledMutator::new(havoc_mutations());
-    let mut stages = tuple_list!(phi_stage, LambdaMutationalStage::new(mutator),);
+
+    // TODO: @mike - Add calibration and stats stages once you put in your lambda feedback
+    let mut stages = tuple_list!(
+        // calibration_stage,
+        PhiStage::new(5), 
+        LambdaMutationalStage::new(mutator),
+        // stats_stage,
+    );
 
     fuzzer
         .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)

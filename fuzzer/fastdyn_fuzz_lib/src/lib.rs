@@ -1,3 +1,5 @@
+pub mod gz_state_parser;
+
 #[cfg(windows)]
 use std::ptr::write_volatile;
 use std::{marker::PhantomData, path::PathBuf, ptr::write};
