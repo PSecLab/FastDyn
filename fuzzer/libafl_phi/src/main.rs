@@ -18,7 +18,18 @@ use libafl::monitors::tui::TuiMonitor;
 #[cfg(not(feature = "tui"))]
 use libafl::monitors::SimpleMonitor;
 use libafl::{
-    corpus::{InMemoryCorpus, OnDiskCorpus}, events::SimpleEventManager, executors::{CommandExecutor, ExitKind, InProcessExecutor}, feedback_or, feedbacks::{CrashFeedback, MaxMapFeedback}, fuzzer::{Fuzzer, StdFuzzer}, generators::RandPrintablesGenerator, inputs::{BytesInput, HasTargetBytes}, mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator}, observers::ConstMapObserver, schedulers::QueueScheduler, stages::mutational::StdMutationalStage, state::StdState
+    corpus::{InMemoryCorpus, OnDiskCorpus},
+    events::SimpleEventManager,
+    executors::{CommandExecutor, ExitKind, InProcessExecutor},
+    feedback_or,
+    feedbacks::{CrashFeedback, MaxMapFeedback},
+    fuzzer::{Fuzzer, StdFuzzer}, generators::RandPrintablesGenerator,
+    inputs::{BytesInput, HasTargetBytes},
+    mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
+    observers::StdMapObserver,
+    schedulers::QueueScheduler,
+    stages::mutational::StdMutationalStage,
+    state::StdState
 };
 use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
@@ -26,7 +37,7 @@ use libafl_bolts::{
 
 use std::process::{Command, Child, Stdio};
 
-use scirs2_optimize::global::{ 
+use scirs2_optimize::global::{
     BayesianOptimizationOptions,
     BayesianOptimizer,
     Space
@@ -50,11 +61,19 @@ use libafl::state::{HasCorpus, HasExecutions};
 
 // -------------------------------
 // CONSTANT VALUES
-const MISSION_TIMEOUT: f64 = 420.0; // seconds == 7 minutes for rover_rectangle.txt
+const MISSION_TIMEOUT: f64 = 20.0; // seconds == 7 minutes for rover_rectangle.txt
 const RECORDING_TIMESTEP: f64 = 0.5; // seconds
 const TRACE_LOG_PATH: &str = "./trace_logs";
 const ROBUSTNESS_LOG_PATH: &str = "./robustness_logs";
 const CRASH_LOG_PATH: &str = "./crashes";
+const COVERAGE_DUMP_PATH: &str = "./covg.csv";
+const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this size in C is the same
+// -------------------------------
+
+// -------------------------------
+// Coverage map shared with the instrumentation in core.c
+#[no_mangle]
+pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 // -------------------------------
 
 /*
@@ -132,9 +151,9 @@ pub fn main() {
     env_logger::init();
 
     // INPUT YOUR PATHS HERE
-    let run_services_path = "/root/fire/fuzz_testing/FastDyn/courbet/gazebo/"; // run_and_attach_services.sh
-    let qemu_build_path = "/root/fire/fuzz_testing/qemu/build"; // ../fd_rover.sh
-    let mav_c2_path = "/root/fire/fuzz_testing/FastDyn/courbet/mavlink/"; // mav_command_and_control.py
+    let run_services_path = "/root/rooney/FastDyn/courbet/gazebo/"; // run_and_attach_services.sh
+    let qemu_build_path = "/root/rooney/qemu/build"; // ../fd_rover.sh
+    let mav_c2_path = "/root/rooney/FastDyn/courbet/mavlink/"; // mav_command_and_control.py
 
     let physical_observer = PhysicalObserver::new(
         RECORDING_TIMESTEP, // time step
@@ -142,10 +161,12 @@ pub fn main() {
         TRACE_LOG_PATH, // directory to store the trace logs
         ROBUSTNESS_LOG_PATH, // directory to store the robustness logs
     );
+    let cvg_observer = unsafe { StdMapObserver::new("cvg", &mut CVG) }; // Example address
 
     // Feedback to rate the interestingness of an input
-    let physical_feedback = PhysicalFeedback::new();
-    let mut feedback = feedback_or!(physical_feedback, ); // MaxMapFeedback::new(&observer), );
+    let mut physical_feedback = PhysicalFeedback::new();
+    let mut coverage_feedback = MaxMapFeedback::new(&cvg_observer);
+    let mut feedback = feedback_or!(physical_feedback, coverage_feedback); // MaxMapFeedback::new(&observer), );
 
     // A feedback to choose if an input is a solution or not
     let mut objective = feedback_or!(PhysicalObjective::new(), ); // CrashFeedback::new(),);
@@ -208,7 +229,7 @@ pub fn main() {
 
     let bo = BayesianOptimizer::new(space, Some(opt));
 
-     let mut state = CPExpState::new(
+    let mut state = CPExpState::new(
         // RNG
         StdRand::with_seed(current_nanos()),
         // Corpus that will be evolved, we keep it in memory for performance
@@ -252,13 +273,13 @@ pub fn main() {
 
     // let executor = FastDynExecutor::new(&state, fuzz_buffer);
     let executor = FastDynExecutor::new(&state);
-    let mut executor = WithObservers::new(executor, tuple_list!(physical_observer, )); // cvg_observer, ));
+    let mut executor = WithObservers::new(executor, tuple_list!(physical_observer, cvg_observer));
 
     // Generate initial inputs using the optimizer
-    state 
+    state
         .generate_initial_inputs(
-            &mut fuzzer, 
-            &mut executor, 
+            &mut fuzzer,
+            &mut executor,
             &mut mgr,
             initial_points,
         )
@@ -274,7 +295,7 @@ pub fn main() {
     // TODO: @mike - Add calibration and stats stages once you put in your lambda feedback
     let mut stages = tuple_list!(
         // calibration_stage,
-        PhiStage::new(5), 
+        PhiStage::new(5),
         LambdaMutationalStage::new(mutator),
         // stats_stage,
     );

@@ -1,11 +1,12 @@
 use baby_fuzzer::gz_state_parser::{
-    get_raw_gz_data, 
-    get_raw_hf_status, 
+    get_raw_gz_data,
+    get_raw_hf_status,
     extract_block_from_gz_data,
     get_sim_time,
 };
 
 use crate::cpexp_input::TargetInput;
+use crate::CVG;
 
 use libafl::executors::ExitKind;
 use libafl::inputs::HasTargetBytes;
@@ -17,10 +18,34 @@ use gz_msgs::clock::Clock;
 
 // ------------------------------
 // Input your paths here...
-const RUN_SERVICES_PATH: &str = "/root/fire/fuzz_testing/FastDyn/courbet/gazebo/";
-const QEMU_BUILD_PATH: &str = "/root/fire/fuzz_testing/qemu/build";
-const MAV_C2_PATH: &str = "/root/fire/fuzz_testing/FastDyn/courbet/mavlink/";
+const RUN_SERVICES_PATH: &str = "/root/rooney/FastDyn/courbet/gazebo/";
+const QEMU_BUILD_PATH: &str = "/root/rooney/qemu/build";
+const MAV_C2_PATH: &str = "/root/rooney/FastDyn/courbet/mavlink/";
 // ------------------------------
+
+/**
+ * Assigning each value in file to corresponding index in CVG array.
+ * File is of the format: "value,value,..." where each value is u8.
+ */
+fn deserialize_coverage(path: &str) {
+    let contents = std::fs::read_to_string(path).expect("Failed to read coverage file");
+    let values: Vec<&str> = contents.trim().split(',').collect();
+    unsafe {
+        for (i, val_str) in values.iter().enumerate() {
+            if i >= CVG.len() {
+                break;
+            } else {
+                let val: u8 = val_str.parse().unwrap_or(0);
+                if CVG[i] + val > 255 {
+                    CVG[i] = 255;
+                } else {
+                    CVG[i] += val;
+                }
+            }
+        }
+    }
+}
+
 
 /*
     Steps:
@@ -65,7 +90,7 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
     let mut spawn_c2 = Command::new("python3")
         .current_dir(MAV_C2_PATH)
         .arg("ardu_mav_c2.py")
-        .arg("rover_init.parm")
+        .arg("rover_init.param")
         .arg("rover_rectangle.txt")
         .arg(param_names)
         .arg("/tmp/mutations.bin")
@@ -79,13 +104,13 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
 
     let spawn_fd = Command::new("bash")
         .current_dir(QEMU_BUILD_PATH)
-        .arg("../fd_rover.sh")
+        .arg("../roverv462.sh")
         .stdout(Stdio::null())
         .spawn();
     if spawn_fd.is_err() {
         panic!("Error: Failed to start FastDyn QEMU: {}", spawn_fd.err().unwrap());
     }
-    
+
     // 3. Monitor for end states in order of priority
     let mut exit_kind: ExitKind;
     let mut node: Node = Node::new().unwrap();
@@ -96,7 +121,7 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
         if hf_status.find("true").is_some() {
             exit_kind = ExitKind::Crash;
             break;
-        } 
+        }
 
         // Check for timeout
         let gz_data = get_raw_gz_data(&mut node);
@@ -115,16 +140,19 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
             if status.unwrap().success() {
                 exit_kind = ExitKind::Ok;
                 break;
-            } 
+            }
         }
 
     }
 
     // Just use kill script to force everything dead
-    let mut kill = Command::new("/root/fire/fuzz_testing/FastDyn/fuzzer/libafl_phi/kill.sh")
+    let mut kill = Command::new("/root/rooney/FastDyn/fuzzer/libafl_phi/kill.sh")
         .spawn()
         .expect("Failed to spawn kill.sh");
     kill.wait();
+
+    // TODO: Add deserialization of coverage here.
+    deserialize_coverage("/root/rooney/FastDyn/fuzzer/libafl_phi/covg.csv");
 
     println!("Mission execution finished with exit kind: {:?}", exit_kind);
     exit_kind
