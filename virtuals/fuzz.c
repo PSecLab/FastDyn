@@ -41,10 +41,10 @@ typedef struct saved_registers_t {
 
 static saved_registers_t g_saved_registers;
 
-static void vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
-{
-    // userdata is whatever you passed at registration time
-}
+// static void vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
+// {
+//     // userdata is whatever you passed at registration time
+// }
 
 void virt_assert(unsigned int cpu_index, void *udata)
 {
@@ -80,8 +80,9 @@ void virt_assert(unsigned int cpu_index, void *udata)
         printf("PC=0x%08x\n", pc);
         fuzz_report_assert(last_anchor_id, true);
         fuzz_finish(last_anchor_id);
+        dump_bbl();
         fuzz_stop();
-        utils_die("Fuzzer requested reset");
+        exit(0);
     }
 }
 
@@ -146,6 +147,9 @@ static char g_fuzzing_buf[1024];
 static char g_fuzzing_input[1024];
 static bool first_visit_to_anchor = true;
 
+static time_t start_time;
+static time_t last_time;
+
 void anchor(unsigned int cpu_index, void *udata)
 {
     // Currently reserving 0xDEADBEEF for a crash, we should have a better systems
@@ -181,17 +185,31 @@ void anchor(unsigned int cpu_index, void *udata)
     if (last_anchor_id != -1) {
         fuzz_finish(last_anchor_id);
     }
+    else
+    {
+        start_time = last_time = time(NULL);
+    }
     last_anchor_id = strtoul(anchor_id, NULL, 0);
+
+    time_t current_time = time(NULL);
+    if (current_time - last_time >= 10) {
+        last_time = current_time;
+        printf("BB coverage at %lu: ", current_time - start_time);
+        print_unique_bbl();
+    }
 
     uint32_t read_count = 0;
     // uint8_t length = 0;
     // uint32_t msgid = 0;
     // uint8_t crc_extra = 0;
+    // uint8_t sys_id = 255;
+    // uint8_t comp_id = 190;
     // const uint8_t *payload = NULL;
     // uint8_t real_length = 0;
-    // bool validation_mode = false;
+    // bool validation_mode = true;
     // //validation mode
     // if (validation_mode) {
+    //     printf("[Fuzz] Using fixed input for validation mode\n");
     //     // use fixed input for validation
     //     length = 25;
     //     real_length = 25;
@@ -199,7 +217,7 @@ void anchor(unsigned int cpu_index, void *udata)
     //     crc_extra = 220; // GPS_RAW_INT
     //     static const uint8_t fixed_payload[25] = {0x00, 0x9C, 0xA8, 0x9D, 0x81, 0xEB, 0x66, 0x66, 0xDF, 0x66, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x1D};
     //     payload = fixed_payload;
-    //     goto end;
+    //     // goto end;
     // }
 fuzz:
     while (true) {

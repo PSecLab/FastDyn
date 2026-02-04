@@ -17,8 +17,10 @@ if [ "$VEHICLE_TYPE" == "copter-heli" ]; then
     gz sim -r bicopter_runway.sdf &
     MODEL_NAME="bicopter"
 elif [ "$VEHICLE_TYPE" == "copter" ]; then
-    gz sim -r gs_drone_runway.sdf &
-    MODEL_NAME="gs_drone"
+    # gz sim -r gs_drone_runway.sdf &
+    # MODEL_NAME="gs_drone"
+    gz sim -r iris_runway.sdf &
+    MODEL_NAME="iris"
 elif [ "$VEHICLE_TYPE" == "rover" ]; then
     gz sim -r r1_rover_runway.sdf &
     MODEL_NAME="r1_rover"
@@ -38,6 +40,7 @@ else
 fi
 GAZEBO_PID=$!
 echo "Started Gazebo with PID $GAZEBO_PID"
+echo "Using model name: $MODEL_NAME"
 sleep 5  # Wait for Gazebo to initialize
 
 # Attach the ArduRover services to the Gazebo simulation

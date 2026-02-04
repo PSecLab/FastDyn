@@ -161,6 +161,47 @@ imu_data_t parse_imu_json(const std::string &input)
 }
 
 /**
+ * @brief Get orientation for synthetic mag reading
+ *
+ *
+ */
+class CorrectMagService
+{
+public:
+  CorrectMagService(gz::transport::Node &node,
+                       const std::string &topic_name,
+                       const std::string &service_name)
+  {
+    if (topic_name == "NONE")
+      return;
+    node.Subscribe(topic_name, &CorrectMagService::OnPoseMsg, this);
+    node.Advertise(service_name, &CorrectMagService::OnServiceRequest, this);
+  }
+private:
+  void OnPoseMsg(const gz::msgs::Pose_V &msg)
+  {
+    // TODO: create a magnetometer message with proper transform
+    gz::msgs::Magnetometer mag_msg;
+    mag_msg.mutable_field_tesla()->set_x(0.1);
+    mag_msg.mutable_field_tesla()->set_y(0.0);
+    mag_msg.mutable_field_tesla()->set_z(0.0);
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_msg_ = mag_msg; // replace msg with your created gz::msgs::Magnetometer
+  }
+
+  bool OnServiceRequest(const gz::msgs::Empty &,
+                        gz::msgs::Magnetometer &rep)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    rep = latest_msg_;
+    return true;
+  }
+
+  gz::msgs::Magnetometer latest_msg_;
+  std::mutex mutex_;
+};
+
+/**
  * @brief Get mag reading
  */
 class GetMagReadingService
@@ -906,6 +947,12 @@ int main(int argc, char **argv)
   //   "/model/" + model_name + "/pose",
   //   "/get_yaw_reading"
   // );
+
+  CorrectMagService correctMagService(
+    node,
+    "/model/" + model_name + "/pose",
+    "/get_corrected_mag"
+  );
 
   std::cout << "ArduPilot Services running...\n";
 

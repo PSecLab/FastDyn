@@ -126,9 +126,12 @@ static bool initialize_fuzzer_socket() {
 
 
 int create_fuzzed_mavlink_packet(uint32_t msgid,
+                                uint8_t crc_extra,
                                 const uint8_t *payload,
                                 uint8_t length,
-                                uint8_t real_length)
+                                uint8_t real_length,
+                                uint8_t sysid,
+                                uint8_t compid)
 {
     if (fuzzer_sockfd == -1) {
         if (!initialize_fuzzer_socket()) {
@@ -141,10 +144,8 @@ int create_fuzzed_mavlink_packet(uint32_t msgid,
 
     static uint8_t seq_number = 0;
 
-    uint8_t crc_extra = mavlink_get_msg_entry(msgid)->crc_extra;
-
     uint8_t header[10];
-    uint8_t incompat_flags = 0;
+    uint8_t incompat_flags = 0; // in future do this
     uint8_t compat_flags = 0;
 
     header[0] = MAVLINK_STX;
@@ -152,8 +153,8 @@ int create_fuzzed_mavlink_packet(uint32_t msgid,
     header[2] = incompat_flags;
     header[3] = compat_flags;
     header[4] = seq_number & 0xFF;
-    header[5] = GCS_SYS_ID;
-    header[6] = GCS_COMP_ID;
+    header[5] = sysid;
+    header[6] = compid;
     header[7] = (uint8_t)(msgid & 0xFF);
     header[8] = (uint8_t)((msgid >> 8) & 0xFF);
     header[9] = (uint8_t)((msgid >> 16) & 0xFF);

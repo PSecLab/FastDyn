@@ -192,7 +192,7 @@ int get_joint_state(double *motor_0_pos, double *motor_2_pos) {
 
 int get_mag_reading(double *mag_x, double *mag_y, double *mag_z) {
     gz::msgs::Magnetometer response;
-    if (!request_service("/get_mag_reading", response)) {
+    if (!request_service("/get_mag_reading", response)) { // replace with /get_corrected_mag
         return 0;
     }
     *mag_x = response.field_tesla().x();

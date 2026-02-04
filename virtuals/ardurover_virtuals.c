@@ -22,6 +22,8 @@
 // Global to track last sim time from QEMU
 _Atomic int64_t last_sim_time_ns = 0;
 
+int fuzz_is_running();
+
 static void catch_up(void *opaque)
 {
     (void) opaque;
@@ -30,7 +32,11 @@ static void catch_up(void *opaque)
 
     while (1) {
         int64_t sim_ns = atomic_load(&last_sim_time_ns);
-
+#if ENABLE_LIBFUZZ
+        if (!fuzz_is_running()) {
+            exit(0);
+        }
+#endif
         if (sim_ns != last_seen) {
             double target_time_s = (double)sim_ns / 1e9;
             if (!advance_simulation(target_time_s)) {

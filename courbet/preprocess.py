@@ -95,7 +95,7 @@ def convert_config_file(symbols_dict: dict[str, int], input: str, output: str) -
                             third_token = hex(symbols_dict[third_token])
                         else:
                             print(f"Warning: {third_token} not found in symbols dictionary")
-                            return False
+                            # return False
 
                 output_file.write(f"{first_token} {second_token} {third_token if third_token else ''}\n")
 

@@ -31,8 +31,19 @@ int core_read_ram(uintptr_t address, size_t size, void* buffer);
  */
 int core_write_ram(uintptr_t address, size_t size, const void* buffer);
 
+// fuzz buffer read
+int fuzz_buffer_read(uint32_t anchor_id, char *buf, size_t buf_size);
+
+// fuzz finish
+void fuzz_finish(uint32_t anchor_id);
+
+// fuzz report assert
+void fuzz_report_assert(uint32_t anchor_id, bool fatal);
+
 void add_observed_value(uint32_t val);
 uint32_t dump_trace_info(void *hFuzz);
 void reset_and_dump_values(const char *filename);
+void print_unique_bbl();
+void dump_bbl();
 #endif /* CORE_H */
 

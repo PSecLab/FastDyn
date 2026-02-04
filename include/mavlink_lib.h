@@ -18,7 +18,23 @@
 #define SYS_ID  1
 #define COMP_ID 1
 
-extern volatile bool fuzzed_packet_ready;
+typedef struct fuzzed_input {
+    uint8_t payload[256];
+    uint32_t msgid;
+    uint8_t crc_extra;
+    uint8_t length;
+    uint8_t real_length;
+    uint8_t sysid;
+    uint8_t compid;
+} fuzzed_input_t;
+
+void assign_fuzzed_input(uint32_t msgid,
+                        uint8_t crc_extra,
+                        const uint8_t *payload,
+                        uint8_t length,
+                        uint8_t real_length,
+                        uint8_t sysid,
+                        uint8_t compid);
 
 // /**
 //  * @brief IMU data structure.
@@ -90,12 +106,18 @@ int mav_finalize_message_chan_send(int sockfd,
  * @param payload    Pointer to payload data buffer.
  * @param length     Length of payload in bytes.
  * @param real_length Actual length of payload in bytes to be used in CRC calculation.
+ * @param crc_extra  CRC extra byte specific to this message ID.
+ * @param sysid      System ID to use in the MAVLink header.
+ * @param compid     Component ID to use in the MAVLink header.
  * @return 0 on success, -1 on failure.
  */
 int create_fuzzed_mavlink_packet(uint32_t msgid,
+                                uint8_t crc_extra,
                                 const uint8_t *payload,
                                 uint8_t length,
-                                uint8_t real_length);
+                                uint8_t real_length,
+                                uint8_t sysid,
+                                uint8_t compid);
 
 /**
  * @brief Start the GCS listener thread if not already running.
