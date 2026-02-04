@@ -1,0 +1,6 @@
+GET /inchtml-pages-stm32_connectivity_files/pixel.gif HTTP/1.1
+Host: 192.168.8.2
+Accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+Accept-Language: en-US,en;q=0.9
+Priority: u=5, i
+

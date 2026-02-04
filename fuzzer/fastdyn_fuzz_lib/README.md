@@ -40,7 +40,7 @@ The resulting binary will be located at `target/release/libfastdyn_fuzzer.so`.
 
 ## Usage
 
-To use the fuzzer, make sure that coverate is enabled in the device's toml file, and make sure that the fuzzing library is enabled in the makefile.
+To use the fuzzer, make sure that coverage is enabled in the device's toml file, and make sure that the fuzzing library is enabled in the makefile.
 
 Then, use the virtual instructions anchor and assert for fuzzing in the toml file, examples shown below:
 

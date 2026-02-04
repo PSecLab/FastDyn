@@ -111,13 +111,13 @@ srcs += files(
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
-  'libs/ring_buffer.c',
-  'libs/mavlink_lib.c',
 )
 
 if ENABLE_LIBGZ
 srcs += files(
   'libs/gcs_receiver.c',
+  'libs/ring_buffer.c',
+  'libs/mavlink_lib.c',
 
 )
 endif

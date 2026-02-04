@@ -1,0 +1,8 @@
+POST /STM32F7xxLED.html HTTP/1.1
+Host: 192.168.8.2
+User-Agent: curl/7.81.0
+Accept: */*
+Content-Length: 5
+Content-Type: application/x-www-form-urlencoded
+
+led=1

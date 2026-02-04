@@ -1,0 +1,5 @@
+GET /inchtml-pages-stm32_connectivity_files/pixel.gif HTTP/1.1
+Host: 192.168.8.2
+Content-Length: 500
+Connection: keep-alive
+

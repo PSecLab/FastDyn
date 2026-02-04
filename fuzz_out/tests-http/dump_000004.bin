@@ -1,0 +1,4 @@
+GET /STM32F7xxLED.html HTTP/1.1
+Host: 192.168.8.2
+Priority: u=0, i
+

@@ -644,6 +644,19 @@ static void tb_exec_cb(unsigned int cpu_index, void *udata)
     core_icount_add(n);
 }
 
+static void bbl_log() {
+    uint64_t unique = 0;
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        if (bbl_sets[i]) unique += (uint64_t)g_hash_table_size(bbl_sets[i]);
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t cur_time = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+
+    printf("[TB] Unique blocks = %lu at time %lu\n", unique, cur_time);
+}
+
 static void bbl_tb_exec_cb(unsigned int vcpu_index, void *userdata)
 {
     uint64_t tb_pc = (uint64_t)(uintptr_t)userdata;
@@ -654,7 +667,12 @@ static void bbl_tb_exec_cb(unsigned int vcpu_index, void *userdata)
     tb_pc &= ~1ULL;
 
     bbl_total_tb_exec[vcpu_index] += 1;
+    gboolean is_new = !g_hash_table_contains(bbl_sets[vcpu_index], (gpointer)(uintptr_t)tb_pc);
     g_hash_table_add(bbl_sets[vcpu_index], (gpointer)(uintptr_t)tb_pc);
+
+    if (is_new) {
+        bbl_log();
+    }
 }
 
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
@@ -841,8 +859,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 // ---------------------------
 static uint32_t *g_observed_values = NULL; // Buffer for new values
 static size_t g_observed_count = 0;        // Number of values currently buffered
-static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
-static uint32_t g_prev_pc = 0;
 
 #if ENABLE_LIBFUZZ
 typedef enum {
@@ -869,10 +885,12 @@ static int anchor_count = -1;
 static int buffer_capacity = 0;
 static pthread_rwlock_t anchor_lock;
 
+static uint32_t g_prev_pc = 0;
+
 #define MAP_SIZE 65536 // should always match the rust definition
 extern uint8_t CVG[MAP_SIZE];
 
-// 0 on fail, 1 otherwise
+// Rust export, 0 on fail, 1 otherwise
 int fuzz_init(uint32_t anchor_id, char *numbers);
 
 // allocate buffer (Rust -> C)
@@ -886,13 +904,13 @@ fuzz_buffer_t *fuzz_buffer_create(uint32_t anchor_id) {
 
         fuzz_buffers = realloc(fuzz_buffers, buffer_capacity * sizeof(fuzz_buffer_t*));
         if (fuzz_buffers == NULL) {
-            utils_die("Failed to realloc buffer for fuzzing");
+            utils_die("[anchor] Failed to realloc buffer for fuzzing");
         }
     }
 
     fuzz_buffers[anchor_id] = malloc(sizeof(fuzz_buffer_t));
     if (fuzz_buffers[anchor_id] == NULL) {
-        utils_die("Failed to allocate new fuzzing object");
+        utils_die("[anchor] Failed to allocate new fuzzing object");
     }
 
     atomic_init(&fuzz_buffers[anchor_id]->state, FUZZ_EMPTY);
@@ -914,7 +932,7 @@ bool fuzz_buffer_write(fuzz_buffer_t *fb, fuzz_input_t *input) {
         atomic_store_explicit(&fb->state, FUZZ_READY, memory_order_release);
         return true;
     } else {
-        fprintf(stderr, "Fuzzer not empty\n");
+        fprintf(stderr, "[anchor] Fuzzer not empty\n");
         return false;
     }
 }
@@ -929,7 +947,7 @@ int fuzz_buffer_read(uint32_t anchor_id, char* out, size_t len) {
         _mm_pause();
     }
     if (fb->buffer == NULL) {
-        fprintf(stderr, "Input is ready but buffer is null\n");
+        fprintf(stderr, "[anchor] Input is ready but buffer is null\n");
         return 0;
     }
 
@@ -993,10 +1011,10 @@ void initialize_anchor(char* args) {
 
     char tmp[301] = {0};
 
-    char *ignored_id = strtok(args, ":"); // consume the assigned id, we're just going to assign from 0 up and overwrite this
+    strtok(args, ":"); // consume the assigned id, we're just going to assign from 0 up and overwrite this
     char *numbers = strtok(NULL, ":");
     if (numbers == NULL) {
-        utils_die("Failed to read anchor targets");
+        utils_die("[anchor] Failed to read anchor targets");
     }
 
     strncpy(tmp, numbers, sizeof(tmp) - 1);
@@ -1010,10 +1028,11 @@ void initialize_anchor(char* args) {
     strcat(args, tmp);
 
     if (!fuzz_init(anchor_id, numbers)) {
-        utils_die("Failed initialization");
+        utils_die("[anchor] Failed initialization");
     }
 }
 
+// If using fuzzing library, internally modify coverage map
 void add_observed_value(uint32_t val) {
     //printf("Observing %lx\n", val);
     if (g_prev_pc != 0) {
@@ -1026,6 +1045,9 @@ void add_observed_value(uint32_t val) {
 
 #else
 
+static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
+
+// If not using fuzzing library, keep buffer of blocks
 void add_observed_value(uint32_t val) {
     if (g_observed_count >= g_observed_capacity) {
         // Grow the buffer (double the capacity, or start with initial size)
@@ -1042,6 +1064,7 @@ void add_observed_value(uint32_t val) {
 }
 #endif
 
+// The following two functions are useful if fuzzing with an external fuzzer rather than as a library
 /**
  * @brief Writes the buffered values to a binary file.
  * @param filename The path to the output file.
@@ -1095,6 +1118,7 @@ void* tracer(void* arg) {
 	}
 }
 
+// Functions for saving basic block information across runs
 void save_all_bbl_sets(const char *dir) {
     int total = 0;
     for (int i = 0; i < MAX_VCPUS; i++) {
@@ -1193,49 +1217,36 @@ void load_bbl_length(const char *path) {
     bbl_length = table;
 }
 
-void print_unique_bbl(void)
-{
-    uint64_t unique_blocks = 0;
-    uint64_t total_blocks = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        if (bbl_sets[i]) unique_blocks += (uint64_t)g_hash_table_size(bbl_sets[i]);
-        total_blocks += bbl_total_tb_exec[i];
-    }
-
-    printf("Unique Blocks: %llu, Total Blocks: %llu\n", unique_blocks, total_blocks);
-}
-
 void dump_bbl(void)
 {
     save_all_bbl_sets("./fuzz_out");
     save_bbl_length("./fuzz_out/bbl_length.bin");
 
-    uint64_t unique = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        if (bbl_sets[i]) unique += (uint64_t)g_hash_table_size(bbl_sets[i]);
-    }
-
-    FILE *f = fopen(bbl_dump_path ? bbl_dump_path : DEFAULT_BBL_DUMP_PATH, "w");
+    FILE *f = fopen(DEFAULT_BBL_COVERAGE_PATH, "w");
     if (!f) return;
-    FILE *f_extra = fopen(DEFAULT_BBL_COVERAGE_PATH, "w");
-    if (!f_extra) return;
 
-    fprintf(f, "bbl_unique=%" PRIu64 "\n", unique);
-    uint64_t total_tb = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) total_tb += bbl_total_tb_exec[i];
-    fprintf(f, "tb_exec_total=%" PRIu64 "\n", total_tb);
     for (int i = 0; i < MAX_VCPUS; i++) {
         guint glength;
         gpointer* gptr = g_hash_table_get_keys_as_array(bbl_sets[i], &glength);
         if (gptr) {
             for (uint32_t n = 0; n < glength; n++) {
-                fprintf(f_extra, "%x\t%u\n", (uintptr_t)gptr[n], (uintptr_t)g_hash_table_lookup(bbl_length, gptr[n]));
+                fprintf(f, "%lx\t%lu\n", (uintptr_t)gptr[n], (uintptr_t)g_hash_table_lookup(bbl_length, gptr[n]));
             }
         }
     }
 
     fclose(f);
-    fclose(f_extra);
+}
+
+void bbl_init() {
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
+    }
+    bbl_length = g_hash_table_new(g_direct_hash, g_direct_equal);
+    memset(bbl_total_tb_exec, 0, sizeof(bbl_total_tb_exec));
+
+    load_all_bbl_sets("./fuzz_out");
+    load_bbl_length("./fuzz_out/bbl_length.bin");
 }
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
@@ -1452,14 +1463,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     #endif
 
     if (bbl_enable) {
-        for (int i = 0; i < MAX_VCPUS; i++) {
-            bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
-        }
-        bbl_length = g_hash_table_new(g_direct_hash, g_direct_equal);
-        memset(bbl_total_tb_exec, 0, sizeof(bbl_total_tb_exec));
-
-        load_all_bbl_sets("./fuzz_out");
-        load_bbl_length("./fuzz_out/bbl_length.bin");
+        bbl_init();
     }
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);

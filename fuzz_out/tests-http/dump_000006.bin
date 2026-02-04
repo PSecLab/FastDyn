@@ -1,0 +1,5 @@
+GET /leds.cgi?led=3&led=4 HTTP/1.1
+Host: 192.168.8.2
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+
