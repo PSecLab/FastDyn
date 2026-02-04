@@ -92,6 +92,7 @@ extern "C" {
     fn fuzz_buffer_write(fb: *mut FuzzBuffer, input: *mut FuzzInput) -> bool;
     fn fuzz_check_empty(fb: *mut FuzzBuffer) -> bool;
     fn fuzz_check_assert(fb: *mut FuzzBuffer) -> u32;
+    fn dump_bbl();
 }
 
 struct FastDynExecutor<S> {
@@ -193,8 +194,13 @@ where
                 let mut file = fuzz_file.lock().unwrap();
                 writeln!(file, "Timeout on input {:?}", buf).unwrap();
 
+                unsafe { dump_bbl(); }
+
                 // set the stop flag to exit gracefully
                 STOP_FLAG.store(true, Ordering::SeqCst);
+
+                let stop = STOP_FLAG.load(Ordering::SeqCst);
+                println!("Fuzzer stopping as requested: {}", stop);
 
                 return Ok(ExitKind::Crash);
             }
@@ -212,6 +218,11 @@ where
 
                 let mut file = fuzz_file.lock().unwrap();
                 writeln!(file, "Fatal error on input {:?}", buf).unwrap();
+
+                unsafe { dump_bbl(); }
+
+                // set the stop flag to exit gracefully
+                STOP_FLAG.store(true, Ordering::SeqCst);
 
                 return Ok(ExitKind::Crash);
             }
@@ -287,6 +298,15 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         if path.is_file() {
             let bytes = std::fs::read(&path).unwrap();
             corpus.add(BytesInput::new(bytes).into()).unwrap();
+        }
+    }
+
+    for entry in std::fs::read_dir(&crashes_path).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            println!("Loading crash input from {:?}", path);
+            let bytes = std::fs::read(&path).unwrap();
+            crash_corpus.add(BytesInput::new(bytes).into()).unwrap();
         }
     }
 
@@ -384,9 +404,8 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
 //         .fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)
 //         .expect("Error in the fuzzing loop")
     loop {
-        if STOP_FLAG.load(Ordering::SeqCst) {
-            panic!("Fuzzer stopping as requested");
-        }
+        let stop = STOP_FLAG.load(Ordering::SeqCst);
+        assert!(stop == false, "Fuzzer stopping as requested");
 
         if let Err(err) = fuzzer.fuzz_one(&mut stages, &mut executor, &mut state, &mut mgr) {
             eprintln!("Fuzzing error: {:?}", err);
@@ -427,6 +446,10 @@ pub extern "C" fn fuzz_stop() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn fuzz_is_running() -> u32 {
-    let is_running = FUZZ_THREAD.lock().unwrap().is_some();
-    return if is_running { 1 } else { 0 };
+    // stop flag is false means running
+    if STOP_FLAG.load(Ordering::SeqCst) {
+        return 0;
+    } else {
+        return 1;
+    }
 }
