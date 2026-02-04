@@ -29,3 +29,4 @@
 0x80bb270 ap_fs_close *
 0x8010cdc ignore_cpu_failsafe_disarm *
 0x802bd5c read_mag_when_published 
+0x8004280 set_hardfault_status

@@ -183,6 +183,7 @@ int get_imu_batch(imu_batch_t *imu_batch);
  */
 int set_hardfault_pc(uint32_t pc);
 
+
 #ifdef __cplusplus
 }
 #endif

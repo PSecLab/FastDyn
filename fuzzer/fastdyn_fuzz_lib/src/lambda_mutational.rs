@@ -1,8 +1,3 @@
-/*
-    A copy of libafl's standard bytes mutational stage, modified to work with
-    OptiFuzz's custom TargetInput and optimizer.
-*/
-
 //| The [`MutationalStage`] is the default stage used during fuzzing.
 //! For the current input, it will perform a range of random mutations, and then run them in the executor.
 
@@ -14,8 +9,7 @@ use core::{marker::PhantomData, num::NonZeroUsize};
 
 use libafl_bolts::{Named, rands::Rand};
 
-use crate::cpexp_state::{HasInputLibrary, HasLatestRobustness, HasOptimizer};
-use crate::cpexp_input::{CPExpInput, HasEnvConfig, HasParamBytes, TargetInput};
+use crate::{cpexp_state::{HasInputLibrary, HasLatestRobustness, HasOptimizer}, new_input::{self, HasEnvConfig, HasParamBytes, TargetInput}};
 #[cfg(feature = "introspection")]
 use crate::monitors::stats::PerfFeature;
 use libafl::{
@@ -31,7 +25,7 @@ use libafl::{
     state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasRand, MaybeHasClientPerfMonitor},
 };
 
-use scirs2_core::ndarray::Array1;
+// TODO multi mutators stage
 
 /// Action performed after the un-transformed input is executed (e.g., updating metadata)
 pub trait MutatedTransformPost<S>: Sized {
@@ -310,40 +304,11 @@ where
                 fuzzer.evaluate_filtered(state, executor, manager, &new_input)?;
             
 
-            // Tell the optimizer as best as we can...
-            // It will not be super accurate since the bytes are randomly mutated
-            // We will try to report as many parameter values as we can. If there aren't enough
-            // converted f64 values, we'll just pad with the minimum value of each parameter.
-            let params_as_f32s = TargetInput::bytes_to_f32_vec(untransformed.param_bytes());
-            let mut params_as_f64s: Vec<f64> = params_as_f32s.iter().map(|&x| x as f64).collect();
-
-            // Figure out what we need to do based on the size of params_as_f64s...
-            if params_as_f64s.len() > asked_values.len() {
-                // Truncate
-                params_as_f64s.truncate(asked_values.len());
-            } else if params_as_f64s.len() < asked_values.len() {
-                // Pad with minimum values
-                let input_lib = state.input_library();
-                let param_info_vec = input_lib.get_param_input();
-                let first_missing_param_index = params_as_f64s.len();
-                for i in first_missing_param_index..param_info_vec.len() {
-                    let param_range = param_info_vec[i].get_range();
-                    params_as_f64s.push(param_range.0); // push min value as placeholder
-                }
-            }
-
-            // Now, append the environmental values from asked_values
-            for i in params_as_f64s.len()..asked_values.len() {
-                params_as_f64s.push(asked_values[i]);
-            }
-
-            // Debug prints just to make sure I'm doing this right
-            println!("Original asked values: {:?}", asked_values);
-            println!("Params as f64s: {:?}", params_as_f64s);
-            println!("Do the lengths match? {}", params_as_f64s.len() == asked_values.len());
-            
-            let tell_array: Array1<f64> = Array1::from(params_as_f64s);
-            state.tell_optimizer(&tell_array, state.latest_robustness());
+            // // Tell the optimizer
+            // let params_as_f32s = TargetInput::bytes_to_f32_vec(untransformed.param_bytes());
+            // let params_as_f64s: Vec<f64> = params_as_f32s.iter().map(|&x| x as f64).collect();
+            // // TODO
+            // state.tell_optimizer(params, state.latest_robustness());)
 
             start_timer!(state);
             self.mutator_mut().post_exec(state, corpus_id)?;

@@ -2,9 +2,9 @@ use core::panic;
 use std::time::Duration;
 use gz_transport::Node;
 use protobuf::text_format::parse_from_str;
-use gz_msgs::{pose::Pose, pose_v::Pose_V};
+use gz_msgs::{pose::Pose, pose_v::Pose_V, clock::Clock};
 use gz_msgs::gz_msgs10::{
-    any::Any, empty::Empty,
+    any::Any, empty::Empty, stringmsg::StringMsg
 };
 
 /*
@@ -38,6 +38,48 @@ pub fn get_raw_gz_data(node: &mut Node) -> String {
     if result {
         // println!("Service call successful!");
         response.string_value().to_string()
+    } else {
+        // println!("Error: Service call to {} returned failure.", service_name);
+        String::new()
+    }
+}
+
+/*
+    Parses an extracted clock block string from gazebo data and returns the sim time in seconds.
+*/
+pub fn get_sim_time(clock_block: &str) -> f64 {
+    let clock_proto: Clock = parse_from_str::<Clock>(clock_block).unwrap();
+    let sim_sec: i64 = clock_proto.sim.sec;
+    let sim_nsec: i32 = clock_proto.sim.nsec;
+    (sim_sec as f64) + (sim_nsec as f64) * 1e-9
+}
+
+pub fn get_raw_hf_status(node: &mut Node) -> String {
+
+    let request: Empty = Empty::new();
+    let timeout: u64 = 3000; // milliseconds
+    let service_name: &str = "/get_hf_status";
+
+    let mut response_opt: Option<(StringMsg, bool)> = None;
+    for attempt in 0..5 {
+        response_opt = node.request::<Empty, StringMsg>(
+        service_name, &request, Duration::from_millis(timeout));
+        if response_opt.is_some() {
+            break;
+        } else {
+            println!("Service call to {} failed, retrying... ({}/5)", service_name, attempt + 1);
+        }
+    }
+    
+    if response_opt.is_none() {
+        panic!("Error: Service call to {} failed!", service_name);
+    }
+
+    let (response, result): (StringMsg, bool) = response_opt.unwrap();
+
+    if result {
+        // println!("Service call successful!");
+        response.data
     } else {
         // println!("Error: Service call to {} returned failure.", service_name);
         String::new()
