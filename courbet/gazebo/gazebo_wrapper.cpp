@@ -253,17 +253,6 @@ int get_latest_sitl_state(sitl_state_data_t *state_data) {
     return 1;
 }
 
-int set_hardfault_pc(uint32_t pc) {
-    gz::transport::Node node;
-    gz::msgs::UInt32 request;
-    request.set_data(pc);
-
-    gz::msgs::Empty response;
-    bool result;
-    bool executed = node.Request("/set_hardfault_pc", request, 5000, response, result);
-    return 1;
-}
-
 int set_servo_pwm(int channel, int pwm) {
     if (channel < 0 || channel >= 16 || pwm < 0 || pwm > 2000) {
         return 0;

@@ -6,7 +6,7 @@ use libafl::state::HasCurrentTestcase;
 use libafl::state::HasExecutions;
 use std::{borrow::Cow, num::NonZeroUsize};
 use libafl_bolts::Named;
-use crate::new_input::TargetInput;
+use crate::cpexp_input::TargetInput;
 use crate::cpexp_state::{HasOptimizeParams, HasOptimizer, HasInputLibrary, HasLatestRobustness};
 
 pub struct PhiStage {

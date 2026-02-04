@@ -2,7 +2,7 @@ use core::panic;
 use std::time::Duration;
 use gz_transport::Node;
 use protobuf::text_format::parse_from_str;
-use gz_msgs::{pose::Pose, pose_v::Pose_V,};
+use gz_msgs::{pose::Pose, pose_v::Pose_V, clock::Clock};
 use gz_msgs::gz_msgs10::{
     any::Any, empty::Empty, stringmsg::StringMsg
 };

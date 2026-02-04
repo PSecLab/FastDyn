@@ -1,4 +1,10 @@
-use baby_fuzzer::gz_state_parser::{get_raw_gz_data, get_raw_hf_status, extract_block_from_gz_data, get_nested_pose};
+use baby_fuzzer::gz_state_parser::{
+    get_raw_gz_data, 
+    get_raw_hf_status, 
+    extract_block_from_gz_data, 
+    get_nested_pose,
+    get_sim_time
+};
 
 use core::panic;
 use std::{env, io::Write};
@@ -20,9 +26,17 @@ use std::thread::sleep;
 fn record_state_at_time(gz_data: &str, file: &File) -> f64 {
 
     // First, extract all the blocks from the raw gz data
+    // The clock will always be available because it must have been to call this function
     let clock_block: String = extract_block_from_gz_data(gz_data, "clock");
+    let sim_time: f64 = get_sim_time(&clock_block);
+
+    // Other blocks may not be available yet, in that case don't record but send the time back
     let pose_block: String = extract_block_from_gz_data(gz_data, "pose");
-    println!("EXTRACTED POSE BLOCK: {}", pose_block);
+    if pose_block.is_empty() {
+        println!("Warning: Pose block not available at sim time {}. Skipping this time step...", sim_time);
+        return sim_time;
+    }
+    // println!("EXTRACTED POSE BLOCK: {}", pose_block);
     // let imu_block: String = extract_block_from_gz_data(gz_data, "imu");
     // let magnetometer_block: String = extract_block_from_gz_data(gz_data, "mag");
     // let navsat_block: String = extract_block_from_gz_data(gz_data, "navsat");
@@ -30,86 +44,31 @@ fn record_state_at_time(gz_data: &str, file: &File) -> f64 {
     // Parse the blocks into their respective protobuf messages
 
     // let pose_proto: Pose = get_nested_pose(pose_block, "pose");
-    let pose_proto: Pose_V = parse_from_str::<Pose_V>(&pose_block).unwrap();
-    let pose_proto: Pose = pose_proto.pose[0].clone();
+    let pose_v_proto: Pose_V = parse_from_str::<Pose_V>(&pose_block).unwrap();
+    // if pose_v_proto.pose.is_empty() {
+    //     println!("Warning: Pose_V message has no poses at sim time {}. Skipping state recording.", sim_time);
+    //     return sim_time;
+    // }
+    let pose_proto: Pose = pose_v_proto.pose[0].clone();
+    // if !pose_v_proto.pose.is_empty() {
+    //     pose_proto = pose_v_proto.pose[0].clone();
+    // }
+
+    let x_pos = pose_proto.position.x;
+    let y_pos = pose_proto.position.y;
+    let z_pos = pose_proto.position.z;
 
     // let imu_proto: IMU = parse_from_str::<IMU>(&imu_block).unwrap();
     // let magnetometer_proto: Magnetometer = parse_from_str::<Magnetometer>(&magnetometer_block).unwrap();
     // let navsat_proto: NavSat = parse_from_str::<NavSat>(&navsat_block).unwrap();
-
-    // Get all the relevant data fields
-    let sim_time: f64 = get_sim_time(&clock_block);
-    let x_pos: f64 = pose_proto.position.x;
-    let y_pos: f64 = pose_proto.position.y;
-    let z_pos: f64 = pose_proto.position.z;
+    
     // TODO: Get everything else here!
-
-    // Create the CSV file and append the new line
-    // let file: File = OpenOptions::new()
-    //     .create(true)
-    //     .append(true)
-    //     .open(file_path)
-    //     .unwrap();
 
     let mut writer: BufWriter<&File> = BufWriter::new(&file);
     writeln!(writer, "{},{},{},{}", sim_time, x_pos, y_pos, z_pos).unwrap();
     writer.flush().unwrap();
 
     sim_time
-
-}
-
-fn kill_target_processes() {
-    // Since we cannot block in the harness, we'll just have trace_recorder kill all those processes.
-    // Processes to kill:
-    // - run_and_attach_services.sh
-    // - fd_rover.sh
-    // - mav_command_and_control.py
-
-    // Kill the run_services bash script
-    Command::new("pkill")
-        .args([
-            "-9",
-            "run_and_attach",
-        ])
-        .status()
-        .expect("Failed to execute pkill command for run_and_attach");
-
-    Command::new("pkill")
-        .args([
-            "-9",
-            "ruby",
-        ])
-        .status()
-        .expect("Failed to execute pkill command for ruby");
-
-    Command::new("pkill")
-        .args([
-            "-9",
-            "services",
-        ])
-        .status()
-        .expect("Failed to execute pkill command for services");
-
-    // Kill fd_rover
-    Command::new("pkill")
-        .args([
-            "-9",
-            "qemu",
-        ])
-        .status()
-        .expect("Failed to execute pkill command for fd_rover");
-
-    // Mavproxy
-    Command::new("pkill")
-        .args([
-            "-9",
-            "mav",
-        ])
-        .status()
-        .expect("Failed to execute pkill command for mav");
-
-    println!("All target processes killed.");
 
 }
 
@@ -163,7 +122,7 @@ fn main() {
 
         let gz_data: String = get_raw_gz_data(&mut node);
 
-        println!("GOT GZ DATA: {gz_data}");
+        // println!("GOT GZ DATA: {gz_data}");
 
         if gz_data.is_empty() {
             continue;
@@ -204,21 +163,4 @@ fn main() {
 
         std::thread::sleep(std::time::Duration::from_secs_f64(time_step));
     };
-
-    // Also, kill the gazebo process
-        // let kill_gazebo = Command::new("pkill")
-        //     .args([
-        //         "-2",
-        //         "-f",
-        //         "my_ackermann_w_state.sh",
-        //     ])
-        //     .status()
-        //     .expect("Failed to execute pkill command for gazebo");
-
-        // if !kill_gazebo.success() {
-        //     panic!("Error: pkill gazebo command failed!");
-        // }
-
-    kill_target_processes();
-
 }
