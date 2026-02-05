@@ -266,6 +266,8 @@ where
     ) -> Result<(), Error> {
         start_timer!(state);
 
+        println!("LAMBDA perform_mutational()!");
+
         // Here saturating_sub is needed as self.iterations() might be actually smaller than the previous value before reset.
         /*
         let num = self
@@ -273,9 +275,10 @@ where
             .saturating_sub(self.execs_since_progress_start(state)?);
         */
         let num = self.iterations(state)?;
+        println!("\tnum iterations: {}", num);
         let mut testcase = state.current_testcase_mut()?;
 
-        println!("Got testcase: {:?}", testcase);
+        // println!("Got testcase: {:?}", testcase);
 
         let Ok(input) = I1::try_transform_from(&mut testcase, state) else {
             return Ok(());
@@ -304,7 +307,7 @@ where
             let mut new_input = untransformed.clone();
             new_input.set_env_config(env_string);
 
-            println!("Mutated input: {:?}", new_input);
+            // println!("Mutated input: {:?}", new_input);
 
             let (_, corpus_id) =
                 fuzzer.evaluate_filtered(state, executor, manager, &new_input)?;
@@ -338,9 +341,9 @@ where
             }
 
             // Debug prints just to make sure I'm doing this right
-            println!("Original asked values: {:?}", asked_values);
-            println!("Params as f64s: {:?}", params_as_f64s);
-            println!("Do the lengths match? {}", params_as_f64s.len() == asked_values.len());
+            // println!("Original asked values: {:?}", asked_values);
+            // println!("Params as f64s: {:?}", params_as_f64s);
+            // println!("Do the lengths match? {}", params_as_f64s.len() == asked_values.len());
             
             let tell_array: Array1<f64> = Array1::from(params_as_f64s);
             state.tell_optimizer(&tell_array, state.latest_robustness());
