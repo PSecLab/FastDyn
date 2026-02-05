@@ -16,6 +16,7 @@ MARKER_COLOR     = "steelblue"
 MARKER_SIZE      = 40
 NUM_MARKERS      = 30          # evenly spaced along x-axis
 FIGURE_SIZE      = (10, 6)
+TIMEFRAME_HOURS = 3.0
 
 # ============================
 # Plotting function
@@ -32,14 +33,24 @@ def plot_block_growth(block_dict):
 
     plt.figure(figsize=FIGURE_SIZE)
 
+    end_time = TIMEFRAME_HOURS
+    # If the last data point is earlier than the timeframe,
+    # # extend the curve horizontally with the last block count.
+    if times_hours[-1] < end_time:
+        extended_times = np.append(times_hours, end_time)
+        extended_counts = np.append(counts, counts[-1])
+    else:
+        extended_times = times_hours
+        extended_counts = counts
+
     # Main line
-    plt.plot(times_hours, counts, linewidth=LINE_WIDTH, color=LINE_COLOR)
+    plt.plot(extended_times, extended_counts, linewidth=LINE_WIDTH, color=LINE_COLOR)
 
     # Gradient fill under the line
-    plt.fill_between(times_hours, counts, color=FILL_COLOR, alpha=FILL_ALPHA)
+    plt.fill_between(extended_times, extended_counts, color=FILL_COLOR, alpha=FILL_ALPHA)
 
     # Evenly spaced markers along the x-axis
-    marker_times = np.linspace(times_hours.min(), times_hours.max(), NUM_MARKERS)
+    marker_times = np.linspace(0, TIMEFRAME_HOURS, NUM_MARKERS)
     marker_counts = np.interp(marker_times, times_hours, counts)
 
     plt.scatter(marker_times, marker_counts,
@@ -51,6 +62,8 @@ def plot_block_growth(block_dict):
     plt.xlabel("Time since start (hours)")
     plt.ylabel("Unique block count")
     plt.grid(True, linestyle="--", alpha=0.5)
+
+    plt.xlim(0, TIMEFRAME_HOURS)
 
     plt.tight_layout()
     plt.show()
