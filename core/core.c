@@ -647,6 +647,19 @@ static void tb_exec_cb(unsigned int cpu_index, void *udata)
     core_icount_add(n);
 }
 
+static void bbl_log() {
+    uint64_t unique = 0;
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        if (bbl_sets[i]) unique += (uint64_t)g_hash_table_size(bbl_sets[i]);
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t cur_time = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+
+    fprintf(stderr, "[TB] Unique blocks = %lu at time %lu\n", unique, cur_time);
+}
+
 static void bbl_tb_exec_cb(unsigned int vcpu_index, void *userdata)
 {
     uint64_t tb_pc = (uint64_t)(uintptr_t)userdata;
@@ -657,7 +670,12 @@ static void bbl_tb_exec_cb(unsigned int vcpu_index, void *userdata)
     tb_pc &= ~1ULL;
 
     bbl_total_tb_exec[vcpu_index] += 1;
+    gboolean is_new = !g_hash_table_contains(bbl_sets[vcpu_index], (gpointer)(uintptr_t)tb_pc);
     g_hash_table_add(bbl_sets[vcpu_index], (gpointer)(uintptr_t)tb_pc);
+
+    if (is_new) {
+        bbl_log();
+    }
 }
 
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)

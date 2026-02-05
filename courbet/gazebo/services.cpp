@@ -1068,11 +1068,11 @@ int main(int argc, char **argv)
   //   "/get_yaw_reading"
   // );
 
-  CorrectMagService correctMagService(
-    node,
-    "/model/" + model_name + "/pose",
-    "/get_corrected_mag"
-  );
+  // CorrectMagService correctMagService(
+  //   node,
+  //   "/model/" + model_name + "/pose",
+  //   "/get_corrected_mag"
+  // );
 
   std::cout << "ArduPilot Services running...\n";
 

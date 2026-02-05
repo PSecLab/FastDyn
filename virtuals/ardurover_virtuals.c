@@ -1507,13 +1507,13 @@ void set_hardfault_status(unsigned int cpu_index, void *udata) {
  * Called like this from virtuals.txt:
  *
  * <address/symbol> set_hardfault_pc
- */
-void set_hardfault_status(unsigned int cpu_index, void *udata) {
-    // we have just entered the hardfault handler
-    // use the stack pointer to find the faulting pc
-    uint32_t sp = qemu_get_register(ARM_V7M_SP);
-    uint32_t faulting_pc = 0;
-    qemu_plugin_read_memory(sp + 24, (uint8_t*)&faulting_pc, sizeof(uint32_t));
-    fprintf(stderr, "Hardfault at PC: 0x%08X\n", faulting_pc);
-    set_hardfault_pc(faulting_pc);
-}
+//  */
+// void set_hardfault_status(unsigned int cpu_index, void *udata) {
+//     // we have just entered the hardfault handler
+//     // use the stack pointer to find the faulting pc
+//     uint32_t sp = qemu_get_register(ARM_V7M_SP);
+//     uint32_t faulting_pc = 0;
+//     qemu_plugin_read_memory(sp + 24, (uint8_t*)&faulting_pc, sizeof(uint32_t));
+//     fprintf(stderr, "Hardfault at PC: 0x%08X\n", faulting_pc);
+//     set_hardfault_pc(faulting_pc);
+// }

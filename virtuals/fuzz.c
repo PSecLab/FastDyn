@@ -191,31 +191,32 @@ void anchor(unsigned int cpu_index, void *udata)
     }
     last_anchor_id = strtoul(anchor_id, NULL, 0);
 
-    time_t current_time = time(NULL);
-    if (current_time - last_time >= 10) {
-        last_time = current_time;
-        printf("BB coverage at %lu: ", current_time - start_time);
-        print_unique_bbl();
-    }
+    // time_t current_time = time(NULL);
+    // if (current_time - last_time >= 10) {
+    //     last_time = current_time;
+    //     printf("BB coverage at %lu: ", current_time - start_time);
+    //     print_unique_bbl();
+    // }
 
     uint32_t read_count = 0;
-    // uint8_t length = 0;
-    // uint32_t msgid = 0;
-    // uint8_t crc_extra = 0;
-    // uint8_t sys_id = 255;
-    // uint8_t comp_id = 190;
+    // uint8_t length = 32;
+    // uint32_t msgid = 75;
+    // uint8_t crc_extra = 158;
+    // uint8_t sys_id = 126;
+    // uint8_t comp_id = 42;
     // const uint8_t *payload = NULL;
-    // uint8_t real_length = 0;
+    // uint8_t real_length = 32;
     // bool validation_mode = true;
     // //validation mode
     // if (validation_mode) {
     //     printf("[Fuzz] Using fixed input for validation mode\n");
     //     // use fixed input for validation
-    //     length = 25;
-    //     real_length = 25;
-    //     msgid = 126; // GPS_RAW_INT
-    //     crc_extra = 220; // GPS_RAW_INT
-    //     static const uint8_t fixed_payload[25] = {0x00, 0x9C, 0xA8, 0x9D, 0x81, 0xEB, 0x66, 0x66, 0xDF, 0x66, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x6B, 0x1D};
+    //     // length = 25;
+    //     // real_length = 25;
+    //     // msgid = 126; // GPS_RAW_INT
+    //     // crc_extra = 220; // GPS_RAW_INT
+    //     static const uint8_t fixed_payload[32] = {0x72, 0x00, 0xB4, 0x8B, 0x7F, 0x97, 0x00, 0xFF, 0x01, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x20, 0x47,
+    //                                               0xB3, 0xA2, 0x6E, 0x75, 0x4C, 0x82, 0x00, 0x91, 0x9C, 0x91, 0x10, 0x00, 0x91, 0x01, 0x00, 0x65};
     //     payload = fixed_payload;
     //     // goto end;
     // }
