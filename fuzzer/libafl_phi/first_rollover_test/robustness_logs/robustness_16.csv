@@ -1,0 +1,6 @@
+Formula,Robustness
+Roll_boundary,0.7853963051299608
+Pitch_boundary,0.785398112473233
+Pre_fail_roll_boundary,0.2999981417399608
+Roll_growth_boundary,0.4999894161516653
+Lateral_accel_boundary,-1.1551764427553919

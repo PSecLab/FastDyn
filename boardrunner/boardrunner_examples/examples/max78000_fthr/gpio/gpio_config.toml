@@ -1,106 +1,148 @@
 # ==============================================================================
-#                              Memory Configuration
+# Machine (machine-wide + QEMU target options)
 # ==============================================================================
-[Memory]
-main_ram_size = "512M"
-shared_ram_size = "512K"
-ram_base_addr = "0x20000000"
-shared_ram_base_addr = "0x30000000"
-shared_mem_path = "/dev/shm"        # Directory for memory backend files
-main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
-shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
-init_nsvtor = "0x10000000"
+[Machine]
+platform = "Max78000"
 
-# ==============================================================================
-#                                CPU Configuration
-# ==============================================================================
-[CPU]
-# --- Core Emulation & Plugin Settings ---
-arch = "arm"
-machine = "cortexm"
-cpu = "cortex-m4"
-plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
-monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-platform = "STM32F7x9"
-binary = "boardrunner_examples/examples/max78000fthr_revA/gpio/firmware/GPIO.elf"
-# --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
-enable_gdb = false
-stop_on_start = false
-launch_gdb = false
+
 monitor_port = 5555
-qmp_socket = "/tmp/qmp.sock"
-log_file = "qemu.log"
-log_options = "in_asm,op"
-semihosting = true
+qmp_socket   = "/tmp/qmp.sock"
+
+enable_gdb    = false
+stop_on_start = false
+launch_gdb    = false
+
+semihosting        = true
 semihosting_config = "enable=on,target=native"
 
-# --- Embedded CPU Behavior Configurations ---
-logger_content = """
-# --- Plugin Logger Configuration ---
-# level = DEBUG
-# output = stderr
-"""
-
-
+coverage     = true
+bbl_coverage = true
+finline      = ""
 
 # ==============================================================================
-#                              Device Configuration
+# Memory
+# ==============================================================================
+[Memory]
+
+  # ---------------------------------------------------------------------------
+  # Main memory (required)
+  # ---------------------------------------------------------------------------
+  [Memory.main]
+  id           = "ram0"
+  base_address = "0x20000000"
+  memory_size  = "512M"
+  memory_type  = "SRAM"
+
+  backend     = "file"                 # file | ram | memfd
+  memory_file = "/dev/shm/my_m4_ram3"  # main RAM backend file
+
+  share    = true
+  prealloc = false
+
+
+  # ---------------------------------------------------------------------------
+  # Extra memory banks (optional)  (your old "shared RAM")
+  # ---------------------------------------------------------------------------
+  [[Memory.ram1]]
+  id           = "ram1"
+  index        = 1
+  base_address = "0x30000000"
+  memory_size  = "512K"
+  memory_type  = "SRAM"
+
+  backend     = "file"
+  memory_file = "/dev/shm/my_m4_ram"
+
+  share    = true
+  prealloc = false
+
+# ==============================================================================
+# CPUs
+# ==============================================================================
+[CPU]
+
+  [[CPU.cpu0]]
+  arch    = "arm"
+  machine = "cortexm"
+  cpu     = "cortex-m4"
+
+  binary      = "boardrunner/boardrunner_examples/examples/max78000_fthr/gpio/firmware/GPIO.elf"
+
+  init_nsvtor = "0x10000000"
+
+  plugin_library = "build/libfastdyn.so"
+  monitor_elf    = "../ws/monitor.elf"
+
+  log_file    = "qemu.log"
+  log_options = "in_asm,op"
+
+  twintrace       = "None"                 # record | replay | None
+  hardware_trace  = "hardware_log/io.log"  # useful for replay workflows
+
+  logger_content = """
+  # --- Plugin Logger Configuration ---
+  # level  = DEBUG
+  # output = stderr
+  """
+
+# ==============================================================================
+# Device model defaults (global settings per model type)
+# ==============================================================================
+[Device.Models]
+
+  [Device.Models.elder]
+  # (empty by default)
+
+  [Device.Models.passthrough]
+  backend = "openocd"
+
+  [Device.Models.classic]
+  # (empty by default)
+
+  [Device.Models.twintrace]
+  backend = "openocd"
+
+  [Device.Models.unhandled]
+  # (empty by default)
+
+# ==============================================================================
+# Devices (MAX78000)
 # ==============================================================================
 
-# --- Model-Specific Configurations ---
-# Define the global arguments for each type of plugin device model here.
-
-[Device.Models.elder]
-    # The libhw backend is a global argument for the elder model.
-
-[Device.Models.passthrough]
-    backend = "openocd"
-
-[Device.Models.classic]
-    # The classic model has no global arguments.
-
-[Device.Models.unhandled]
-    # This model explicitly marks memory as unhandled.
-
+# GPIO2
 [Device.gpio2]
-    # ranges = ["0x40000000-0x40010FFF"]
-    ranges = ["0x40080400-0x400805FF"]
-    description = "GPIO Port 2 for general-purpose I/O."
-    read_priority = "elder"  #only the read from elder model is considered.
-    # The configuration for this specific device when handled by the elder model.
-    [[Device.gpio2.handlers]]
-        # This device is now handled by the elder model, directly linking it
-        # to the 'scroll_config' defined above.
-        model   = "elder"
-        enabled = true
-        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+  ranges       = [["0x40080400", "0x400805FF"]]
+  description  = "MAX78000 GPIO Port 2 for general-purpose I/O."
+  read_priority = "elder"
 
-    [[Device.gpio2.handlers]]
-        # This device is now handled by the elder model, directly linking it
-        # to the 'scroll_config' defined above.
-        model   = "passthrough"
-        enabled = false
+  [[Device.gpio2.handlers]]
+  model   = "elder"
+  enabled = true
+  scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
-[Device.unhandled_space]
-    ranges = ["0x40000000-0x400803FF", "0xE0000000-0xEFFFFFFF", "0x40080600-0xE00FFFFF"]
-    description = "Memory regions that are explicitly not handled by any model."
+  [[Device.gpio2.handlers]]
+  model   = "passthrough"
+  enabled = false
 
-    [[Device.unhandled_space.handlers]]
-        model = "passthrough"
-        enabled = true
+# Everything else: passthrough (hole for GPIO2 preserved)
+[Device.passthrough_space]
+  irq = [
+    [0, 20],
+    [21, 25],
+    [41, 41],
+    [53, 53],
+    [69, 69]
+  ]
 
-# [Device.unhandled_space]
-#     irq = "0-20:21-25:41:53:69"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
-#     ranges = [
-#         "0x40000000-0x4FFFFFFF",
-#         # "0x40040000-0x4004FFFF",
-#         # "0x40080000-0x4008FFFF",
-#         "0xE0000000-0xEFFFFFFF",
-#         "0x50000000-0x50FFFFFF"
-#     ]
-#     description = "Memory regions that are explicitly not handled by any model."
+  ranges = [
+    ["0x40000000", "0x400803FF"],   # before GPIO2
+    ["0x40080600", "0xE00FFFFF"],   # after GPIO2 up to end of peripheral space
+    ["0xE0000000", "0xEFFFFFFF"]    # system space
+  ]
 
-#     [[Device.unhandled_space.handlers]]
-#         model = "passthrough"
-#         enabled = true
+  description = "Memory regions explicitly not handled by any MAX78000 model."
+
+  [[Device.passthrough_space.handlers]]
+  model   = "passthrough"
+  enabled = true

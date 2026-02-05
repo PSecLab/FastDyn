@@ -3,9 +3,9 @@
 This directory builds:
 
 - **`libboardrunner_vio.so`**: the shared “VIO / API” library (I2C, SPI, DMA, PTY helpers, etc.)
-- **`model.so`**: a single **device model** compiled from `model/model.c`
+- **`*.so`**: one **device model** per `model/*.c` (e.g., `model.c` → `model.so`, `slave.c` → `slave.so`)
 
-The idea is simple: you keep **one** reusable VIO/API library, and you repeatedly rebuild **one** model (`model.so`) from `model.c` for different peripherals/boards/firmwares, then rename it to what your runtime expects (e.g., `uart.so`, `spi.so`, etc.).
+The idea is simple: you keep **one** reusable VIO/API library, and you can build **multiple** models at once by placing sources in `model/`. Each `.c` file becomes its own `.so` with the same base name.
 
 ---
 
@@ -25,11 +25,13 @@ boardrunner_sdk/
 │ ├── pty.h
 │ └── spi.h
 ├── model/
-│ └── model.c # user-edited model source; builds into model.so
+│ ├── model.c # user-edited model source; builds into model.so
+│ └── slave.c # example model; builds into slave.so
 ├── CMakeLists.txt
 └── build/ # out-of-tree build dir (generated)
 │ └── libboardrunner_vio.so
-│ └── model.so
+│ ├── model.so
+│ └── slave.so
 ```
 
 ## Prerequisites
@@ -56,34 +58,29 @@ cmake --build build -j
 
 ## Writing a Model
 Your model code lives in:
-    - model/model.c
+    - model/*.c (one file per model)
 
 Models typically include the VIO umbrella header:
 ```c
 #include <boardrunner/vio.h>
 ```
 
-## Producing Multiple Models (Rename Workflow)
-This SDK intentionally builds one model target called model.so.
+## Producing Multiple Models (One File Each)
+This SDK builds one `.so` per `.c` file in `model/`.
 
 To create multiple models (e.g., UART and SPI) you do:
 
-1. Edit model/model.c for UART
-2. Build
-3. Rename the output
-4. Edit model/model.c for SPI
-5. Build again
-6. Rename again
+1. Create `model/uart.c` and `model/spi.c`
+2. Build once
 
-For example,
 ```bash
-# 1) Build UART model
 cmake --build build -j
-cp build/model.so build/uart.so
+```
 
-# 2) Modify model/model.c to implement SPI model
-cmake --build build -j
-cp build/model.so build/spi.so
+Outputs will be:
+```bash
+build/uart.so
+build/spi.so
 ```
 
 Now you can pass both `uart.so` and `spi.so` to your runtime in the same run, and they will both reuse the same `libboardrunner_vio.so`.
@@ -91,15 +88,15 @@ Now you can pass both `uart.so` and `spi.so` to your runtime in the same run, an
 > Tip: keep per-model outputs under a stable folder (e.g., build/models/uart.so, build/models/spi.so) if you want to archive multiple versions.
 
 ## Runtime Loading: Shared Library Path (RPATH vs LD_LIBRARY_PATH)
-`model.so` is linked against `libboardrunner_vio.so`.
+Each model `.so` is linked against `libboardrunner_vio.so`.
 
 The typical setup is:
 
-Keep `model.so` (or your renamed `uart.so`, `spi.so`) in the same directory as `libboardrunner_vio.so`.
+Keep your model `.so` files in the same directory as `libboardrunner_vio.so`.
 
 The model uses an RPATH like `$ORIGIN` so the loader resolves the dependency next to the model.
 
-That means if you move `uart.so` somewhere else, you must do one of the following:
+That means if you move a model `.so` somewhere else, you must do one of the following:
 
 #### Option A (recommended): move the VIO library with it
 

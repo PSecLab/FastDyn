@@ -140,7 +140,7 @@ pub struct CPExpState<C, I, R, SC> {
     optimizer: Option<BayesianOptimizer>,
 
     // Should we execute phi stage (true) or lambda stage (false)?
-    optimize_params: bool,
+    // optimize_params: bool,
 
     // Contains all information about parameter/environmental inputs
     input_library: CPExpInput,
@@ -183,19 +183,19 @@ impl <C, I, R, SC> HasOptimizer for CPExpState<C, I, R, SC> {
 
 }
 
-pub trait HasOptimizeParams {
-    fn optimize_params(&self) -> bool;
-    fn optimize_params_mut(&mut self) -> &mut bool;
-}
+// pub trait HasOptimizeParams {
+//     fn optimize_params(&self) -> bool;
+//     fn optimize_params_mut(&mut self) -> &mut bool;
+// }
 
-impl <C, I, R, SC> HasOptimizeParams for CPExpState<C, I, R, SC> {
-    fn optimize_params(&self) -> bool {
-        self.optimize_params
-    }
-    fn optimize_params_mut(&mut self) -> &mut bool {
-        &mut self.optimize_params
-    }
-}
+// impl <C, I, R, SC> HasOptimizeParams for CPExpState<C, I, R, SC> {
+//     fn optimize_params(&self) -> bool {
+//         self.optimize_params
+//     }
+//     fn optimize_params_mut(&mut self) -> &mut bool {
+//         &mut self.optimize_params
+//     }
+// }
 
 pub trait HasInputLibrary {
     fn input_library(&self) -> &CPExpInput;
@@ -1036,7 +1036,7 @@ where
         feedback: &mut F,
         objective: &mut O,
         bo: Option<BayesianOptimizer>,
-        phi_first: bool,
+        // phi_first: bool,
         input_library: CPExpInput,
     ) -> Result<Self, Error>
     where
@@ -1071,7 +1071,7 @@ where
             multicore_inputs_processed: None,
 
             optimizer: bo,
-            optimize_params: phi_first,
+            // optimize_params: phi_first,
             input_library,
             latest_robustness: std::f64::INFINITY,
 

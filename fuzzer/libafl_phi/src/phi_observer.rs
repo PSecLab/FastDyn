@@ -24,12 +24,21 @@ use std::path::Path;
 use crate::cpexp_state::{HasLatestRobustness, HasOptimizer};
 
 // Example: Capturing timestamp, x, y, z coords
+// #[derive(Deserialize)]
+// struct State {
+//     time: f64,
+//     x: f64,
+//     y: f64,
+//     z: f64,
+// }
+
 #[derive(Deserialize)]
 struct State {
     time: f64,
-    x: f64,
-    y: f64,
-    z: f64,
+    roll: f64,
+    pitch: f64,
+    roll_rate: f64,
+    lateral_accel: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -86,7 +95,7 @@ where
 
     fn pre_exec(&mut self, state: &mut S, _input: &I) -> Result<(), Error> {
 
-        println!("Hello from PhysicalObserver PRE_exec!");
+        // println!("Hello from PhysicalObserver PRE_exec!");
         // self.latest_robustness_vec[0] = self.count as f64;
         
         if self.recorder_process.is_some() {
@@ -120,15 +129,24 @@ where
     fn post_exec(&mut self, state: &mut S, _input: &I, _exit_kind: &ExitKind,) -> Result<(), Error> {
 
         // lambda function to add a state as a hashmap into the banquo Trace object
-        fn create_state(x_val: f64, y_val: f64, z_val: f64) -> HashMap<&'static str, f64> {
+        // fn create_state(x_val: f64, y_val: f64, z_val: f64) -> HashMap<&'static str, f64> {
+        //     HashMap::from([
+        //         ("x", x_val), 
+        //         ("y", y_val), 
+        //         ("z", z_val),
+        //     ])
+        // } 
+
+        fn create_state(roll: f64, pitch: f64, roll_rate: f64, lateral_accel: f64) -> HashMap<&'static str, f64> {
             HashMap::from([
-                ("x", x_val), 
-                ("y", y_val), 
-                ("z", z_val),
+                ("roll", roll), 
+                ("pitch", pitch),
+                ("roll_rate", roll_rate),
+                ("lateral_accel", lateral_accel),
             ])
         } 
 
-        println!("Hello from PhysicalObserver POST_exec!");
+        // println!("Hello from PhysicalObserver POST_exec!");
 
         if self.recorder_process.is_none() {
             // The recorder process should NOT be none...
@@ -144,7 +162,7 @@ where
         self.recorder_process = None;
 
         let newest_trace_log_path = format!("{}/trace_{}.csv", self.trace_log_dir, state.executions());
-        println!("Newest trace log path: {}", newest_trace_log_path);
+        // println!("Newest trace log path: {}", newest_trace_log_path);
 
         let csv_reader_status = csv::ReaderBuilder::new()
             .has_headers(false)
@@ -161,7 +179,8 @@ where
         let mut trace: Trace<HashMap<&str, f64>> = Trace::new();
         for result in csv_reader.deserialize() {
             let state: State = result.unwrap();
-            trace.insert(state.time, create_state(state.x, state.y, state.z)); 
+            trace.insert(state.time, create_state(state.roll, state.pitch, state.roll_rate, state.lateral_accel));
+            // trace.insert(state.time, create_state(state.x, state.y, state.z)); 
             // println!("Time: {}, x: {}, y: {}, z: {}", state.time, state.x, state.y, state.z);
         }
 
@@ -180,23 +199,50 @@ where
         // let z_bounds = (0, 0.1);
 
         // Note: with banquo you can only use <= and constants in predicates
-        let x_min_pred: banquo::Predicate = predicate!{ -25.0 <= x };
-        let x_max_pred: banquo::Predicate = predicate!{ x <= 10.0 };
-        let y_min_pred: banquo::Predicate = predicate!{ -5.0 <= y };
-        let y_max_pred: banquo::Predicate = predicate!{ y <= 60.0 };
+        // let x_min_pred: banquo::Predicate = predicate!{ -25.0 <= x };
+        // let x_max_pred: banquo::Predicate = predicate!{ x <= 10.0 };
+        // let y_min_pred: banquo::Predicate = predicate!{ -5.0 <= y };
+        // let y_max_pred: banquo::Predicate = predicate!{ y <= 60.0 };
         // let z_min_pred: banquo::Predicate = predicate!{ -1.0 <= z };
         // let z_max_pred: banquo::Predicate = predicate!{ z <= 5.0 };
 
+        // pi / 4 =~ 0.78539816339
+        let roll_min_pred: banquo::Predicate = predicate!{ -0.78539816339 <= roll };
+        let roll_max_pred: banquo::Predicate = predicate!{ roll <= 0.78539816339 };
+
+        let pitch_min_pred: banquo::Predicate = predicate!{ -0.78539816339 <= pitch };
+        let pitch_max_pred: banquo::Predicate = predicate!{ pitch <= 0.78539816339 };
+
+        let pre_fail_roll_min_pred: banquo::Predicate = predicate!{ -0.3 <= roll };
+        let pre_fail_roll_max_pred: banquo::Predicate = predicate!{ roll <= 0.3 };
+
+        let roll_growth_min_pred: banquo::Predicate = predicate!{ -0.5 <= roll_rate };
+        let roll_growth_max_pred: banquo::Predicate = predicate!{ roll_rate <= 0.5 };
+
+        let lat_accel_min_pred: banquo::Predicate = predicate!{ -3.9 <= lateral_accel };
+        let lat_accel_max_pred: banquo::Predicate = predicate!{ lateral_accel <= 3.9 };
+
         // Either formulas are impossible to store generically in a single vector or I am a bot (most likely)
         // So for now just manually call evaluate() and push the results into latest_robustness_vec
-        let formula_x = Always::unbounded(And::new(x_min_pred, x_max_pred));
-        let formula_y = Always::unbounded(And::new(y_min_pred, y_max_pred));
+        // let formula_x = Always::unbounded(And::new(x_min_pred, x_max_pred));
+        // let formula_y = Always::unbounded(And::new(y_min_pred, y_max_pred));
         // let formula_z = Always::unbounded(And::new(z_min_pred, z_max_pred));
+        let formula_roll = Always::unbounded(And::new(roll_min_pred, roll_max_pred));
+        let formula_pitch = Always::unbounded(And::new(pitch_min_pred, pitch_max_pred));
+        let formula_pre_fail_roll = Always::unbounded(And::new(pre_fail_roll_min_pred, pre_fail_roll_max_pred));
+        let formula_roll_growth = Always::unbounded(And::new(roll_growth_min_pred, roll_growth_max_pred));
+        let formula_lat_accel = Always::unbounded(And::new(lat_accel_min_pred, lat_accel_max_pred));
 
-        self.latest_robustness_vec.clear();
-        self.latest_robustness_vec.push(evaluate(&trace, &formula_x).unwrap());
-        self.latest_robustness_vec.push(evaluate(&trace, &formula_y).unwrap());
+        // self.latest_robustness_vec.clear();
+        // self.latest_robustness_vec.push(evaluate(&trace, &formula_x).unwrap());
+        // self.latest_robustness_vec.push(evaluate(&trace, &formula_y).unwrap());
         // self.latest_robustness_vec.push(evaluate(&trace, &formula_z).unwrap());
+        self.latest_robustness_vec.clear();
+        self.latest_robustness_vec.push(evaluate(&trace, &formula_roll).unwrap());
+        self.latest_robustness_vec.push(evaluate(&trace, &formula_pitch).unwrap());
+        self.latest_robustness_vec.push(evaluate(&trace, &formula_pre_fail_roll).unwrap());
+        self.latest_robustness_vec.push(evaluate(&trace, &formula_roll_growth).unwrap());
+        self.latest_robustness_vec.push(evaluate(&trace, &formula_lat_accel).unwrap());
 
         // println!("Robustness for execution {}: {:?}", state.executions(), self.latest_robustness_vec);
 
@@ -223,8 +269,11 @@ where
             .expect("Unable to create robustness log file");
 
         writeln!(file, "Formula,Robustness").unwrap();
-        writeln!(file, "X_boundary,{}", self.latest_robustness_vec[0]).unwrap();
-        writeln!(file, "Y_boundary,{}", self.latest_robustness_vec[1]).unwrap();
+        writeln!(file, "Roll_boundary,{}", self.latest_robustness_vec[0]).unwrap();
+        writeln!(file, "Pitch_boundary,{}", self.latest_robustness_vec[1]).unwrap();
+        writeln!(file, "Pre_fail_roll_boundary,{}", self.latest_robustness_vec[2]).unwrap();
+        writeln!(file, "Roll_growth_boundary,{}", self.latest_robustness_vec[3]).unwrap();
+        writeln!(file, "Lateral_accel_boundary,{}", self.latest_robustness_vec[4]).unwrap();
         // writeln!(file, "Z_boundary,{}", self.latest_robustness_vec[2]).unwrap();
         file.flush().unwrap();
 

@@ -1,0 +1,148 @@
+# ==============================================================================
+# Machine (machine-wide + QEMU target options)
+# ==============================================================================
+[Machine]
+platform = "Max78000"
+
+qemu_path = "qemu-system-arm"
+
+monitor_port = 5555
+qmp_socket   = "/tmp/qmp.sock"
+
+enable_gdb    = false
+stop_on_start = false
+launch_gdb    = false
+
+semihosting        = true
+semihosting_config = "enable=on,target=native"
+
+coverage     = true
+bbl_coverage = true
+finline      = ""
+
+# ==============================================================================
+# Memory
+# ==============================================================================
+[Memory]
+
+  # ---------------------------------------------------------------------------
+  # Main memory (required)
+  # ---------------------------------------------------------------------------
+  [Memory.main]
+  id           = "ram0"
+  base_address = "0x20000000"
+  memory_size  = "512M"
+  memory_type  = "SRAM"
+
+  backend     = "file"                 # file | ram | memfd
+  memory_file = "/dev/shm/my_m4_ram3"  # main RAM backend file
+
+  share    = true
+  prealloc = false
+
+
+  # ---------------------------------------------------------------------------
+  # Extra memory banks (optional)  (your old "shared RAM")
+  # ---------------------------------------------------------------------------
+  [[Memory.ram1]]
+  id           = "ram1"
+  index        = 1
+  base_address = "0x30000000"
+  memory_size  = "512K"
+  memory_type  = "SRAM"
+
+  backend     = "file"
+  memory_file = "/dev/shm/my_m4_ram"
+
+  share    = true
+  prealloc = false
+
+# ==============================================================================
+# CPUs
+# ==============================================================================
+[CPU]
+
+  [[CPU.cpu0]]
+  arch    = "arm"
+  machine = "cortexm"
+  cpu     = "cortex-m4"
+
+  binary = "boardrunner/boardrunner_examples/examples/max78000_fthr/usart/firmware/UART_firmware.elf"
+
+  init_nsvtor = "0x10000000"
+
+  plugin_library = "build/libfastdyn.so"
+  monitor_elf    = "../ws/monitor.elf"
+
+  log_file    = "qemu.log"
+  log_options = "in_asm,op"
+
+  twintrace       = "None"                 # record | replay | None
+  hardware_trace  = "hardware_log/io.log"  # useful for replay workflows
+
+  logger_content = """
+  # --- Plugin Logger Configuration ---
+  # level  = DEBUG
+  # output = stderr
+  """
+
+# ==============================================================================
+# Device model defaults (global settings per model type)
+# ==============================================================================
+[Device.Models]
+
+  [Device.Models.elder]
+  # (empty by default)
+
+  [Device.Models.passthrough]
+  backend = "openocd"
+
+  [Device.Models.classic]
+  # (empty by default)
+
+  [Device.Models.twintrace]
+  backend = "openocd"
+
+  [Device.Models.unhandled]
+  # (empty by default)
+
+# ==============================================================================
+# Devices (MAX78000)
+# ==============================================================================
+
+# UART0 (Low Power UART)
+[Device.uart]
+  ranges       = [["0x40042000", "0x40042FFF"]]
+  description  = "MAX78000 UART0 peripheral (low power UART)."
+  read_priority = "elder"
+
+  [[Device.uart.handlers]]
+  model   = "elder"
+  enabled = true
+  scroll  = "boardrunner/boardrunner_sdk/build/model.so"
+
+  [[Device.uart.handlers]]
+  model   = "passthrough"
+  enabled = false
+
+# Everything else: passthrough (hole for UART0 preserved)
+[Device.passthrough_space]
+  irq = [
+    [0, 20],
+    [21, 25],
+    [41, 41],
+    [53, 53],
+    [69, 69]
+  ]
+
+  ranges = [
+    ["0x40000000", "0x40041FFF"],   # before UART0
+    ["0x40043000", "0xE00FFFFF"],   # after UART0 up to end of peripheral space
+    ["0xE0000000", "0xEFFFFFFF"]    # system space
+  ]
+
+  description = "Memory regions explicitly not handled by any MAX78000 model."
+
+  [[Device.passthrough_space.handlers]]
+  model   = "passthrough"
+  enabled = true
