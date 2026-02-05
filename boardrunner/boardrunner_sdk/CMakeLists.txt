@@ -83,7 +83,7 @@ target_include_directories(model PRIVATE
   "${QEMU_INCLUDE_DIR}"
 )
 
-target_link_libraries(model PRIVATE boardrunner_vio ${GLIB_LIBRARIES})
+target_link_libraries(model PRIVATE boardrunner_vio ${GLIB_LIBRARIES} ${FASTDYN_LIB})
 
 # Usage:
 #   cmake -S . -B build \
