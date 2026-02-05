@@ -31,8 +31,8 @@ gz-transport = "0.9.0"
 
 # libafl = { path = "../../../crates/libafl", features = ["tui_monitor"] }
 # libafl_bolts = { path = "../../../crates/libafl_bolts" }
-libafl = { path = "/home/ere/fire/LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
-libafl_bolts = { path = "/home/ere/fire/LibAFL-0.15.4/crates/libafl_bolts" }
+libafl = { path = "/root/fire/LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
+libafl_bolts = { path = "/root/fire/LibAFL-0.15.4/crates/libafl_bolts" }
 
 log = { version = "0.4.22", features = ["release_max_level_info"] }
 ordered-float = "5.1.0"

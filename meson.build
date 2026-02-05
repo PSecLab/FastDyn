@@ -1,5 +1,6 @@
 project('fastdyn', 'c')
 cc = meson.get_compiler('c')
+# cpp = meson.get_compiler('cpp')
 
 # suppress MAVLink packed warnings
 add_project_arguments('-Wno-address-of-packed-member', language : 'c')
@@ -111,15 +112,20 @@ srcs += files(
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
-  'libs/ring_buffer.c',
-  'libs/mavlink_lib.c',
 )
 
 if ENABLE_LIBGZ
 srcs += files(
   'libs/gcs_receiver.c',
-
+  'libs/ring_buffer.c',
+  'libs/mavlink_lib.c',
 )
+endif
+
+if ENABLE_LIBFUZZ
+  srcs += files(
+    'virtuals/fuzz.c',
+  )
 endif
 
 if ENABLE_LIBDEV
@@ -137,12 +143,6 @@ if ENABLE_LIBHW
   'device_models/elder/device_config.c',
   'device_models/twintrace/twintrace.c',
   'device_models/elder/inih/ini.c'
-  )
-endif
-
-if ENABLE_LIBFUZZ
-  srcs += files(
-    'virtuals/fuzz.c',
   )
 endif
 

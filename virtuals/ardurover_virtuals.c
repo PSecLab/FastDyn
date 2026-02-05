@@ -22,6 +22,8 @@
 // Global to track last sim time from QEMU
 _Atomic int64_t last_sim_time_ns = 0;
 
+int fuzz_is_running();
+
 static void catch_up(void *opaque)
 {
     (void) opaque;
@@ -30,7 +32,11 @@ static void catch_up(void *opaque)
 
     while (1) {
         int64_t sim_ns = atomic_load(&last_sim_time_ns);
-
+#if ENABLE_LIBFUZZ
+        if (!fuzz_is_running()) {
+            exit(0);
+        }
+#endif
         if (sim_ns != last_seen) {
             double target_time_s = (double)sim_ns / 1e9;
             if (!advance_simulation(target_time_s)) {
@@ -1495,3 +1501,19 @@ void set_hardfault_status(unsigned int cpu_index, void *udata) {
 
 //     int return_code = create_fuzzed_mavlink_packet
 // }
+/**
+ * @brief Set hardfault pc
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> set_hardfault_pc
+ */
+void set_hardfault_status(unsigned int cpu_index, void *udata) {
+    // we have just entered the hardfault handler
+    // use the stack pointer to find the faulting pc
+    uint32_t sp = qemu_get_register(ARM_V7M_SP);
+    uint32_t faulting_pc = 0;
+    qemu_plugin_read_memory(sp + 24, (uint8_t*)&faulting_pc, sizeof(uint32_t));
+    fprintf(stderr, "Hardfault at PC: 0x%08X\n", faulting_pc);
+    set_hardfault_pc(faulting_pc);
+}

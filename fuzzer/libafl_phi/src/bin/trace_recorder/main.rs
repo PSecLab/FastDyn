@@ -1,6 +1,10 @@
-mod gz_state_parser;
-
-use gz_state_parser::{get_raw_gz_data, extract_block_from_gz_data, get_nested_pose};
+use baby_fuzzer::gz_state_parser::{
+    get_raw_gz_data, 
+    get_raw_hf_status, 
+    extract_block_from_gz_data, 
+    get_nested_pose,
+    get_sim_time
+};
 
 use core::panic;
 use std::{env, io::Write};
@@ -12,15 +16,8 @@ use gz_msgs::{
     clock::Clock, imu::IMU, magnetometer::Magnetometer, navsat::NavSat, pose::Pose, pose_v::Pose_V
 };
 
-/*
-    Parses an extracted clock block string from gazebo data and returns the sim time in seconds.
-*/
-fn get_sim_time(clock_block: &str) -> f64 {
-    let clock_proto: Clock = parse_from_str::<Clock>(clock_block).unwrap();
-    let sim_sec: i64 = clock_proto.sim.sec;
-    let sim_nsec: i32 = clock_proto.sim.nsec;
-    (sim_sec as f64) + (sim_nsec as f64) * 1e-9
-}
+use std::process::Command;
+use std::thread::sleep;
 
 /*
     Writes a single line representing the state of the simulated CPS to the CSV file.
@@ -29,31 +26,43 @@ fn get_sim_time(clock_block: &str) -> f64 {
 fn record_state_at_time(gz_data: &str, file: &File) -> f64 {
 
     // First, extract all the blocks from the raw gz data
+    // The clock will always be available because it must have been to call this function
     let clock_block: String = extract_block_from_gz_data(gz_data, "clock");
+    let sim_time: f64 = get_sim_time(&clock_block);
+
+    // Other blocks may not be available yet, in that case don't record but send the time back
     let pose_block: String = extract_block_from_gz_data(gz_data, "pose");
+    if pose_block.is_empty() {
+        println!("Warning: Pose block not available at sim time {}. Skipping this time step...", sim_time);
+        return sim_time;
+    }
+    // println!("EXTRACTED POSE BLOCK: {}", pose_block);
     // let imu_block: String = extract_block_from_gz_data(gz_data, "imu");
     // let magnetometer_block: String = extract_block_from_gz_data(gz_data, "mag");
     // let navsat_block: String = extract_block_from_gz_data(gz_data, "navsat");
 
     // Parse the blocks into their respective protobuf messages
-    let pose_proto: Pose = get_nested_pose(pose_block, "vehicle");
+
+    // let pose_proto: Pose = get_nested_pose(pose_block, "pose");
+    let pose_v_proto: Pose_V = parse_from_str::<Pose_V>(&pose_block).unwrap();
+    // if pose_v_proto.pose.is_empty() {
+    //     println!("Warning: Pose_V message has no poses at sim time {}. Skipping state recording.", sim_time);
+    //     return sim_time;
+    // }
+    let pose_proto: Pose = pose_v_proto.pose[0].clone();
+    // if !pose_v_proto.pose.is_empty() {
+    //     pose_proto = pose_v_proto.pose[0].clone();
+    // }
+
+    let x_pos = pose_proto.position.x;
+    let y_pos = pose_proto.position.y;
+    let z_pos = pose_proto.position.z;
+
     // let imu_proto: IMU = parse_from_str::<IMU>(&imu_block).unwrap();
     // let magnetometer_proto: Magnetometer = parse_from_str::<Magnetometer>(&magnetometer_block).unwrap();
     // let navsat_proto: NavSat = parse_from_str::<NavSat>(&navsat_block).unwrap();
-
-    // Get all the relevant data fields
-    let sim_time: f64 = get_sim_time(&clock_block);
-    let x_pos: f64 = pose_proto.position.x;
-    let y_pos: f64 = pose_proto.position.y;
-    let z_pos: f64 = pose_proto.position.z;
+    
     // TODO: Get everything else here!
-
-    // Create the CSV file and append the new line
-    // let file: File = OpenOptions::new()
-    //     .create(true)
-    //     .append(true)
-    //     .open(file_path)
-    //     .unwrap();
 
     let mut writer: BufWriter<&File> = BufWriter::new(&file);
     writeln!(writer, "{},{},{},{}", sim_time, x_pos, y_pos, z_pos).unwrap();
@@ -106,11 +115,14 @@ fn main() {
 
     // Poll until we get a valid sim time from gazebo
     let mut node: Node = Node::new().unwrap();
+    // println!("NODE CREATED");
 
     let mut current_sim_time: f64;
     loop {
 
         let gz_data: String = get_raw_gz_data(&mut node);
+
+        // println!("GOT GZ DATA: {gz_data}");
 
         if gz_data.is_empty() {
             continue;
@@ -119,6 +131,8 @@ fn main() {
         let clock_block: String = extract_block_from_gz_data(&gz_data, "clock");
         let sim_time: f64 = get_sim_time(&clock_block);
         current_sim_time = sim_time;
+
+        // println!("GOT SIM TIME: {}", current_sim_time);
 
         if current_sim_time == 0.0 {
             // Still not ready to record data, keep polling!
@@ -135,9 +149,11 @@ fn main() {
         }
     }
 
+    // println!("RECORDING MAIN LOOP");
+
     // Keep recording trace data until time is up!
     while current_sim_time + time_step <= sim_time_limit { // + time_step to account for sleep delay
-        // TODO: Record data at each time step
+
         let gz_data: String = get_raw_gz_data(&mut node);
         if gz_data.is_empty() {
             panic!("Error: Failed to get gazebo data during trace recording!");
@@ -147,5 +163,4 @@ fn main() {
 
         std::thread::sleep(std::time::Duration::from_secs_f64(time_step));
     };
-
 }

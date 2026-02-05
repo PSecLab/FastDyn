@@ -54,6 +54,7 @@ int isdigit(int c);
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdatomic.h>
+#include <signal.h>
 
 static _Atomic uint64_t g_icount = 0;
 
@@ -63,17 +64,23 @@ AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
 int coverage;
 
+int optifuzz = 0;
+
 twintrace_mode_t twintrace_mode = TT_OFF;
 const char *twintrace_bin_path = NULL;
 
 #define MAX_VCPUS 8
 #define DEFAULT_BBL_DUMP_PATH "bbl.txt"
+#define DEFAULT_BBL_COVERAGE_PATH "fastdyn_work/bbl_coverage.txt"
 
 static int bbl_enable = 0;
 static const char *bbl_dump_path = DEFAULT_BBL_DUMP_PATH;
 
 // per-vCPU unique set of TB entry PCs
 static GHashTable *bbl_sets[MAX_VCPUS];
+
+// stores the size of a basic block for coverage info
+static GHashTable *bbl_length;
 
 // optional: total TB executions (not unique)
 static uint64_t bbl_total_tb_exec[MAX_VCPUS];
@@ -681,6 +688,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
             QEMU_PLUGIN_CB_NO_REGS,
             (void *)(uintptr_t)tb_pc
         );
+
+        g_hash_table_insert(bbl_length, (gpointer)qemu_plugin_tb_vaddr(tb), (gpointer)qemu_plugin_tb_n_insns(tb));
     }
 
 	DEBUG_LOG("->Virtual Clock: %llu \n", (unsigned long long)qemu_plugin_get_virtual_timer());
@@ -945,6 +954,12 @@ bool fuzz_check_empty(fuzz_buffer_t *fb) {
     return (atomic_load_explicit(&fb->state, memory_order_relaxed) == FUZZ_EMPTY);
 }
 
+void fuzz_start(uint32_t anchor_id) {
+    while (anchor_id >= buffer_capacity) {
+        _mm_pause();
+    }
+}
+
 // If the anchor is busy (didn't skip consuming input), set it to done
 void fuzz_finish(uint32_t anchor_id) {
     pthread_rwlock_rdlock(&anchor_lock);
@@ -1014,7 +1029,17 @@ void add_observed_value(uint32_t val) {
 
 #else
 
+#define MAP_SIZE 65536 // should always match the rust definition
+static uint8_t CVG[MAP_SIZE];
+
 void add_observed_value(uint32_t val) {
+    if (g_prev_pc != 0) {
+        uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
+        CVG[idx] = CVG[idx] + 1;
+    }
+
+    g_prev_pc = val;
+
     if (g_observed_count >= g_observed_capacity) {
         // Grow the buffer (double the capacity, or start with initial size)
         size_t new_capacity = (g_observed_capacity == 0) ? INITIAL_CAPACITY : g_observed_capacity * 2;
@@ -1059,6 +1084,44 @@ void dump_values(const char *filename) {
     fclose(f);
 }
 
+void serialize_coverage(const char *filename) {
+    char tmp[512];
+
+    /* Construct temp filename in same directory */
+    snprintf(tmp, sizeof(tmp), "%s.tmp", filename);
+
+    FILE *f = fopen(tmp, "wb");
+    if (!f) {
+        perror("[-] Failed to open temp coverage file for writing");
+        return;
+    }
+
+    // comma separated values
+    for (size_t i = 0; i < MAP_SIZE; i++) {
+        if (fprintf(f, "%u", CVG[i]) < 0) {
+            perror("[-] Write error");
+            fclose(f);
+            remove(tmp);
+            return;
+        }
+        if (i < MAP_SIZE - 1) {
+            fputc(',', f);
+        }
+    }
+    fputc('\n', f);
+
+    /* Ensure data is flushed to disk before rename */
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    /* Atomic rename replaces old file */
+    if (rename(tmp, filename) != 0) {
+        perror("[-] Failed to rename temp coverage file");
+        remove(tmp);
+    }
+}
+
 void reset_and_dump_values(const char *filename) {
     g_observed_count = 0; // Reset count after dumpin
     dump_values(filename);
@@ -1083,8 +1146,121 @@ void* tracer(void* arg) {
 	}
 }
 
-static void dump_bbl(void)
+void save_all_bbl_sets(const char *dir) {
+    int total = 0;
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        if (!bbl_sets[i])
+            continue;
+
+        char path[256];
+        snprintf(path, sizeof(path), "%s/bbl_set_%d.bin", dir, i);
+
+        FILE *f = fopen(path, "wb");
+        if (!f)
+            continue;
+
+        GHashTableIter iter;
+        gpointer key, value;
+
+        g_hash_table_iter_init(&iter, bbl_sets[i]);
+        while (g_hash_table_iter_next(&iter, &key, &value)) {
+            gulong pc = (gulong) key;
+            fwrite(&pc, sizeof(pc), 1, f);
+            total = total + 1;
+        }
+
+        fclose(f);
+    }
+    printf("Saved %d basic blocks\n", total);
+}
+
+void load_all_bbl_sets(const char *dir) {
+    int total = 0;
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        char path[256];
+        snprintf(path, sizeof(path), "%s/bbl_set_%d.bin", dir, i);
+
+        FILE *f = fopen(path, "rb");
+        if (!f) {
+            bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
+            continue;
+        }
+
+        GHashTable *table = g_hash_table_new(g_direct_hash, g_direct_equal);
+
+        gulong pc;
+        while (fread(&pc, sizeof(pc), 1, f) == 1) {
+            total = total + 1;
+            g_hash_table_insert(table, (gpointer) pc, NULL);
+        }
+
+        fclose(f);
+        bbl_sets[i] = table;
+    }
+    printf("Loaded %d blocks\n", total);
+}
+
+void save_bbl_length(const char *path) {
+    if (!bbl_length)
+        return;
+
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return;
+
+    GHashTableIter iter;
+    gpointer key, value;
+
+    g_hash_table_iter_init(&iter, bbl_length);
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        gulong pc = (gulong) key;
+        guint size = GPOINTER_TO_UINT(value);
+
+        fwrite(&pc, sizeof(pc), 1, f);
+        fwrite(&size, sizeof(size), 1, f);
+    }
+
+    fclose(f);
+}
+
+void load_bbl_length(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        bbl_length = g_hash_table_new(g_direct_hash, g_direct_equal);
+        return;
+    }
+
+    GHashTable *table = g_hash_table_new(g_direct_hash, g_direct_equal);
+
+    gulong pc;
+    guint size;
+
+    while (fread(&pc, sizeof(pc), 1, f) == 1 &&
+           fread(&size, sizeof(size), 1, f) == 1) {
+        g_hash_table_insert(table, (gpointer) pc, GUINT_TO_POINTER(size));
+    }
+
+    fclose(f);
+    bbl_length = table;
+}
+
+void print_unique_bbl(void)
 {
+    uint64_t unique_blocks = 0;
+    uint64_t total_blocks = 0;
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        if (bbl_sets[i]) unique_blocks += (uint64_t)g_hash_table_size(bbl_sets[i]);
+        total_blocks += bbl_total_tb_exec[i];
+    }
+
+    printf("Unique Blocks: %lu, Total Blocks: %lu\n", unique_blocks, total_blocks);
+}
+
+void dump_bbl(void)
+{
+    save_all_bbl_sets("/root/rooney/FastDyn/fuzz_out");
+    save_bbl_length("/root/rooneyFastDyn/fuzz_out/bbl_length.bin");
+
     uint64_t unique = 0;
     for (int i = 0; i < MAX_VCPUS; i++) {
         if (bbl_sets[i]) unique += (uint64_t)g_hash_table_size(bbl_sets[i]);
@@ -1092,20 +1268,38 @@ static void dump_bbl(void)
 
     FILE *f = fopen(bbl_dump_path ? bbl_dump_path : DEFAULT_BBL_DUMP_PATH, "w");
     if (!f) return;
+    FILE *f_extra = fopen(DEFAULT_BBL_COVERAGE_PATH, "w");
+    if (!f_extra) return;
 
     fprintf(f, "bbl_unique=%" PRIu64 "\n", unique);
     uint64_t total_tb = 0;
     for (int i = 0; i < MAX_VCPUS; i++) total_tb += bbl_total_tb_exec[i];
     fprintf(f, "tb_exec_total=%" PRIu64 "\n", total_tb);
+    for (int i = 0; i < MAX_VCPUS; i++) {
+        guint glength;
+        gpointer* gptr = g_hash_table_get_keys_as_array(bbl_sets[i], &glength);
+        if (gptr) {
+            for (uint32_t n = 0; n < glength; n++) {
+                fprintf(f_extra, "%lx\t%lu\n", (uintptr_t)gptr[n], (uintptr_t)g_hash_table_lookup(bbl_length, gptr[n]));
+            }
+        }
+    }
+
     fclose(f);
+    fclose(f_extra);
 }
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
 	printf("FastDyn Exit.\n");
-	if (coverage) {
+	if (coverage && !optifuzz) {
 		dump_values(DEFAULT_DUMP_PATH);
 	}
+
+    if (optifuzz) {
+        serialize_coverage("/root/rooney/FastDyn/fuzzer/libafl_phi/covg.csv");
+        printf("Serialized coverage to /root/rooney/FastDyn/fuzzer/libafl_phi/covg.csv\n");
+    }
 
     if (bbl_enable) {
         dump_bbl();
@@ -1269,6 +1463,14 @@ static int core_parse_arguments(int argc, char ** argv) {
         coverage = 0;
     }
 
+    filename = utils_get_arg("optifuzz", argc, argv);
+    if (!arg_is_disabled(filename) &&
+        (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
+        optifuzz = 1;
+    } else {
+        optifuzz = 0;
+    }
+
     //parse args for twintrace
     parse_twintrace_args(argc, argv);
 
@@ -1294,7 +1496,6 @@ static int core_parse_arguments(int argc, char ** argv) {
 	return 0;
 }
 
-
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
@@ -1314,14 +1515,19 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     #endif
 
     if (bbl_enable) {
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
-    }
-    memset(bbl_total_tb_exec, 0, sizeof(bbl_total_tb_exec));
+        for (int i = 0; i < MAX_VCPUS; i++) {
+            bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
+        }
+        bbl_length = g_hash_table_new(g_direct_hash, g_direct_equal);
+        memset(bbl_total_tb_exec, 0, sizeof(bbl_total_tb_exec));
+
+        load_all_bbl_sets("/root/rooney/FastDyn/fuzz_out");
+        load_bbl_length("/root/rooney/FastDyn/fuzz_out/bbl_length.bin");
     }
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
+
     #if ENABLE_LIBPY
         if (python_vm_setup() != 0) {
                 utils_die("Python VM Init Failed");

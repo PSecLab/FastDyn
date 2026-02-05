@@ -34,6 +34,43 @@ static bool gps_input_sockfd_initialized = false;
 static int flight_log_fd_array[100] = {-1};
 static int flight_log_fd_index = 0;
 
+fuzzed_input_t g_fuzzed_input = {0};
+
+void print_fuzzed_input(const fuzzed_input_t* input) {
+    printf("Last Fuzzed Input:\n");
+    printf("  MsgID: %u\n", input->msgid);
+    printf("  CRC Extra: %u\n", input->crc_extra);
+    printf("  Length: %u\n", input->length);
+    printf("  Real Length: %u\n", input->real_length);
+    printf("  SysID: %u\n", input->sysid);
+    printf("  CompID: %u\n", input->compid);
+    printf("  Payload: ");
+    for (int i = 0; i < input->real_length; i++) {
+        printf("%02X ", input->payload[i]);
+    }
+    printf("\n");
+}
+
+void assign_fuzzed_input(uint32_t msgid,
+                        uint8_t crc_extra,
+                        const uint8_t *payload,
+                        uint8_t length,
+                        uint8_t real_length,
+                        uint8_t sysid,
+                        uint8_t compid)
+{
+    g_fuzzed_input.msgid = msgid;
+    g_fuzzed_input.crc_extra = crc_extra;
+    g_fuzzed_input.length = length;
+    g_fuzzed_input.real_length = real_length;
+    g_fuzzed_input.sysid = sysid;
+    g_fuzzed_input.compid = compid;
+    // clear previous payload
+    memset(g_fuzzed_input.payload, 0, sizeof(g_fuzzed_input.payload));
+    // copy new payload
+    memcpy(g_fuzzed_input.payload, payload, real_length);
+}
+
 void mark_open_flight_log_fd(int fd) {
     flight_log_fd_array[flight_log_fd_index] = fd;
     flight_log_fd_index++;
@@ -67,6 +104,7 @@ void sigint_handler(int sig) {
     pthread_cancel(gcs_listener_tid);
     pthread_join(gcs_listener_tid, NULL);
     gcs_listener_running = false;
+    print_fuzzed_input(&g_fuzzed_input);
     printf("[Main] GCS listener thread joined. Exiting.\n");
     exit(0);
 }
@@ -163,6 +201,9 @@ static void* gcs_listener(void *rb) {
             sleep(1);
             continue;
         }
+
+        // fprintf(stderr, "[GCSReceiver]: Received %zd bytes from %s:%d\n", n,
+        //         inet_ntoa(cliaddr.sin_addr), ntohs(cliaddr.sin_port));
 
         if (!send_sockfd_initialized) {
             send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);

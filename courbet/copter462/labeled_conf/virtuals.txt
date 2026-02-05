@@ -25,3 +25,4 @@ _ZN13AP_Filesystem5fsyncEi ap_fs_fsync *
 _ZN13AP_Filesystem5writeEiPKvm ap_fs_write *
 _ZN13AP_Filesystem5closeEi ap_fs_close *
 _ZN16AP_Arming_Copter6disarmEN9AP_Arming6MethodEb ignore_cpu_failsafe_disarm *
+0x0808d1ec scheduler_trace

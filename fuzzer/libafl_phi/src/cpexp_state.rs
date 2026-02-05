@@ -1,3 +1,9 @@
+/*
+    A copy of StdState from libafl, which includes OptiFuzz-related data.
+*/
+
+use crate::cpexp_input::TargetInput;
+
 #[cfg(feature = "std")]
 use std::vec::Vec;
 use core::{
@@ -44,9 +50,8 @@ use libafl::state::{
 };
 
 use libafl::state::DEFAULT_MAX_SIZE;
-// use libafl::state::LoadConfig;
 
-use crate::new_input::{CPExpInput, TargetInput};
+use crate::cpexp_input::{CPExpInput};
 
 use scirs2_optimize::global::{ 
     BayesianOptimizationOptions,

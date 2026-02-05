@@ -5,10 +5,13 @@
 #include <gz/transport.hh>
 #include <gz/msgs/model.pb.h>
 #include <gz/msgs/magnetometer.pb.h>
+#include <gz/msgs/imu.pb.h>
+#include <gz/msgs/clock.pb.h>
 #include <gz/msgs/navsat.pb.h>
 #include <gz/msgs/empty.pb.h>
 #include <gz/msgs/pose.pb.h>
 #include <gz/msgs/pose_v.pb.h>
+#include <gz/msgs/any.pb.h>
 #include <gz/msgs/uint32.pb.h>
 #include <boost/circular_buffer.hpp>
 #include <iostream>
@@ -19,11 +22,95 @@
 #include <string>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <random>
+#include <gz/math/Vector3.hh>
 
 const static bool DEBUG = false;
 static bool READY = false;
 
 using json = nlohmann::json;
+
+struct Vec3NoiseModel {
+  // BASE (reference) noise levels — tune these once
+  gz::math::Vector3d sigma_white_base{0,0,0}; // std-dev of white noise
+  gz::math::Vector3d sigma_rw_base{0,0,0};    // std-dev of random-walk drift
+
+  // ======= YOUR TWO KNOBS =======
+  double white_scale = 1.0;  // <-- scales instantaneous noise
+  double drift_scale = 1.0;  // <-- scales long-term drift
+  // ==============================
+
+  // current bias state (drifting over time)
+  gz::math::Vector3d bias{0,0,0};
+
+  std::mt19937 rng{std::random_device{}()};
+  std::normal_distribution<double> N{0.0, 1.0};
+
+  // === NEW: constructors ===
+
+  // Default constructor (keeps your existing defaults)
+  Vec3NoiseModel() = default;
+
+  // Convenience constructor
+  Vec3NoiseModel(
+      gz::math::Vector3d white_base,
+      gz::math::Vector3d rw_base,
+      double w_scale = 1.0,
+      double d_scale = 1.0,
+      gz::math::Vector3d initial_bias = {0,0,0})
+  : sigma_white_base(white_base),
+    sigma_rw_base(rw_base),
+    white_scale(w_scale),
+    drift_scale(d_scale),
+    bias(initial_bias)
+  {}
+
+  // === existing methods (unchanged) ===
+
+  gz::math::Vector3d SampleWhite() {
+    return {
+      (sigma_white_base.X() * white_scale) * N(rng),
+      (sigma_white_base.Y() * white_scale) * N(rng),
+      (sigma_white_base.Z() * white_scale) * N(rng)
+    };
+  }
+
+  void StepBias(double dt) {
+    const double sdt = std::sqrt(dt);
+
+    bias += gz::math::Vector3d(
+      (sigma_rw_base.X() * drift_scale) * sdt * N(rng),
+      (sigma_rw_base.Y() * drift_scale) * sdt * N(rng),
+      (sigma_rw_base.Z() * drift_scale) * sdt * N(rng)
+    );
+  }
+
+  gz::math::Vector3d Apply(const gz::math::Vector3d &trueVal, double dt) {
+    StepBias(dt);
+    return trueVal + bias + SampleWhite();
+  }
+};
+
+Vec3NoiseModel gyro_noise_model(
+    {0.001, 0.001, 0.001},   // sigma_white_base
+    {0.0002, 0.0002, 0.0002},// sigma_rw_base
+    0.0,                     // white_scale
+    0.0                      // drift_scale
+);
+
+Vec3NoiseModel accel_noise_model(
+    {0.02, 0.02, 0.02},
+    {0.01, 0.01, 0.01},
+    0.0,
+    0.0
+);
+
+Vec3NoiseModel mag_noise_model(
+    {0.001, 0.001, 0.001},
+    {0.0001, 0.0001, 0.0001},
+    0.0,
+    0.0
+);
 
 typedef struct
 {
@@ -77,6 +164,93 @@ imu_data_t parse_imu_json(const std::string &input)
 }
 
 /**
+ * @brief Get orientation for synthetic mag reading
+ *
+ *
+ */
+class CorrectMagService
+{
+public:
+  CorrectMagService(gz::transport::Node &node,
+                       const std::string &topic_name,
+                       const std::string &service_name)
+  {
+    if (topic_name == "NONE")
+      return;
+    node.Subscribe(topic_name, &CorrectMagService::OnPoseMsg, this);
+    node.Advertise(service_name, &CorrectMagService::OnServiceRequest, this);
+  }
+private:
+  void OnPoseMsg(const gz::msgs::Pose_V &msg)
+  {
+    // TODO: create a magnetometer message with proper transform
+    gz::msgs::Magnetometer mag_msg;
+    mag_msg.mutable_field_tesla()->set_x(0.1);
+    mag_msg.mutable_field_tesla()->set_y(0.0);
+    mag_msg.mutable_field_tesla()->set_z(0.0);
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_msg_ = mag_msg; // replace msg with your created gz::msgs::Magnetometer
+  }
+
+  bool OnServiceRequest(const gz::msgs::Empty &,
+                        gz::msgs::Magnetometer &rep)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    rep = latest_msg_;
+    return true;
+  }
+
+  gz::msgs::Magnetometer latest_msg_;
+  std::mutex mutex_;
+};
+
+/**
+ * @brief Get mag reading
+ */
+class GetMagReadingService
+{
+public:
+  GetMagReadingService(gz::transport::Node &node,
+                       const std::string &topic_name,
+                       const std::string &service_name)
+  {
+    if (topic_name == "NONE")
+      return;
+    node.Subscribe(topic_name, &GetMagReadingService::OnMagMsg, this);
+    node.Advertise(service_name, &GetMagReadingService::OnServiceRequest, this);
+  }
+private:
+  void OnMagMsg(const gz::msgs::Magnetometer &msg)
+  {
+    gz::math::Vector3d true_mag(
+      msg.field_tesla().x(),
+      msg.field_tesla().y(),
+      msg.field_tesla().z()
+    );
+    double dt = 0.01; // assuming 100 Hz update rate
+    gz::math::Vector3d noisy_mag = mag_noise_model.Apply(true_mag, dt);
+    std::lock_guard<std::mutex> lock(mutex_);
+    gz::msgs::Magnetometer noisy_msg = msg;
+    noisy_msg.mutable_field_tesla()->set_x(noisy_mag.X());
+    noisy_msg.mutable_field_tesla()->set_y(noisy_mag.Y());
+    noisy_msg.mutable_field_tesla()->set_z(noisy_mag.Z());
+    latest_msg_ = noisy_msg;
+  }
+
+  bool OnServiceRequest(const gz::msgs::Empty &,
+                        gz::msgs::Magnetometer &rep)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    rep = latest_msg_;
+    return true;
+  }
+
+  gz::msgs::Magnetometer latest_msg_;
+  std::mutex mutex_;
+};
+
+
+/**
  * @brief Generic service template for any sensor message type
  *
  * This template class can be instantiated for any Gazebo message type.
@@ -102,6 +276,7 @@ public:
 private:
   void OnSensorMsg(const MsgType &msg)
   {
+    // check if msgtype is magnetometer
     std::lock_guard<std::mutex> lock(mutex_);
     latest_msg_ = msg;
   }
@@ -117,6 +292,48 @@ private:
   MsgType latest_msg_;
   std::mutex mutex_;
 };
+
+
+/**
+ * @brief Service handler for /set_noise_scale
+ *
+ * This service sets the noise scale factors for the IMU noise models.
+ * The request message is expected to be a string in the format
+ * "<acc/gyro/mag>,white_scale,drift_scale" where both values are doubles.
+ *
+ * @param[in] req A string message with noise scale parameters
+ * @param[out] rep A boolean message indicating success or failure
+ * @return true if the noise scales were set successfully, false otherwise
+ */
+bool OnSetNoiseScaleRequest(const gz::msgs::StringMsg &req,
+                            gz::msgs::Boolean &rep)
+{
+  std::string payload = req.data();
+  std::istringstream ss(payload);
+  std::string token;
+  std::getline(ss, token, ',');
+  std::string sensor_type = token;
+  std::getline(ss, token, ',');
+  double white_scale = std::stod(token);
+  std::getline(ss, token, ',');
+  double drift_scale = std::stod(token);
+
+  if (sensor_type == "gyro") {
+    gyro_noise_model.white_scale = white_scale;
+    gyro_noise_model.drift_scale = drift_scale;
+  } else if (sensor_type == "accel") {
+    accel_noise_model.white_scale = white_scale;
+    accel_noise_model.drift_scale = drift_scale;
+  } else if (sensor_type == "mag") {
+    mag_noise_model.white_scale = white_scale;
+    mag_noise_model.drift_scale = drift_scale;
+  } else {
+    rep.set_data(false);
+    return true;
+  }
+  rep.set_data(true);
+  return true;
+}
 
 /**
  * @brief Advances the simulation by one step and gets the model state
@@ -414,6 +631,16 @@ private:
 
             imu_data_t imu = parse_imu_json(response);
             {
+              gz::math::Vector3d true_accel(imu.accel_x, imu.accel_y, imu.accel_z);
+              gz::math::Vector3d true_gyro(imu.gyro_x, imu.gyro_y, imu.gyro_z);
+              gz::math::Vector3d noisy_accel = accel_noise_model.Apply(true_accel, 0.2);
+              gz::math::Vector3d noisy_gyro  = gyro_noise_model.Apply(true_gyro, 0.2);
+              imu.accel_x = noisy_accel.X();
+              imu.accel_y = noisy_accel.Y();
+              imu.accel_z = noisy_accel.Z();
+              imu.gyro_x  = noisy_gyro.X();
+              imu.gyro_y  = noisy_gyro.Y();
+              imu.gyro_z  = noisy_gyro.Z();
               std::lock_guard<std::mutex> lock(mutex_);
               imu_buffer_.push_back(imu);
             }
@@ -631,8 +858,105 @@ private:
     return true;
   }
 
-  uint64_t hardfault_address_{0};
+  // uint64_t hardfault_address_{0};
+  std::atomic<uint64_t> hardfault_address_{0};
+
 };
+
+/**
+ * @brief Multi-sensor service that aggregates the latest readings from
+ *        clock, pose, navsat, imu, and magnetometer topics and returns
+ *        them in a single service response.
+ *
+ * This is useful if you need a snapshot of multiple sensor streams at once
+ * without making multiple service calls.
+ */
+class MultiSensorService
+{
+public:
+  MultiSensorService(gz::transport::Node &node,
+                     const std::string &clock_topic,
+                     const std::string &pose_topic,
+                     const std::string &navsat_topic,
+                     const std::string &imu_topic,
+                     const std::string &mag_topic,
+                     const std::string &service_name)
+  {
+    node.Subscribe(clock_topic, &MultiSensorService::OnClockMsg, this);
+    node.Subscribe(pose_topic, &MultiSensorService::OnPoseMsg, this);
+    node.Subscribe(navsat_topic, &MultiSensorService::OnNavSatMsg, this);
+    node.Subscribe(imu_topic, &MultiSensorService::OnImuMsg, this);
+    node.Subscribe(mag_topic, &MultiSensorService::OnMagMsg, this);
+
+    node.Advertise(service_name, &MultiSensorService::OnServiceRequest, this);
+  }
+
+private:
+  // === Topic Callbacks ===
+  void OnClockMsg(const gz::msgs::Clock &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    clock_msg_ = msg;
+  }
+
+  void OnPoseMsg(const gz::msgs::Pose_V &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pose_msg_ = msg;
+  }
+
+  void OnNavSatMsg(const gz::msgs::NavSat &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    navsat_msg_ = msg;
+  }
+
+  void OnImuMsg(const gz::msgs::IMU &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    imu_msg_ = msg;
+  }
+
+  void OnMagMsg(const gz::msgs::Magnetometer &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    mag_msg_ = msg;
+  }
+
+  // === Service Handler ===
+  bool OnServiceRequest(const gz::msgs::Empty &,
+                        gz::msgs::Any &rep)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Build a JSON-like string for compact transport in gz::msgs::Any
+    // (Alternatively, define a custom protobuf message with these fields.)
+    std::ostringstream oss;
+    oss << "{"
+        << "\"clock\": " << clock_msg_.DebugString() << ","
+        << "\"pose\": " << pose_msg_.DebugString() << ","
+        << "\"navsat\": " << navsat_msg_.DebugString() << ","
+        << "\"imu\": " << imu_msg_.DebugString() << ","
+        << "\"mag\": " << mag_msg_.DebugString()
+        << "}";
+
+    rep.set_type(gz::msgs::Any_ValueType::Any_ValueType_STRING);
+    rep.set_string_value(oss.str());
+
+    return true;
+  }
+
+  // === Latest Messages ===
+  gz::msgs::Clock clock_msg_;
+  gz::msgs::Pose_V pose_msg_;
+  gz::msgs::NavSat navsat_msg_;
+  gz::msgs::IMU imu_msg_;
+  gz::msgs::Magnetometer mag_msg_;
+
+  std::mutex mutex_;
+};
+
+
 
 
 int main(int argc, char **argv)
@@ -688,7 +1012,13 @@ int main(int argc, char **argv)
     "/get_navsat_reading"
   );
 
-  GenericSensorService<gz::msgs::Magnetometer> magService(
+  // GenericSensorService<gz::msgs::Magnetometer> magService(
+  //   node,
+  //   mag_topic,
+  //   "/get_mag_reading"
+  // );
+
+  GetMagReadingService magService(
     node,
     mag_topic,
     "/get_mag_reading"
@@ -701,6 +1031,11 @@ int main(int argc, char **argv)
     "/get_joint_state"
   );
 
+  HFService hfService(
+    node,
+    "/get_hf_status"
+  );
+
   ServoService servoService(
     node,
     "/set_run_until_time",
@@ -710,11 +1045,34 @@ int main(int argc, char **argv)
     5200
   );
 
+  std::string pose_topic = "/model/r1_rover/pose";
+  // std::string pose_topic = "/model/gs_drone/pose";
+  std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
+  std::string clock_topic = "/world/runway/clock";
+
+  MultiSensorService multiSensorService(
+      node,
+      clock_topic,
+      pose_topic,
+      navsat_topic,
+      imu_topic,
+      mag_topic,
+      "/get_trace_state"
+  );
+
+  node.Advertise("/set_noise_scale", &OnSetNoiseScaleRequest);
+
   // YawService yawService(
   //   node,
   //   "/model/" + model_name + "/pose",
   //   "/get_yaw_reading"
   // );
+
+  CorrectMagService correctMagService(
+    node,
+    "/model/" + model_name + "/pose",
+    "/get_corrected_mag"
+  );
 
   std::cout << "ArduPilot Services running...\n";
 
