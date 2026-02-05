@@ -67,7 +67,7 @@ finline      = ""
   machine = "cortexm"
   cpu     = "cortex-m4"
 
-  binary      = "boardrunner/boardrunner_examples/examples/max78000_fthr/gpio/firmware/GPIO.elf"
+  binary = "boardrunner/boardrunner_examples/examples/max78000_fthr/usart/firmware/UART_firmware.elf"
 
   init_nsvtor = "0x10000000"
 
@@ -110,22 +110,22 @@ finline      = ""
 # Devices (MAX78000)
 # ==============================================================================
 
-# GPIO2
-[Device.gpio2]
-  ranges       = [["0x40080400", "0x400805FF"]]
-  description  = "MAX78000 GPIO Port 2 for general-purpose I/O."
+# UART0 (Low Power UART)
+[Device.uart]
+  ranges       = [["0x40042000", "0x40042FFF"]]
+  description  = "MAX78000 UART0 peripheral (low power UART)."
   read_priority = "elder"
 
-  [[Device.gpio2.handlers]]
+  [[Device.uart.handlers]]
   model   = "elder"
   enabled = true
   scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
-  [[Device.gpio2.handlers]]
+  [[Device.uart.handlers]]
   model   = "passthrough"
   enabled = false
 
-# Everything else: passthrough (hole for GPIO2 preserved)
+# Everything else: passthrough (hole for UART0 preserved)
 [Device.passthrough_space]
   irq = [
     [0, 20],
@@ -136,8 +136,8 @@ finline      = ""
   ]
 
   ranges = [
-    ["0x40000000", "0x400803FF"],   # before GPIO2
-    ["0x40080600", "0xE00FFFFF"],   # after GPIO2 up to end of peripheral space
+    ["0x40000000", "0x40041FFF"],   # before UART0
+    ["0x40043000", "0xE00FFFFF"],   # after UART0 up to end of peripheral space
     ["0xE0000000", "0xEFFFFFFF"]    # system space
   ]
 
