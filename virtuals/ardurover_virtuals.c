@@ -16,6 +16,10 @@
 #include <arpa/inet.h>
 #include <stdatomic.h>
 
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
 #define PROFILE_INS_READS 0
 #define PROFILE_COMPASS_READS 1
 
@@ -645,14 +649,24 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
 
             // Apply remapping and sign adjustments here if needed
 
+            // float imu_data[7] = {
+            //     accel_y,
+            //     -1 * accel_x,
+            //     accel_z,
+            //     temp_celsius,
+            //     gyro_y,
+            //     -1 * gyro_x,
+            //     gyro_z
+            // };
+
             float imu_data[7] = {
                 accel_y,
-                -1 * accel_x,
-                accel_z,
+                accel_x,
+                -1* accel_z,
                 temp_celsius,
                 gyro_y,
-                -1 * gyro_x,
-                gyro_z
+                gyro_x,
+                -1 * gyro_z
             };
 
             int16_t imu_data_int16[7];
@@ -742,11 +756,9 @@ HMC5843RawData convert_to_hmc5843(SimulatorMagnetometer sim_data) {
 
     // y and z are negated because +z is up and +y is left from gazebo
     HMC5843RawData raw = {
-        .mag_x_raw = (int16_t)(-1 * mag_x_raw),
+        .mag_x_raw = (int16_t)(mag_x_raw),
         .mag_y_raw = (int16_t)(mag_y_raw),
         .mag_z_raw = (int16_t)(mag_z_raw)
-        // .mag_y_raw = (int16_t)(mag_y_raw),
-        // .mag_z_raw = (int16_t)(mag_z_raw)
     };
 
     return raw;
@@ -772,7 +784,8 @@ typedef struct {
 } magnetometer_calibration_t;
 
 magnetometer_calibration_t mag_cal = {
-    .offset = {-0.0012279493f, 1.3877788e-17f, 0.47694647f},
+    // .offset = {-0.0012279493f, 1.3877788e-17f, 0.47694647f},
+    .offset = {0.0f, 0.0f, 0.0f},
     .diagonals = {1.0f, 1.0f, 1.0f},
     .offdiagonals = {0.0f, 0.0f, 0.0f},
 };
@@ -857,7 +870,7 @@ void compass_read_block(unsigned int cpu_index, void *udata) {
     compass_read_count++;
 // #endif // PROFILE_COMPASS_READS
 
-    // printf("Magnetometer reading (Gauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_x, mag_y, mag_z);
+    printf("Magnetometer reading from Gazebo (Gauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_x, mag_y, mag_z);
     // yaw
     // double yaw = atan2(mag_y, mag_x) * 180.0 / M_PI;
     // printf("Calculated yaw: %.3f degrees\n", yaw);
@@ -1431,12 +1444,75 @@ void scheduler_trace(unsigned int cpu_index, void *udata) {
  *
  * <address/symbol> read_mag_when_published
  */
+
+// -----------------------
+// UDP sender for mag data
+// -----------------------
+#ifndef MAG_UDP_MAX_SAMPLES
+#define MAG_UDP_MAX_SAMPLES 100
+#endif
+
+static int mag_udp_sock = -1;
+static struct sockaddr_in mag_udp_addr;
+static int mag_udp_sent_count = 0;
+static int mag_udp_initialized = 0;
+
+static void mag_udp_init_once(void) {
+    if (mag_udp_initialized) return;
+
+    mag_udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (mag_udp_sock < 0) {
+        perror("mag_udp socket");
+        return;
+    }
+
+    memset(&mag_udp_addr, 0, sizeof(mag_udp_addr));
+    mag_udp_addr.sin_family = AF_INET;
+    mag_udp_addr.sin_port = htons(15150);                  // port number (can change as needed)
+    mag_udp_addr.sin_addr.s_addr = inet_addr("127.0.0.1"); // loopback address
+
+    mag_udp_initialized = 1;
+}
+
+static void mag_udp_send_mg(float x_mg, float y_mg, float z_mg) {
+    if (mag_udp_sent_count >= MAG_UDP_MAX_SAMPLES) {
+        // close socket and disable further sending
+        if (mag_udp_sock >= 0) {
+            close(mag_udp_sock);
+            mag_udp_sock = -1;
+        }
+        return;
+    }
+    
+    if (!mag_udp_initialized) mag_udp_init_once();
+    if (mag_udp_sock < 0) return;
+
+    // Foramtting to ASCII format: "X Y Z\n" (easy debugging)
+    char buf[128];
+    int n = snprintf(buf, sizeof(buf), "%.8f %.8f %.8f\n", x_mg, y_mg, z_mg);
+    if (n <= 0) return;
+
+    (void)sendto(mag_udp_sock, buf, (size_t)n, 0,
+        (struct sockaddr*)&mag_udp_addr, sizeof(mag_udp_addr)
+    );
+
+    mag_udp_sent_count++;
+}
+
 void read_mag_when_published(unsigned int cpu_index, void *udata) {
     float mag_values[3] = {0.0f, 0.0f, 0.0f};
     uint32_t mag_pointer_addr = (uint32_t)qemu_get_register(ARM_V7M_R1);
     qemu_plugin_read_memory(mag_pointer_addr, (uint8_t*)mag_values, sizeof(mag_values));
-    printf("Magnetometer published values: X=%.3f, Y=%.3f, Z=%.3f\n",
-           mag_values[0], mag_values[1], mag_values[2]);
+
+    if (mag_udp_sent_count > MAG_UDP_MAX_SAMPLES) {
+        return;
+    }
+    else {
+        fprintf(stderr, "HIT: read_mag_when_published\n");
+        printf("Magnetometer reading from Driver Backend (milliGauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_values[0], mag_values[1], mag_values[2]);
+        mag_udp_send_mg(mag_values[0], mag_values[1], mag_values[2]);
+    }
+    
 }
 
 /**
