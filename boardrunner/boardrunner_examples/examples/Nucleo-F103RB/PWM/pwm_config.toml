@@ -52,10 +52,10 @@ machine = "cortexm"
 cpu = "cortex-m3"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/UART/firmwares/STM32F103RB_Nucleo.elf"
+binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/PWM/firmware/STM32F103RB_Nucleo.elf"
 init_nsvtor = "0x08000000"
-map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
-twintrace = "replay" #options are record, replay or None
+map_file = "rover_v422_map.txt"
+twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 
 # --- Embedded CPU Behavior Configurations ---
@@ -87,56 +87,53 @@ logger_content = """
 
 [Device.Models.unhandled]
     # This model explicitly marks memory as unhandled.
-
 # --- Peripheral Definitions ---
-    [Device.usart2]
-        # USART2 Base Address: 0x40004400, Size: 0x400 (1KB) -> End: 0x400047FF
-        ranges = [["0x40004400", "0x400047FF"]]
-        irq = [['1','100']]
-        description = "USART2 Peripheral"
-        read_priority = "elder"
+# Each peripheral gets its own sub-table. If it uses the elder model,
+# its specific scroll configuration is defined directly within it.
 
-        [[Device.usart2.handlers]]
-            model   = "elder"
-            enabled = false
-            scroll = "boardrunner/boardrunner_sdk/build/model.so"
+# [Device.tim3] replaces the previous [Device.gpio]
+[Device.tim3]
+    # TIM3 Base Address: 0x40000400, Size: 0x400 (1KB) -> End: 0x400007FF
+    ranges = [["0x40000400", "0x400007FF"]]
+    # TIM3 global interrupt is Vector 29 on STM32F1
+    irq = [['1','29']]
+    description = "TIM3 General Purpose Timer."
+    read_priority = "elder"
 
-        [[Device.usart2.handlers]]
-            model   = "classic"
-            enabled = false
+    [[Device.tim3.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
-        [[Device.usart2.handlers]]
-            model   = "passthrough"
-            enabled = false
+    [[Device.tim3.handlers]]
+        model   = "classic"
+        enabled = false
 
-        [[Device.usart2.handlers]]
-            model   = "twintrace"
-            enabled = true
+    [[Device.tim3.handlers]]
+        model   = "passthrough"
+        enabled = false
 
+    [[Device.tim3.handlers]]
+        model   = "twintrace"
+        enabled = false
 
-    [Device.remaining_space]
-            ranges = [
-            # 1. Start of memory up to USART2
-            ["0x40000000", "0x400043FF"],
+[Device.remaining_space]
+    # Ranges updated to include old GPIO space, but exclude the new TIM3 space.
+    # 1. 0x40000000 -> 0x400003FF (Space before TIM3)
+    # 2. 0x40000800 -> 0xE0000000 (Space after TIM3, covering APB1/APB2/AHB peripherals up to System)
+    # 3. 0xE0000000 -> 0xEFFFFFFF (System Control Space / PPB)
+    ranges = [["0x40000000", "0x400003FF"], ["0x40000800", "0xE0000000"], ["0xE0000000", "0xEFFFFFFF"]]
+    irq = [['1','100']]
+    description = "Memory regions that will handled by passthrough and are not of interest for the modeling."
 
-            # 2. From end of USART2, covering ALL previous ADC/DMA/GPIO gaps,
-            #    all the way up to the System boundary (0xE0000000).
-            ["0x40004800", "0xDFFFFFFF"],
+    [[Device.remaining_space.handlers]]
+        model = "classic"
+        enabled = false
 
-            # 3. System Space (NVIC, SysTick, etc.)
-            ["0xE0000000", "0xEFFFFFFF"]
-            ]
-            irq = [['1','100']]
-            description = "Memory regions that will be handled by passthrough/twintrace"
+    [[Device.remaining_space.handlers]]
+        model = "passthrough"
+        enabled = true
 
-            [[Device.remaining_space.handlers]]
-                model = "classic"
-                enabled = false
-
-            [[Device.remaining_space.handlers]]
-                model = "passthrough"
-                enabled = true
-
-            [[Device.remaining_space.handlers]]
-                model = "twintrace"
-                enabled = false
+    [[Device.remaining_space.handlers]]
+        model = "twintrace"
+        enabled = false
