@@ -1486,7 +1486,7 @@ static void mag_udp_send_mg(float x_mg, float y_mg, float z_mg) {
         }
         return;
     }
-    
+
     if (!mag_udp_initialized) mag_udp_init_once();
     if (mag_udp_sock < 0) return;
 
@@ -1515,7 +1515,39 @@ void read_mag_when_published(unsigned int cpu_index, void *udata) {
         printf("Magnetometer reading from Driver Backend (milliGauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_values[0], mag_values[1], mag_values[2]);
         mag_udp_send_mg(mag_values[0], mag_values[1], mag_values[2]);
     }
-    
+
+}
+
+void read_imu_when_published(unsigned int cpu_index, void *udata) {
+    float imu_values[3] = {0.0f, 0.0f, 0.0f};
+    uint32_t imu_pointer_addr = (uint32_t)qemu_get_register(ARM_V7M_R2);
+    qemu_plugin_read_memory(imu_pointer_addr, (uint8_t*)imu_values, sizeof(imu_values));
+
+    if (mag_udp_sent_count > MAG_UDP_MAX_SAMPLES) {
+        return;
+    }
+    else {
+        fprintf(stderr, "HIT: read_imu_when_published\n");
+        printf("IMU reading from Driver Backend (m/s^2): X=%.3f, Y=%.3f, Z=%.3f\n", imu_values[0], imu_values[1], imu_values[2]);
+        // mag_udp_send_mg(imu_values[0], imu_values[1], imu_values[2]);
+    }
+
+}
+
+void read_gyro_when_published(unsigned int cpu_index, void *udata) {
+    float gyro_values[3] = {0.0f, 0.0f, 0.0f};
+    uint32_t gyro_pointer_addr = (uint32_t)qemu_get_register(ARM_V7M_R2);
+    qemu_plugin_read_memory(gyro_pointer_addr, (uint8_t*)gyro_values, sizeof(gyro_values));
+
+    if (mag_udp_sent_count > MAG_UDP_MAX_SAMPLES) {
+        return;
+    }
+    else {
+        fprintf(stderr, "HIT: read_gyro_when_published\n");
+        printf("Gyroscope reading from Driver Backend (degrees per second): X=%.3f, Y=%.3f, Z=%.3f\n", gyro_values[0], gyro_values[1], gyro_values[2]);
+        // mag_udp_send_mg(gyro_values[0], gyro_values[1], gyro_values[2]);
+    }
+
 }
 
 /**

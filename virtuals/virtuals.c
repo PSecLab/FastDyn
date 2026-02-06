@@ -119,8 +119,10 @@ cb_entry_t cb_registry[] = {
     { "arming_check_enabled", arming_check_enabled},
     // scheduler debug
     { "scheduler_trace", scheduler_trace},
-    // debug magnetometer
+    // debug sensors
     { "read_mag_when_published", read_mag_when_published},
+    { "read_imu_when_published", read_imu_when_published},
+    { "read_gyro_when_published", read_gyro_when_published},
     // hardfault status
     { "set_hardfault_status", set_hardfault_status},
 #endif

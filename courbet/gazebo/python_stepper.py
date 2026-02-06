@@ -144,7 +144,7 @@ def main():
     # initial_yaw_deg = float(sys.argv[1])
     # curr_yaw_deg = initial_yaw_deg
 
-    set_pose(255.0)
+    # set_pose(255.0)
     # sleep(1)  # Allow some time for the pose to be set
     # read_magnetometer()
 
@@ -155,10 +155,10 @@ def main():
     #     # call_get_navsat()
     #     # call_step()
     #     curr_yaw_deg += 10  # Increment yaw by 10 degrees
-    # time = 4.0
-    # while True:
-    #     set_run_until_time(time)
-    #     time += 0.02
+    time = 4.0
+    while True:
+        set_run_until_time(time)
+        time += 0.02
 
 
 if __name__ == "__main__":

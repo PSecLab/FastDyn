@@ -260,7 +260,7 @@ private:
     }
 
     // === Build coordinate transformation matrix from world to sensor ===
-    const gz::math::Matrix3d R_wb = RotFromQuat(q); 
+    const gz::math::Matrix3d R_wb = RotFromQuat(q);
     const gz::math::Matrix3d C_wb = R_wb.Transposed();
     const gz::math::Matrix3d R_bs = RzRyRx(sensor_rpy_.roll, sensor_rpy_.pitch, sensor_rpy_.yaw);
     const gz::math::Matrix3d C_bs = R_bs.Transposed();
@@ -1074,6 +1074,7 @@ int main(int argc, char **argv)
   std::string navsat_topic = "/world/runway/model/r1_rover/link/base_link/sensor/navsat_sensor/navsat";
   std::string mag_topic = "/world/runway/model/r1_rover/link/base_link/sensor/magnetometer_sensor/magnetometer";
   std::string joint_states_topic = "/joint_states";
+  std::string pose_topic = "/model/r1_rover/pose";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
@@ -1089,6 +1090,8 @@ int main(int argc, char **argv)
   } else if (model_name == "vtail_plane") {
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    pose_topic = "/model/skywalker_x8/pose";
+    // pose_topic = "/world/runway/dynamic_pose/info";
     // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
     // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
@@ -1144,7 +1147,7 @@ int main(int argc, char **argv)
     5200
   );
 
-  std::string pose_topic = "/model/r1_rover/pose";
+  // std::string pose_topic = "/model/r1_rover/pose";
   // std::string pose_topic = "/model/gs_drone/pose";
   std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
   std::string clock_topic = "/world/runway/clock";
@@ -1174,7 +1177,7 @@ int main(int argc, char **argv)
 
   CorrectMagService correctMagService(
     node,
-    "/model/" + model_name + "/pose",
+    pose_topic,
     mag_topic,
     "/get_corrected_mag_reading",
     mag_rpy
