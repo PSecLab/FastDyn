@@ -71,7 +71,7 @@ static inline void usart1_maybe_raise_irq(void) {
     bool rx_irq  = ((s.cr1 & CR1_RXNEIE) && (s.isr & ISR_RXNE));
 
     if (txe_irq || tc_irq || rx_irq) {
-        qemu_plugin_raise_irq(USART1_IRQ_VECTOR);
+        qemu_plugin_raise_irq(USART1_IRQ_VECTOR, false);
     }
 }
 

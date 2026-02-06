@@ -55,7 +55,7 @@ static void adc_periodic_conversion_cb(void *opaque) {
         // 3. (FIXED) Fire the ADC interrupt ONLY if it's enabled.
         if (s->cr1 & ADC_CR1_EOCIE) {
             dev_debug("ADC3: Firing EOC interrupt.\n");
-            qemu_plugin_raise_irq(ADC_IRQ);
+            qemu_plugin_raise_irq(ADC_IRQ, false);
         }
     }
 }

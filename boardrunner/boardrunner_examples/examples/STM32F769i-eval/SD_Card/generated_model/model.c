@@ -178,8 +178,6 @@ static void maybe_finish_write_and_commit(void) {
     }
 }
 
-static uint32_t last_anchor_id = -1;
-
 static void exec_cmd(uint32_t cmd_val) {
     uint32_t cmd_idx = cmd_val & 0x3Fu;
 
@@ -306,13 +304,6 @@ static void exec_cmd(uint32_t cmd_val) {
                 }
                 if (want > 0) {
                     (void)api_file_pread(s.host_fd, s.fifo, want, off);
-
-                    if (last_anchor_id != -1) {
-                        fuzz_finish(last_anchor_id);
-                    }
-                    last_anchor_id = 0;
-
-                    uint32_t read_count = fuzz_buffer_read(last_anchor_id, s.fifo, want);
                 }
             }
 

@@ -73,7 +73,7 @@ static void tim1_timer_callback(void *opaque) {
 
         dev_debug("TIM1: Raising IRQ 25.");
         // Raise the interrupt line for TIM1 (Vector 25 as seen in trace)
-        qemu_plugin_raise_irq(25+16);
+        qemu_plugin_raise_irq(25+16, false);
     }
 }
 
