@@ -81,7 +81,7 @@ finline  = ""
   binary     = "boardrunner/boardrunner_examples/examples/STM32F769i-eval/SD_Card/Firmwares/STM32F769I_EVAL.elf"
   init_nsvtor = "0x08000000"
 
-  map_file        = "/data/Code/rehosting/FastDyn/courbet/rover_v422_map.txt"
+  map_file        = "courbet/rover_v422_map.txt"
   plugin_library  = "build/libfastdyn.so"
   monitor_elf     = "../ws/monitor.elf"
 
@@ -97,29 +97,36 @@ finline  = ""
   # output = stderr
   """
 
-  [[CPU.cpu0.virtuals]]
-  at = "0x0800302a"
-  instruction = "anchor"
-  args = ["0:0"]
+# This anchor is for fuzzing the firmware
+#   [[CPU.cpu0.virtuals]]
+#   at = "0x0800302a"
+#   instruction = "anchor"
+#   args = ["0:0"]
 
-  [[CPU.cpu0.virtuals]]
-  at = "0x080007f2"
-  instruction = "assert"
-  args = ["*0x0"]
+# This anchor is for fuzzing from the model
+#   [[CPU.cpu0.virtuals]]
+#   at = "0xFFFFFFFF"
+#   instruction = "anchor"
+#   args = ["0:0"]
 
-  [[CPU.cpu0.virtuals]]
-  at = "0x08000774"
-  instruction = "updatemem"
-  args = ["0x08006144:w:4:0x23,0x23,0x23,0x23"]
+#   [[CPU.cpu0.virtuals]]
+#   at = "0x080007f2"
+#   instruction = "assert"
+#   args = ["*0x0"]
 
-  [[CPU.cpu0.virtuals]]
-  at = "0x08000778"
-  instruction = "updatemem"
-  args = ["0x08006144:w:4:0x23,0x23,0x23,0x22"]
+#   [[CPU.cpu0.virtuals]]
+#   at = "0x08000774"
+#   instruction = "updatemem"
+#   args = ["0x08006144:w:4:0x23,0x23,0x23,0x23"]
 
-  [[CPU.cpu0.modifiers]]
-  at = "0x080006ec"
-  patch = "r15 0x08000708"
+#   [[CPU.cpu0.virtuals]]
+#   at = "0x08000778"
+#   instruction = "updatemem"
+#   args = ["0x08006144:w:4:0x23,0x23,0x23,0x22"]
+
+#   [[CPU.cpu0.modifiers]]
+#   at = "0x080006ec"
+#   patch = "r15 0x08000708"
 
 
 

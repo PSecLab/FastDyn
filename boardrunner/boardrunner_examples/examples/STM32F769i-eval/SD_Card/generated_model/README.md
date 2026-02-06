@@ -1,6 +1,8 @@
 # Phase 1: Preparation (Before running simulation)
 These commands create a 64MB empty binary file and format it as FAT32 so it mimics a fresh SD card.
 
+The model is set up to expect sdcard.img in the directory fastdyn is run from, so run these commands from the same directory
+
 ```bash
 # 1. Create a blank 64MB file filled with zeros (64MB is a safe size to ensure FAT32 compatibility)
 dd if=/dev/zero of=sdcard.img bs=1M count=64
@@ -11,7 +13,9 @@ dd if=/dev/zero of=sdcard.img bs=1M count=64
 mkfs.fat -F 32 -S 512 -n SDCARD sdcard.img
 ```
 # Phase 2: Run Your Simulation
-
+There are two different models, one is the base model, the other acts as a harness for the fuzzer.
+The fuzzer is a simple demonstration of fuzzing blocks of data from the sd card from the model, the application however only checks the size.
+The FIFO register is used for multiple purposes, so modifiers are used to write a flag to memory when the firmware is at the point where it reads, the fuzzer checks for the flag before writing data.
 
 # Phase 3: Verification (After simulation finishes)
 ```bash

@@ -307,12 +307,16 @@ static void exec_cmd(uint32_t cmd_val) {
                 if (want > 0) {
                     (void)api_file_pread(s.host_fd, s.fifo, want, off);
 
-                    if (last_anchor_id != -1) {
-                        fuzz_finish(last_anchor_id);
-                    }
-                    last_anchor_id = 0;
+                    uint32_t firmware_status = 0;
+                    qemu_plugin_read_memory(0x08006144, (uint8_t*)&firmware_status, 4);
+                    if (firmware_status == 0x23232323) {
+                        if (last_anchor_id != -1) {
+                            fuzz_finish(last_anchor_id);
+                        }
+                        last_anchor_id = 0;
 
-                    uint32_t read_count = fuzz_buffer_read(last_anchor_id, s.fifo, want);
+                        uint32_t read_count = fuzz_buffer_read(last_anchor_id, s.fifo, want);
+                    }
                 }
             }
 
