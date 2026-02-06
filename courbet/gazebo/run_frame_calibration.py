@@ -377,10 +377,133 @@ class GazeboMagTopicReceiver:
             return self._latest.copy(), float(self._latest_time)
 
 
+class GazeboPoseTopicReceiver:
+    """
+    Subscribe to a Gazebo Pose_V topic and provide the latest body->world quaternion.
+
+    Typical pose topics:
+      - "/model/<model_name>/pose"  (Pose_V)
+      - "/world/<world>/dynamic_pose/info" (Pose_V, may include many entities)
+
+    This receiver tries to pick the pose for `entity_name` if present.
+    """
+
+    def __init__(
+        self,
+        node: Node,
+        topic: str,
+        *,
+        entity_name: str,
+    ):
+        self._node = node
+        self._topic = topic
+        self._entity_name = entity_name
+
+        self._lock = threading.Lock()
+        self._running = False
+        self._subscribed = False
+
+        self._latest_quat: Optional[Quaternion] = None
+        self._latest_t: float = 0.0
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+
+        ok = self._node.subscribe(Pose_V, self._topic, self._cb)
+        if not ok:
+            self._running = False
+            raise RuntimeError(f"Failed to subscribe Pose_V to topic: {self._topic}")
+        self._subscribed = True
+
+    def stop(self) -> None:
+        # gz.transport python API doesn't always expose unsubscribe; we just stop updating.
+        self._running = False
+
+    def latest_quat_wb(self) -> Tuple[Quaternion, float]:
+        """
+        Returns (Quaternion(w,x,y,z), timestamp_seconds).
+        timestamp_seconds is wall-clock time if msg stamp is not available.
+        """
+        with self._lock:
+            if self._latest_quat is None:
+                # Return a safe default; caller should check t>0
+                return Quaternion(1.0, 0.0, 0.0, 0.0), 0.0
+            return self._latest_quat, self._latest_t
+
+    # ---------- internal helpers ----------
+
+    @staticmethod
+    def _extract_stamp_seconds(msg: Pose_V) -> Optional[float]:
+        """
+        Try to read header.stamp.{sec,nsec} if present.
+        Different gz versions may differ; fall back if missing.
+        """
+        try:
+            # Pose_V usually has header.stamp in recent gz-msgs
+            hdr = msg.header
+            st = hdr.stamp
+            sec = getattr(st, "sec", None)
+            nsec = getattr(st, "nsec", None)
+            if sec is None or nsec is None:
+                return None
+            return float(sec) + float(nsec) * 1e-9
+        except Exception:
+            return None
+
+    def _select_pose_index(self, msg: Pose_V) -> int:
+        """
+        Choose which pose entry in Pose_V to use.
+        Prefer matching by name if available; else use pose(0).
+        """
+        # Many Pose messages in gz have fields: name, id
+        # Pose_V contains repeated Pose messages.
+        if msg.pose is None or len(msg.pose) == 0:
+            return -1
+
+        # Try match by name
+        for i, p in enumerate(msg.pose):
+            try:
+                # Some variants: p.name, p.has_field('name'), etc.
+                if hasattr(p, "name") and p.name == self._entity_name:
+                    return i
+            except Exception:
+                pass
+
+        # If topic is "/model/<name>/pose", it's usually pose(0)
+        return 0
+
+    def _cb(self, msg: Pose_V) -> None:
+        if not self._running:
+            return
+
+        idx = self._select_pose_index(msg)
+        if idx < 0:
+            return
+
+        p = msg.pose[idx]
+        qmsg = p.orientation
+
+        # Extract quaternion body->world (assuming Gazebo pose orientation is in world frame for the entity)
+        qw = float(qmsg.w)
+        qx = float(qmsg.x)
+        qy = float(qmsg.y)
+        qz = float(qmsg.z)
+
+        t = time.time()
+
+        with self._lock:
+            self._latest_quat = Quaternion(qw, qx, qy, qz)
+            self._latest_t = float(t)
+
+
 def frame_calibration_auto(
     *,
     gazebo_rx: "GazeboMagTopicReceiver",
     driver_rx: "DriverMagUDPReceiver",
+    pose_rx: "GazeboPoseTopicReceiver",          # NEW: body quaternion source
+    sensor_rpy: "SensorAttitude",               # NEW: fixed sensor rpy
     n_samples: int = 30,
     sample_period_s: float = 0.05,
     max_pair_dt_s: float = 0.10,
@@ -407,28 +530,41 @@ def frame_calibration_auto(
         x, tx = gazebo_rx.latest()
         y_mg, ty = driver_rx.latest_milli_gauss()
 
+        body_quat, tq = pose_rx.latest_quat_wb()
+
         now = time.time()
         # require both streams have at least 1 update
-        if tx <= 0.0 or ty <= 0.0:
+        if tx <= 0.0 or ty <= 0.0 or tq <= 0.0:
             time.sleep(sample_period_s)
             continue
 
-        dt = abs(tx - ty)
-        if dt <= max_pair_dt_s:
-            # (optional) avoid taking the same cached value too frequently
+        dt_xy = abs(tx - ty)
+        dt_xq = abs(tx - tq)
+
+        if dt_xy <= max_pair_dt_s and dt_xq <= max_pair_dt_s:
             if now - last_accept_t >= sample_period_s:
                 y = driver_to_gazebo_scale * y_mg
-                xs.append(np.asarray(x, dtype=float).reshape(3))
+
+                # --- KEY CHANGE: use debug-corrected x ---
+                x_debug = debug_magnetometer_vector_sensor_frame(
+                    np.asarray(x, dtype=float).reshape(3),
+                    body_quat,
+                    sensor_rpy,
+                )
+
+                xs.append(np.asarray(x_debug, dtype=float).reshape(3))
                 ys.append(np.asarray(y, dtype=float).reshape(3))
                 last_accept_t = now
 
                 if len(xs) % 5 == 0 or len(xs) == 1:
-                    print(f"[calib] paired {len(xs)}/{n_samples}  dt={dt:.3f}s"
-                          f"  x={x}  y(mG)={y_mg}")
+                    print(
+                        f"[calib] paired {len(xs)}/{n_samples}  "
+                        f"dt_xy={dt_xy:.3f}s dt_xq={dt_xq:.3f}s  "
+                        f"x_raw={x}  x_dbg={x_debug}  y(mG)={y_mg}"
+                    )
 
         time.sleep(sample_period_s)
 
-        # safety: don’t loop forever if nothing arrives
         if now - t_start > 30.0 and len(xs) < min_samples:
             raise TimeoutError("Not enough paired samples collected (check topics/UDP and timing).")
 
@@ -533,16 +669,26 @@ def main():
 
         if CALIBRATION_MODE:
             # 1) find out driver level conversion
+            sensor_rpy = parse_sensor_pose_rpy_from_model_sdf_file(
+                MODEL_SDF_PATH,
+                sensor_name=SENSOR_NAME,
+            )
+
             driver_rx = DriverMagUDPReceiver(bind_ip="127.0.0.1", port=15150)
             driver_rx.start()
 
             gazebo_rx = GazeboMagTopicReceiver(node, SENSOR_TOPIC, convert_to_tesla=True)
             gazebo_rx.start()
 
+            pose_rx = GazeboPoseTopicReceiver(node, POSE_TOPIC, entity_name=MODEL_NAME)
+            pose_rx.start()
+
             try:
                 calib = frame_calibration_auto(
                     gazebo_rx=gazebo_rx,
                     driver_rx=driver_rx,
+                    pose_rx=pose_rx,
+                    sensor_rpy=sensor_rpy,
                     n_samples=40,
                     sample_period_s=0.05,
                     max_pair_dt_s=0.10,

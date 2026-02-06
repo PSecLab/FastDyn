@@ -647,26 +647,23 @@ void ins_block_read(unsigned int cpu_index, void *udata) {
             float gyro_z = imu.gyro.z;
             float temp_celsius = TEMP_ZERO_C_INV;
 
+            // Conversion from FLU to FRD
+            accel_x = accel_x;
+            accel_y = -1 * accel_y;
+            accel_z = -1 * accel_z;
+            gyro_x = gyro_x;
+            gyro_y = -1 * gyro_y;
+            gyro_z = -1 * gyro_z;
+
             // Apply remapping and sign adjustments here if needed
-
-            // float imu_data[7] = {
-            //     accel_y,
-            //     -1 * accel_x,
-            //     accel_z,
-            //     temp_celsius,
-            //     gyro_y,
-            //     -1 * gyro_x,
-            //     gyro_z
-            // };
-
             float imu_data[7] = {
-                accel_y,
                 accel_x,
-                -1* accel_z,
+                accel_y,
+                accel_z,
                 temp_celsius,
-                gyro_y,
                 gyro_x,
-                -1 * gyro_z
+                gyro_y,
+                gyro_z
             };
 
             int16_t imu_data_int16[7];
@@ -745,8 +742,14 @@ HMC5843RawData convert_to_hmc5843(SimulatorMagnetometer sim_data) {
     // int mag_y_raw = temp_z;    // raw Z -> Y
     // int mag_z_raw = -1 * temp_y;   // raw Y -> Z (negated)
 
-    int mag_x_raw = temp_x;
-    int mag_y_raw = temp_y;
+    // Conversion from FLU to FRD
+    temp_x = temp_x;
+    temp_y = -1 * temp_y;
+    temp_z = -1 * temp_z;
+
+    // Apply hardware remapping for HMC5843
+    int mag_x_raw = temp_y;
+    int mag_y_raw = -temp_x;
     int mag_z_raw = temp_z;
 
     // Clamp to ±2048
