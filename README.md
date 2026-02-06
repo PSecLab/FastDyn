@@ -71,6 +71,8 @@ DEBUG_PRINT  ?= false
 LIBPY        ?= false
 ```
 
+**Note**: you may need our [LibHW](https://anonymous.4open.science/r/libhw-9FB5/README.md) repository if you want to build with `LIBHW` enabled.
+
 Then build the courbet gazebo plugins and library:
 
 ```bash
