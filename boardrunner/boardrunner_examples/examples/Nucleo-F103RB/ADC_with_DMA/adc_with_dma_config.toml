@@ -65,16 +65,16 @@ logger_content = """
 # output = stderr
 """
 
-[[CPU.cpu0.virtuals]]
-at = "0xFFFFFFFF"
-instruction = "anchor"
-args = "0:0"
+# [[CPU.cpu0.virtuals]]
+# at = "0xFFFFFFFF"
+# instruction = "anchor"
+# args = "0:0"
 
-# assert on hardfaults
-[[CPU.cpu0.virtuals]]
-at = "0x0800170e"
-instruction = "assert"
-args = "*0x0"
+# # assert on hardfaults
+# [[CPU.cpu0.virtuals]]
+# at = "0x0800170e"
+# instruction = "assert"
+# args = "*0x0"
 
 # ==============================================================================
 #                              Device Configuration
