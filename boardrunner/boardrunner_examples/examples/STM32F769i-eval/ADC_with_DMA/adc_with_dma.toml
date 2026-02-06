@@ -1,4 +1,4 @@
-
+# ==============================================================================
 # ==============================================================================
 # Machine (machine-wide + QEMU target options)
 # ==============================================================================
@@ -7,7 +7,7 @@ platform = "STM32F429"
 
 qemu_path = "qemu-system-arm"
 
-monitor_port = 5554
+monitor_port = 5555
 qmp_socket   = "/tmp/qmp.sock"
 
 enable_gdb    = false
@@ -18,11 +18,8 @@ semihosting        = true
 semihosting_config = "enable=on,target=native"
 
 coverage = true
-finline  = ""
-
 bbl_coverage = true
-
-
+finline  = ""
 
 # ==============================================================================
 # Memory
@@ -69,8 +66,6 @@ bbl_coverage = true
   share    = true
   prealloc = false
 
-
-
 # ==============================================================================
 # CPUs
 # ==============================================================================
@@ -84,7 +79,7 @@ bbl_coverage = true
   machine = "cortexm"
   cpu     = "cortex-m4"
 
-  binary     = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
+  binary     = "boardrunner/boardrunner_examples/examples/STM32F769i-eval/ADC_with_DMA/firmware/STM32F769I_EVAL.elf"
   init_nsvtor = "0x08000000"
 
   map_file        = "courbet/rover_v422_map.txt"
@@ -103,6 +98,7 @@ bbl_coverage = true
   # output = stderr
   """
 
+
 # ==============================================================================
 #                              Device Configuration
 # ==============================================================================
@@ -119,41 +115,68 @@ bbl_coverage = true
 [Device.Models.classic]
     # The classic model has no global arguments.
 
-[Device.Models.twintrace]
-    backend = "stlink"
-    # The classic model has no global arguments.
-
 [Device.Models.unhandled]
     # This model explicitly marks memory as unhandled.
+
 
 # --- Peripheral Definitions ---
 # Each peripheral gets its own sub-table. If it uses the elder model,
 # its specific scroll configuration is defined directly within it.
-[Device.gpiog]
-    # ranges = ["0x40000000-0x40010FFF"]
-    ranges = [["0x40021800", "0x40021BFF"]]
+# --- Peripheral Definitions ---
 
-    description = "GPIO Port G for general-purpose I/O."
-    read_priority = "elder"  #only the read from elder model is considered.
-    # The configuration for this specific device when handled by the elder model.
-    [[Device.gpiog.handlers]]
-        # This device is now handled by the elder model, directly linking it
-        # to the 'scroll_config' defined above.
+# [UPDATED] Strictly limits ranges to:
+# 1. ADC1 Instance (0x40012000 - 0x400120FF)
+# 2. ADC Common Registers (0x40012300 - 0x400123FF) - Required for Clock Prescaler
+# 3. DMA2 Controller (0x40026400 - 0x400267FF) - Used by ADC on F7
+# Excludes ADC2 (0x40012100) and ADC3 (0x40012200) entirely.
+
+[Device.adc_with_dma]
+    ranges = [
+        ["0x40012000", "0x400120FF"], # ADC1 Registers only
+        ["0x40012300", "0x400123FF"], # ADC Common Registers (CCR)
+        ["0x40026400", "0x400267FF"]  # DMA2 Controller
+    ]
+    irq = [['1','100']]
+    description = "ADC1, Common Registers, and DMA2."
+    read_priority = "elder"
+
+    [[Device.adc_with_dma.handlers]]
         model   = "elder"
         enabled = true
-        scroll = "boardrunner/boardrunner_sdk/build/model.so"
+        scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
-    [[Device.gpiog.handlers]]
-        # This device is now handled by the elder model, directly linking it
-        # to the 'scroll_config' defined above.
+    [[Device.adc_with_dma.handlers]]
+        model   = "classic"
+        enabled = false
+
+    [[Device.adc_with_dma.handlers]]
         model   = "passthrough"
         enabled = false
 
-[Device.unhandled_space]
-    ranges = [["0x40000000", "0x400217FF"],["0x40021C00", "0xE00FFFFF"], ["0xE0000000", "0xEFFFFFFF"]]
+    [[Device.adc_with_dma.handlers]]
+        model   = "twintrace"
+        enabled = false
 
-    description = "Memory regions that are explicitly not handled by any model."
+# [UPDATED] Remaining space fills the voids, including unused ADC2/ADC3 and DMA1
+[Device.remaining_space]
+    ranges = [
+        ["0x40000000", "0x40011FFF"], # Gap before ADC1
+        ["0x40012100", "0x400122FF"], # Gap: ADC2 and ADC3 (Unused)
+        ["0x40012400", "0x400263FF"], # Gap: After Common Regs up to DMA2 (Swallows DMA1)
+        ["0x40026800", "0xDFFFFFFF"], # Gap: After DMA2
+        ["0xE0000000", "0xEFFFFFFF"]  # System Control
+    ]
+    irq = [['1','100']]
+    description = "Memory regions handled by passthrough."
 
-    [[Device.unhandled_space.handlers]]
+    [[Device.remaining_space.handlers]]
+        model = "classic"
+        enabled = false
+
+    [[Device.remaining_space.handlers]]
         model = "passthrough"
         enabled = true
+
+    [[Device.remaining_space.handlers]]
+        model = "twintrace"
+        enabled = false

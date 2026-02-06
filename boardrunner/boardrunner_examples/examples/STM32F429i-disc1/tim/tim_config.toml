@@ -126,33 +126,29 @@ bbl_coverage = true
 [Device.Models.unhandled]
     # This model explicitly marks memory as unhandled.
 
-# --- Peripheral Definitions ---
-# Each peripheral gets its own sub-table. If it uses the elder model,
-# its specific scroll configuration is defined directly within it.
-[Device.gpiog]
-    # ranges = ["0x40000000-0x40010FFF"]
-    ranges = [["0x40021800", "0x40021BFF"]]
+# --- TIM1 (Advanced-control timer) ---
+[Device.tim1]
+    ranges = [["0x40010000", "0x400103FF"]]
+    description = "TIM1 advanced-control timer (APB2)."
+    read_priority = "elder"
 
-    description = "GPIO Port G for general-purpose I/O."
-    read_priority = "elder"  #only the read from elder model is considered.
-    # The configuration for this specific device when handled by the elder model.
-    [[Device.gpiog.handlers]]
-        # This device is now handled by the elder model, directly linking it
-        # to the 'scroll_config' defined above.
+    [[Device.tim1.handlers]]
         model   = "elder"
         enabled = true
-        scroll = "boardrunner/boardrunner_sdk/build/model.so"
+        scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
-    [[Device.gpiog.handlers]]
-        # This device is now handled by the elder model, directly linking it
-        # to the 'scroll_config' defined above.
+    [[Device.tim1.handlers]]
         model   = "passthrough"
         enabled = false
 
-[Device.unhandled_space]
-    ranges = [["0x40000000", "0x400217FF"],["0x40021C00", "0xE00FFFFF"], ["0xE0000000", "0xEFFFFFFF"]]
 
-    description = "Memory regions that are explicitly not handled by any model."
+# --- Everything else (passthrough), with a hole for TIM1 ---
+[Device.unhandled_space]
+    ranges = [
+      ["0x40000000", "0x4000FFFF"],   # before TIM1
+      ["0x40010400", "0xEFFFFFFF"]    # after TIM1 (includes TIM8 at 0x40010400..0x400107FF) :contentReference[oaicite:1]{index=1}
+    ]
+    description = "All other MMIO space (passthrough), excluding TIM1 window."
 
     [[Device.unhandled_space.handlers]]
         model = "passthrough"
