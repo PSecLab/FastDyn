@@ -6,9 +6,11 @@ mod phi_stage;
 mod cpexp_input;
 mod lambda_mutational;
 mod mission_execution;
+mod param_shim;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
+use std::env;
 use std::{path::{self, PathBuf}, process::exit, ptr::write, thread::sleep, time::Duration};
 
 use env_logger::Target;
@@ -146,6 +148,27 @@ where
 }
 
 pub fn main() {
+    let api_key = env::var("OPENAI_API_KEY")
+        .expect("Set OPENAI_API_KEY in your environment");
+
+    let response = param_shim::get_parameter_shim_from_openai(
+        &api_key,
+        "ArduPilot",
+        "Rover-4.6",
+    ).expect("Failed to get parameter shim from OpenAI");
+
+    let mut generated_param_input: Vec<ParamInput> = param_shim::parse_param_shim_response(&api_key, &response)
+        .expect("Failed to parse parameter shim response");
+
+    // For debugging print out the generated parameter input
+    println!("Generated parameter inputs from OpenAI:");
+    for param in generated_param_input.iter() {
+        println!("  - {}: {:?}", param.get_name(), param.get_range());
+    }
+
+
+    // println!("OpenAI says: {}", response);
+
     env_logger::init();
 
     let physical_observer = PhysicalObserver::new(
