@@ -1,6 +1,6 @@
 // Device Model for USART1
 #include <device.h>
-#include <devmodels_apis.h>
+#include <boardrunner/vio.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
