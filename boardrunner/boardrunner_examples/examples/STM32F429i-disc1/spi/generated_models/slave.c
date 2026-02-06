@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "devmodels_apis.h"
+#include "boardrunner/vio.h"
 
 // --- Slave State and Data ---
 

@@ -9,7 +9,7 @@
  * and the function pointer typedefs for the callbacks.
  */
 #include "utils.h"
-#include "devmodels_apis.h"
+#include "boardrunner/vio.h"
 
 // --- Constants derived from the master firmware ---
 

@@ -1,5 +1,5 @@
 #include <device.h>
-#include <devmodels_apis.h>
+#include <boardrunner/vio.h>
 #include <string.h> // For memset
 #include "utils.h"
 

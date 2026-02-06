@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "device.h"
-#include "devmodels_apis.h"
+#include "boardrunner/vio.h"
 
 // Base address for DMA2
 #define DMA2_BASE 0x40026400
