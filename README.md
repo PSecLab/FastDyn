@@ -161,6 +161,8 @@ Now, you can run the fuzzer with the following command:
 ./target/release/baby_fuzzer
 ```
 
+### Specifying the parameters to fuzz
+
 If you want to specify different parameters that you want to fuzz, you can modify the file `courbet/fuzzer/libafl_phi/param_shim_descriptions.txt` with human readable descriptions of the parameters you want to fuzz like:
 
 ```
@@ -202,4 +204,25 @@ to
 
 ```rust
 let input_library = CPExpInput::new(generated_param_input, env_info_vec);
+```
+
+### Specifying the STL formulas to use
+
+If you want to specify the STL formulas to use, you can modify the file `courbet/fuzzer/libafl_phi/stl_formulas.txt` with the STL formulas you want to use.
+
+See the example file `courbet/fuzzer/libafl_phi/stl_formulas.txt` for an example.
+
+Since we had to implement the parser and we are waiting for the PR to be merged, you will need my fork of the parser repository:
+
+```bash
+git clone https://github.com/michaelprooney/banquo.git
+git checkout banquo-parser-impl
+```
+
+and then build and test the parser:
+
+```bash
+cd banquo/banquo-parser
+cargo build --release
+cargo test
 ```
