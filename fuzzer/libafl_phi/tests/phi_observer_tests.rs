@@ -2,7 +2,9 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-use banquo_parser::{parse_formula, Formula, ParsedFormula, Trace};
+use banquo::operators::{Always, And};
+use banquo::{predicate, Formula as BanquoFormula};
+use banquo_parser::{parse_formula, ParsedFormula, Trace};
 
 /// Helper to create a temporary working directory for tests and return to the
 /// original directory afterwards.
@@ -130,6 +132,162 @@ fn parses_production_stl_formulas_txt_with_same_logic() {
         5,
         "Expected 5 formulas to be parsed from stl_formulas.txt"
     );
+}
+
+/// Build a single state (one time step) with roll, pitch, roll_rate, lateral_accel.
+fn state(
+    roll: f64,
+    pitch: f64,
+    roll_rate: f64,
+    lateral_accel: f64,
+) -> std::collections::HashMap<String, f64> {
+    std::collections::HashMap::from([
+        ("roll".to_string(), roll),
+        ("pitch".to_string(), pitch),
+        ("roll_rate".to_string(), roll_rate),
+        ("lateral_accel".to_string(), lateral_accel),
+    ])
+}
+
+/// Compute STL robustness from metrics: minimum over the trace (same as PhysicalObserver).
+fn min_robustness(metrics: &banquo_parser::Trace<f64>) -> f64 {
+    metrics
+        .iter()
+        .fold(f64::INFINITY, |acc, (_t, v)| if *v < acc { *v } else { acc })
+}
+
+/// Load formulas from stl_formulas.txt using the same logic as PhysicalObserver.
+fn load_stl_formulas(path: &str) -> Vec<(String, ParsedFormula)> {
+    let file = File::open(path).unwrap_or_else(|e| panic!("open {}: {}", path, e));
+    let reader = BufReader::new(file);
+    let mut out = Vec::new();
+    for (idx, line_res) in reader.lines().enumerate() {
+        let line_num = idx + 1;
+        let line = line_res.unwrap_or_else(|e| panic!("read line {}: {}", line_num, e));
+        let s = line.trim().to_owned();
+        if s.is_empty() || s.starts_with('#') {
+            continue;
+        }
+        let parsed = parse_formula(&s).unwrap_or_else(|e| {
+            panic!(
+                "parse line {} of {}: \"{}\" -> {}",
+                line_num, path, s, e
+            );
+        });
+        out.push((s, parsed));
+    }
+    out
+}
+
+/// Reference formulas built the same way as before integrating the parser:
+/// Always::unbounded(And::new(min_pred, max_pred)) for each variable's bounds.
+fn reference_formula_roll() -> impl BanquoFormula<std::collections::HashMap<String, f64>, Metric = f64> {
+    let roll_min_pred: banquo::Predicate = predicate! { -0.78539816339 <= roll };
+    let roll_max_pred: banquo::Predicate = predicate! { roll <= 0.78539816339 };
+    Always::unbounded(And::new(roll_min_pred, roll_max_pred))
+}
+fn reference_formula_pitch() -> impl BanquoFormula<std::collections::HashMap<String, f64>, Metric = f64> {
+    let pitch_min_pred: banquo::Predicate = predicate! { -0.78539816339 <= pitch };
+    let pitch_max_pred: banquo::Predicate = predicate! { pitch <= 0.78539816339 };
+    Always::unbounded(And::new(pitch_min_pred, pitch_max_pred))
+}
+fn reference_formula_pre_fail_roll() -> impl BanquoFormula<std::collections::HashMap<String, f64>, Metric = f64> {
+    let pre_fail_roll_min_pred: banquo::Predicate = predicate! { -0.3 <= roll };
+    let pre_fail_roll_max_pred: banquo::Predicate = predicate! { roll <= 0.3 };
+    Always::unbounded(And::new(pre_fail_roll_min_pred, pre_fail_roll_max_pred))
+}
+fn reference_formula_roll_growth() -> impl BanquoFormula<std::collections::HashMap<String, f64>, Metric = f64> {
+    let roll_growth_min_pred: banquo::Predicate = predicate! { -0.5 <= roll_rate };
+    let roll_growth_max_pred: banquo::Predicate = predicate! { roll_rate <= 0.5 };
+    Always::unbounded(And::new(roll_growth_min_pred, roll_growth_max_pred))
+}
+fn reference_formula_lat_accel() -> impl BanquoFormula<std::collections::HashMap<String, f64>, Metric = f64> {
+    let lat_accel_min_pred: banquo::Predicate = predicate! { -3.9 <= lateral_accel };
+    let lat_accel_max_pred: banquo::Predicate = predicate! { lateral_accel <= 3.9 };
+    Always::unbounded(And::new(lat_accel_min_pred, lat_accel_max_pred))
+}
+
+#[test]
+fn stl_formulas_parse_and_evaluate_accurately() {
+    // Prove that the formulas in stl_formulas.txt evaluate identically to the
+    // hand-built reference (Always::unbounded(And::new(min_pred, max_pred))).
+    // Robustness is negative only when we violate a policy; in-bounds => non-negative.
+
+    let parsed = load_stl_formulas("stl_formulas.txt");
+    assert_eq!(
+        parsed.len(),
+        5,
+        "stl_formulas.txt must define exactly 5 formulas for this test"
+    );
+
+    const TOL: f64 = 1e-9;
+    type State = std::collections::HashMap<String, f64>;
+
+    // All variables within every formula's bounds (tightest: roll ±0.3, roll_rate ±0.5).
+    let trace_in_bounds: Trace<State> = Trace::from([
+        (0.0, state(0.0, 0.0, 0.0, 0.0)),
+        (1.0, state(0.2, 0.3, 0.2, 1.0)),
+    ]);
+
+    fn ref_robustness(idx: usize, t: &Trace<State>) -> f64 {
+        match idx {
+            0 => min_robustness(&reference_formula_roll().evaluate(t).unwrap_or_else(|_| panic!("reference 0"))),
+            1 => min_robustness(&reference_formula_pitch().evaluate(t).unwrap_or_else(|_| panic!("reference 1"))),
+            2 => min_robustness(&reference_formula_pre_fail_roll().evaluate(t).unwrap_or_else(|_| panic!("reference 2"))),
+            3 => min_robustness(&reference_formula_roll_growth().evaluate(t).unwrap_or_else(|_| panic!("reference 3"))),
+            4 => min_robustness(&reference_formula_lat_accel().evaluate(t).unwrap_or_else(|_| panic!("reference 4"))),
+            _ => panic!("formula index out of range"),
+        }
+    }
+
+    for (idx, (src, p)) in parsed.iter().enumerate() {
+        let ref_r = ref_robustness(idx, &trace_in_bounds);
+        let parsed_r = min_robustness(&p.evaluate(&trace_in_bounds).expect("parsed eval"));
+
+        assert!(
+            (ref_r - parsed_r).abs() < TOL,
+            "formula {}: parsed should match reference on in-bounds trace; reference={}, parsed={}, source={:?}",
+            idx, ref_r, parsed_r, src
+        );
+        assert!(
+            ref_r >= 0.0,
+            "formula {}: in-bounds trace should have non-negative robustness (no violation); got {}",
+            idx, ref_r
+        );
+    }
+
+    let violating_traces: [Trace<State>; 5] = [
+        Trace::from([(0.0, state(1.0, 0.0, 0.0, 0.0))]),
+        Trace::from([(0.0, state(0.0, 1.0, 0.0, 0.0))]),
+        Trace::from([(0.0, state(0.5, 0.0, 0.0, 0.0))]),
+        Trace::from([(0.0, state(0.0, 0.0, 1.0, 0.0))]),
+        Trace::from([(0.0, state(0.0, 0.0, 0.0, 5.0))]),
+    ];
+
+    for (idx, (src, p)) in parsed.iter().enumerate() {
+        let trace = &violating_traces[idx];
+        let ref_r = ref_robustness(idx, trace);
+        let parsed_r = min_robustness(&p.evaluate(trace).expect("parsed eval"));
+
+        assert!(
+            (ref_r - parsed_r).abs() < TOL,
+            "formula {}: parsed should match reference on violating trace; reference={}, parsed={}, source={:?}",
+            idx, ref_r, parsed_r, src
+        );
+        assert!(
+            ref_r < 0.0,
+            "formula {}: violating trace should have negative robustness; got {}",
+            idx, ref_r
+        );
+    }
+
+    for (src, p) in &parsed {
+        assert_eq!(
+            p.debug_source().unwrap(),
+            src.as_str(),
+            "parsed formula debug_source should equal formula string"
+        );
+    }
 }
 
 
