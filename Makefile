@@ -2,14 +2,14 @@
 
 qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
-LIBGZ        ?= true
+LIBGZ        ?= false
 LIBHW        ?= false
 LIBFUZZ		 ?= false
 DEV          ?= false
 DEBUG_PRINT  ?= false
 LIBPY        ?= false
 
-BOARD_RUNNER ?= true
+BOARD_RUNNER ?= false
 
 # Top-level target: clean, configure with meson, then build with ninja
 all: setup
@@ -45,6 +45,7 @@ clean:
 	rm -rf build docs/html
 
 fetch:
+	git submodule update --init third_party/cmsis-svd-data;
 	@# Only fetch submodules that are required for the selected features.
 	@if [ "$(DEV)" = "true" ] && [ "$(LIBHW)" = "true" ]; then \
 		git submodule update --init device_models/elder/inih third_party/cmsis-svd-data; \
