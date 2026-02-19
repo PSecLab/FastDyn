@@ -62,6 +62,7 @@ class DwarfProvider(SymbolProvider):
                 out.append(sym)
 
         elif self._include_variables and die.tag == "DW_TAG_variable":
+            name_attr = die.attributes.get('DW_AT_name')
             sym = self._from_variable(die)
             if sym:
                 out.append(sym)
@@ -111,20 +112,21 @@ class DwarfProvider(SymbolProvider):
             return None
 
         loc = die.attributes.get("DW_AT_location")
-        if not loc or not isinstance(loc.value, (bytes, bytearray)):
+        if not loc or not isinstance(loc.value, (list, bytes, bytearray)):
             return None
 
+        loc_data = loc.value
+
         # Only handle DW_OP_addr (simple, unambiguous case)
-        if loc.value[0] != 0x03:
+        if len(loc_data) == 0 or loc.value[0] != 0x03:
             return None
 
         addr_size = die.cu["address_size"]
         if len(loc.value) < 1 + addr_size:
             return None
 
-        addr = int.from_bytes(
-            loc.value[1 : 1 + addr_size], "little"
-        )
+        raw_addr_bytes = bytes(loc_data[1 : 1 + addr_size])
+        addr = int.from_bytes(raw_addr_bytes, "little")
 
         return SymbolInfo(
             name=name,

@@ -54,7 +54,6 @@ plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 binary = "device_models/server_firmwares/stm32f4/build/RTOSDemo.axf"
 init_nsvtor = "0x08000000"
-map_file = "courbet/rover_v422_map.txt"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 

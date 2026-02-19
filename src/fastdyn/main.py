@@ -17,6 +17,8 @@ from .verifier import context_minimizer as cm   #Minimizes the context
 from . import toml_parser
 from .fuzzer import fuzzer
 from dataclasses import asdict
+from fastdyn.binary.symmap import SymbolResolver
+from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()

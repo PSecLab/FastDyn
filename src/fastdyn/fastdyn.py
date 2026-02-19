@@ -221,16 +221,6 @@ class CPU:
             print(f"Unable to set '{param}' to {val!r}: {e}")
             return False
 
-    def add_map_file(self, map_file):
-        #parse the map file to create a symbol lookup
-        if os.path.exists(map_file):
-            fastdyn_log.info(f"Parsing Config file: {map_file}")
-            self.symbol_dict = parse_helper.load_symbol_addresses(map_file)
-        else:
-            fastdyn_log.error(f"Map file Path not found")
-            return False
-        return True
-
 @dataclass
 class DeviceHandler:
     model: str = ""                           # "qemu" | "elder" | "passthrough" | ...

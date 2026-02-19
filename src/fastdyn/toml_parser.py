@@ -2,6 +2,7 @@ import tomli
 import logging
 
 from fastdyn.fastdyn import *
+from fastdyn.introspect.introspect import *
 from . import fastdyn_log as fastdyn_log_conf
 
 log = logging.getLogger(__name__)
@@ -45,6 +46,8 @@ def parser(machine_name, toml_config, svd_path):
     if toml_parser.machine_info.get("platform") is not None:
         machine0.add_cmsis_svd(cmsis_svd=svd_path)
 
+
+
     #add cpus information per machine
     cpus = []
     for idx, cpu in enumerate(toml_parser.cpus_info):
@@ -60,13 +63,18 @@ def parser(machine_name, toml_config, svd_path):
                 hardware_trace = curr_cpu.get("hardware_trace", None)
                 )
 
+        # Make it option driven
+        introspect_rtos(cpu_obj, curr_cpu['binary'])
+
         #additional params if set by the user
         cpu_obj.plugin_library  =   curr_cpu.get('plugin_library', 'build/libfastdyn.so')
         cpu_obj.monitor_elf     =   curr_cpu.get('monitor_elf', '../ws/monitor.elf')
 
         #symbol resolution per cpu
-        if curr_cpu.get("map_file") is not None:
-            cpu_obj.add_map_file(curr_cpu.get("map_file"))
+		#if curr_cpu.get("map_file") is not None:
+		#	cpu_obj.add_map_file(curr_cpu.get("map_file"))
+
+
 
         #add virtual instructions per cpu
         if curr_cpu.get("virtuals"):
