@@ -1,6 +1,8 @@
 from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 from fastdyn import fastdyn_log as fastdyn_log_conf
+from fastdyn.introspect.introspector_base import RTOSIntrospector
+import os, importlib 
 
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
@@ -31,7 +33,31 @@ def identify_rtos(symbols):
     fastdyn_log.info("Likely Unknown/Custom Baremetal")    
     return "Unknown/Custom Baremetal"
 
+def _load_local_introspectors():
+    """Scans the current directory for anything ending in _introspector.py"""
+    # Get the directory where this script is running
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    for filename in os.listdir(current_dir):
+        # Only load files that match our strict naming convention
+        if filename.endswith('_introspector.py') and filename != 'base_introspector.py':
+            # Strip the '.py' extension to get the module name
+            module_name = filename[:-3]
+            # Dynamically import it, triggering the auto-registration
+            importlib.import_module(f"fastdyn.introspect.{module_name}")
+
+
 def introspect_rtos(cpu_obj, binary):
         resolver = SymbolResolver([DwarfProvider()])
         syms = resolver.resolve(binary)
-        identify_rtos(syms)
+        rtos_name = identify_rtos(syms)
+
+        _load_local_introspectors()
+
+        if rtos_name == "Unknown/Custom Baremetal":
+            fasdyn_log.info("Cannot introspect custom baremetal firmware.")
+            return 
+        # Dynamically instantiate the correct introspector!
+        introspector = RTOSIntrospector.create(rtos_name, cpu_obj, syms)
+        # Fire up the OS-specific hooks
+        introspector.setup_hooks()
