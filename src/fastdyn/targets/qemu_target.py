@@ -8,6 +8,7 @@ import subprocess
 import signal
 
 from ..utils import helper, twintrace
+from ..binary import binary_wrange
 import logging
 
 log = logging.getLogger(__name__)
@@ -189,6 +190,10 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         twintrace.replay_binary_verifier(replay_binary)
     elif twintrace_opt == "None":
         twintrace_opt= "off"
+
+    # ------------- generate writable regions for fuzzer ---------------
+    if (opts.coverage):
+        binary_wrange.run(f"{out_path}/bin-writable-ranges", cpu0.binary)
 
     # ------------------------ Plugin ------------------------
     plugin_lib = cpu0.plugin_library

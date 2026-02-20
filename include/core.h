@@ -31,8 +31,12 @@ int core_read_ram(uintptr_t address, size_t size, void* buffer);
  */
 int core_write_ram(uintptr_t address, size_t size, const void* buffer);
 
+void cov_irq_entry(int irq);
+void cov_irq_exit(int irq);
+
 void add_observed_value(uint32_t val);
 uint32_t dump_trace_info(void *hFuzz);
 void reset_and_dump_values(const char *filename);
+
 #endif /* CORE_H */
 
