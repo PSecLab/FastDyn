@@ -55,7 +55,7 @@ def introspect_rtos(cpu_obj, binary):
         _load_local_introspectors()
 
         if rtos_name == "Unknown/Custom Baremetal":
-            fasdyn_log.info("Cannot introspect custom baremetal firmware.")
+            fastdyn_log.info("Cannot introspect custom baremetal firmware.")
             return 
         # Dynamically instantiate the correct introspector!
         introspector = RTOSIntrospector.create(rtos_name, cpu_obj, syms)

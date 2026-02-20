@@ -60,8 +60,8 @@ static inline void dev_get_timestamp(time_t *sec, long *usec) {
 }
 
 static int dev_write(char * handler, long unsigned int address, uint64_t value, long unsigned int size) {
-#ifdef DEV_LOGGER
     uint64_t pc = core_get_pc();
+#ifdef DEV_LOGGER
     uint64_t icount = core_get_icount();
     time_t sec;
     long usec;
@@ -114,7 +114,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 
 // Filter out QEMU internals ('g') only and we dont filter ('v)
 //It is not always injecting double interrupts every ms
-    if (handler && (handler[0] == 'g' )) {
+    if (handler && (handler[0] == 'g')) {
            return 0;
     }
     // Continue internal operation
@@ -123,8 +123,8 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 
 // TODO: Change the hardcoded priorty variable.
 static int dev_read(char * handler, long unsigned int address, uint64_t *buf, long unsigned int size) {
-#ifdef DEV_LOGGER
     uint64_t pc = core_get_pc();
+#ifdef DEV_LOGGER
     uint64_t icount = core_get_icount();
     time_t sec;
     long usec;
@@ -220,6 +220,7 @@ DeviceModel* find_device_model(const char *name) {
 void dev_notify_irq(int number) {
 	time_t sec;
     long usec;
+    cov_irq_entry(number);
     dev_get_timestamp(&sec, &usec);
 #ifdef DEV_LOGGER
 	utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
@@ -230,7 +231,9 @@ void dev_notify_irq(int number) {
 		dev->interrupt(number);
 	}
 	else {
+#ifdef DEV_LOGGER
 		utils_log_to_file(io_logger, "Skipping IRQ NUM %d handling as not registered by the user\n", number);
+#endif
 		printf("Skipping IRQ NUM %d handling as not registered by the user\n", number);
 	}
 }
@@ -238,16 +241,20 @@ void dev_notify_irq(int number) {
 void dev_irqret_hook(int number) {
     time_t sec;
     long usec;
+    cov_irq_exit(number);
     dev_get_timestamp(&sec, &usec);
+#ifdef DEV_LOGGER
     utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
               sec, usec, number);
-
+#endif
 	DeviceModel* dev = irq_lut[number];
 	if (dev != NULL) {
 		dev->serve(number);
 	}
 	else {
+#ifdef DEV_LOGGER
 		utils_log_to_file(io_logger, "Skipping IRQ NUM %d handling as not registered by the user\n", number);
+#endif
 		printf("Skipping IRQ NUM %d handling as not registered by the user\n", number);
 	}
 }

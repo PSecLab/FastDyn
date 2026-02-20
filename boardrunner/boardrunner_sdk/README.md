@@ -49,9 +49,11 @@ From `boardrunner/boardrunner_sdk`:
 ```bash
 rm -rf build
 
+# Update to your paths
 cmake -S . -B build \
-  -DFASTDYN_INCLUDE_DIR=/scratch/Fastdyn/FastDyn/include \
-  -DQEMU_INCLUDE_DIR=/scratch/Fastdyn/qemu/include
+  -DFASTDYN_LIB=/data/Code/rehosting/FastDyn/build/libfastdyn.so \
+  -DFASTDYN_INCLUDE_DIR=/data/Code/rehosting/FastDyn/include \
+  -DQEMU_INCLUDE_DIR=/data/Code/rehosting/qemu/include
 
 cmake --build build -j
 ```
