@@ -112,6 +112,7 @@ srcs += files(
   'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
+  'virtuals/introspection/schema_loader.c'
 )
 
 if ENABLE_LIBGZ

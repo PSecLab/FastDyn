@@ -248,19 +248,6 @@ def setup_qemu(machine, work_dir=None):
     """
     Prepares output dir, writes device config, returns QEMU and GDB commands.
     """
-    if work_dir is not None:
-        if not os.path.isdir(work_dir):
-            log.warning(f"The output directory: {work_dir} passed by the user does not exist.")
-    else:
-        work_dir = FASTDYN_DEFAULT_WORKDIR
-
-    if os.path.exists(work_dir):
-        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
-        shutil.rmtree(work_dir)
-
-    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
-    os.makedirs(work_dir, exist_ok=True)
-
     dev_config_path = helper.write_dev_config_json(output_dir=work_dir, data=machine.parsed_device)
 
     qemu_cmd, gdb_cmd, launch_gdb, binary = build_qemu_cmd(machine, dev_config_path, work_dir)
@@ -273,6 +260,7 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
     """
     log.info("Running the following QEMU command:")
     log.info(" ".join(qemu_cmd))
+    print(" ".join(qemu_cmd))
 
     # best-effort cleanup based on the monitor port in this command
     port = _extract_monitor_port(qemu_cmd)

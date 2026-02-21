@@ -9,7 +9,7 @@ log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 #parse a single toml per machine, use as many instances as you want in future to parse multiple machines
-def parser(machine_name, toml_config, svd_path):
+def parser(out_dir, machine_name, toml_config, svd_path):
     #parse the toml configuration
     fastdyn_log.info(f"Parsing Config file: {toml_config}")
 
@@ -64,7 +64,7 @@ def parser(machine_name, toml_config, svd_path):
                 )
 
         # Make it option driven
-        introspect_rtos(cpu_obj, curr_cpu['binary'])
+        introspect_rtos(cpu_obj, curr_cpu['binary'], out_dir)
 
         #additional params if set by the user
         cpu_obj.plugin_library  =   curr_cpu.get('plugin_library', 'build/libfastdyn.so')

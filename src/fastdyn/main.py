@@ -59,7 +59,8 @@ def run(config, map_file, work_dir):
     os.makedirs(work_dir)
 
     #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
-    fastdyn_handle = toml_parser.parser(machine_name="machine0",toml_config=config, svd_path="third_party/cmsis-svd-data")
+    fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0",toml_config=config, svd_path="third_party/cmsis-svd-data")
+
 
     #run all the machines requested by the user
     for idx, machine in enumerate(fastdyn_handle.machines):

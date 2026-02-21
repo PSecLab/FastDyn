@@ -47,6 +47,7 @@ class Fastdyn:
 
             qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
 
+
     def shutdown(self):
         qemu_target.kill_qemu_process(port='5555')
 

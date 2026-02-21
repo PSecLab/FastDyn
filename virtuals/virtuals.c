@@ -28,6 +28,8 @@
     #include "ardurover_virtuals.c"
 #endif
 
+#include "introspection/inspct_freertos.c"
+
 // External dependencies from core.c
 extern AddressList addressLists[];
 extern size_t listCount;
@@ -124,6 +126,8 @@ cb_entry_t cb_registry[] = {
     // hardfault status
     { "set_hardfault_status", set_hardfault_status},
 #endif
+	{ "vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext}, 
+	{ "prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList}
 };
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);
