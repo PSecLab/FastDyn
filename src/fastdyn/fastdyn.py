@@ -152,8 +152,6 @@ class CPU:
         self.twintrace = twintrace       #supported options are record, replay or None
         self.hardware_trace = hardware_trace    # hardware log needed in case of replay
         self.introspect: bool = introspect
-        self.introspect_schema = self.add_introspection()
-
         self.machine_obj = machine_obj
 
         self.plugin_library: Optional[str] = "build/libfastdyn.so"
@@ -170,6 +168,10 @@ class CPU:
                                             # output = stderr
                                             """
         self.symbol_dict = None
+
+        if self.introspect:
+             self.introspect_schema = self.add_introspection()
+
 
     def add_virtual_instruction(self, vi: Union["VirtualInstruction", str, Sequence[Union["VirtualInstruction", str]]]) -> bool:
         items = vi if isinstance(vi, (list, tuple)) else [vi]
