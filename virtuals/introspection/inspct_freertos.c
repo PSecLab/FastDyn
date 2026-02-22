@@ -14,6 +14,11 @@ typedef struct {
     uint32_t item_value;
 } FreeRTOSTaskState;
 
+// --- Internal Queue Tracking State ---
+#define MAX_TRACKED_QUEUES 128
+uint32_t g_tracked_queues[MAX_TRACKED_QUEUES];
+size_t g_num_tracked_queues = 0;
+
 void inspct_freertos_dump_ready_lists(uint32_t ready_lists_base_addr, uint32_t max_priorities);
 
 // The static helper function
@@ -34,7 +39,7 @@ static bool freertos_extract_tcb_info(uint32_t tcb_addr, FreeRTOSTaskState *out_
 }
 
 void inspct_freertos_vTaskSwitchContext(unsigned int cpu_idx, void *arg) {
-    uint32_t pxCurrentTCB_global_addr = (uint32_t)strtoul((char*)arg, NULL, 16);
+	uint32_t pxCurrentTCB_global_addr = inspct_get_symbol("pxCurrentTCB");
     uint32_t active_tcb_addr = 0;
     qemu_plugin_read_memory(pxCurrentTCB_global_addr, (uint8_t*)&active_tcb_addr, sizeof(uint32_t));
 
@@ -144,5 +149,30 @@ void inspct_freertos_dump_ready_lists(uint32_t ready_lists_base_addr, uint32_t m
     }
 
     printf("[FreeRTOS] =================================\n");
+    fflush(stdout);
+}
+
+
+void inpsct_freertos_xQueueGenericCreate_epi(unsigned int cpu_idx, void *arg) {
+    // 1. Grab the returned Queue_t pointer from R0
+    uint32_t new_queue_handle = qemu_get_register(0); 
+
+    // If allocation failed (OOM), R0 will be NULL (0)
+    if (new_queue_handle == 0) return; 
+
+    // 2. Prevent buffer overflows in our tracking array
+    if (g_num_tracked_queues >= MAX_TRACKED_QUEUES) {
+        return;
+    }
+
+    // 3. Prevent duplicates (in case of recursive calls or hook overlap)
+    for (size_t i = 0; i < g_num_tracked_queues; i++) {
+        if (g_tracked_queues[i] == new_queue_handle) return;
+    }
+
+    // 4. Save the handle!
+    g_tracked_queues[g_num_tracked_queues++] = new_queue_handle;
+
+    printf("[FreeRTOS] [+] New Queue/Mutex Allocated at: 0x%08X\n", new_queue_handle);
     fflush(stdout);
 }

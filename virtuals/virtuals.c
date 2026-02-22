@@ -128,7 +128,8 @@ cb_entry_t cb_registry[] = {
     { "set_hardfault_status", set_hardfault_status},
 #endif
 	{ "vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext}, 
-	{ "prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList}
+	{ "prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList},
+	{ "xQueueGenericCreate_epi_Hook", inpsct_freertos_xQueueGenericCreate_epi},
 };
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);
