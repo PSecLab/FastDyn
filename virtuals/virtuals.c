@@ -29,6 +29,7 @@
 #endif
 
 #include "introspection/inspct_freertos.c"
+#include "introspection/inspct.c"
 
 // External dependencies from core.c
 extern AddressList addressLists[];
@@ -547,5 +548,7 @@ void dump_log_buffer_to_file(const AddressList* list, const char* filename) {
 }
 
 int virtuals_init(int argc, char **argv) {
+
+	inspct_init(argc, argv);
     return 0;
 }

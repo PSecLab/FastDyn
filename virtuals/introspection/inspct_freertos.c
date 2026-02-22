@@ -4,14 +4,7 @@
 /* ========================================================================= */
 /* 5. Execution Hook: Introspecting the Current Task                         */
 /* ========================================================================= */
-int init =0;
 void inspct_freertos_vTaskSwitchContext(unsigned int cpu_idx,  void *arg) {
-
-	if (!init) {
-		load_fastdyn_schemas("/home/faculty/abk6349/data/fastdyn/fastdyn_work/schema.txt");
-		init =1;
-	}
-
 	uint32_t pxCurrentTCB_global_addr = (uint32_t)strtoul(arg, NULL, 16);
 
 	uint32_t active_tcb_addr = 0;
@@ -59,10 +52,6 @@ void inspct_freertos_vTaskSwitchContext(unsigned int cpu_idx,  void *arg) {
 }
 
 void inspct_freertos_prvAddNewTaskToReadyList(unsigned int cpu_idx, void *arg) {
-	 if (!init) {
-        load_fastdyn_schemas("/home/faculty/abk6349/data/fastdyn/fastdyn_work/schema.txt");
-        init =1;
-    }
     // 1. The fully populated TCB pointer is the first argument (R0)
     uint32_t new_tcb_addr = qemu_get_register(0);
 

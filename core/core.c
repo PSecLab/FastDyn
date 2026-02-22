@@ -1211,7 +1211,6 @@ static int core_parse_arguments(int argc, char ** argv) {
 	return 0;
 }
 
-
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
@@ -1229,6 +1228,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Device Init Failed");
 	}
     #endif
+
+	virtuals_init(argc, argv);
 
     if (bbl_enable) {
         bbl_init();
