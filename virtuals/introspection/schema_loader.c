@@ -34,49 +34,74 @@ typedef struct {
 StructSchema* g_schemas = NULL;
 size_t g_num_schemas = 0;
 
+typedef struct {
+    char* name;
+    uint32_t address;
+} GlobalSymbol;
+
+// Global Dictionary
+GlobalSymbol* g_symbols = NULL;
+size_t g_num_symbols = 0;
+
 /* ========================================================================= */
 /* The Runtime Schema Loader                                              */
 /* ========================================================================= */
 bool load_fastdyn_schemas(const char* filepath) {
     FILE* file = fopen(filepath, "r");
-    if (!file) {
-        fprintf(stderr, "[FastDyn] ERROR: Cannot open schema file: %s\n", filepath);
-        return false;
-    }
+    if (!file) return false;
 
     g_schemas = malloc(sizeof(StructSchema) * 64);
+    g_symbols = malloc(sizeof(GlobalSymbol) * 64); // Allocate symbol dictionary
     g_num_schemas = 0;
+    g_num_symbols = 0;
 
-    char struct_name[128];
-    int num_fields;
-
-    while (fscanf(file, "%127s %d", struct_name, &num_fields) == 2) {
-        StructSchema* current_schema = &g_schemas[g_num_schemas];
-        current_schema->struct_name = strdup(struct_name);
-        current_schema->field_count = num_fields;
-        current_schema->fields = malloc(sizeof(FieldDef) * num_fields);
-
-        for (int i = 0; i < num_fields; i++) {
-            char field_name[256];
-            int offset, size, type;
+    char marker[32];
+    
+    // Read the first word of every line (STRUCT or SYMBOL)
+    while (fscanf(file, "%31s", marker) == 1) {
+        
+        if (strcmp(marker, "STRUCT") == 0) {
+            char struct_name[128];
+            int num_fields;
+            fscanf(file, "%127s %d", struct_name, &num_fields);
             
-            if (fscanf(file, "%255s %d %d %d", field_name, &offset, &size, &type) == 4) {
-                current_schema->fields[i].name = strdup(field_name);
-                current_schema->fields[i].offset = (uint32_t)offset;
-                current_schema->fields[i].size = (uint32_t)size;
-                current_schema->fields[i].type = (FieldType)type;
-            } else {
-                fprintf(stderr, "[FastDyn] ERROR: Malformed field in struct %s\n", struct_name);
-                fclose(file);
-                return false;
-            }
-        }
-        g_num_schemas++;
-    }
+            StructSchema* current = &g_schemas[g_num_schemas++];
+            current->struct_name = strdup(struct_name);
+            current->field_count = num_fields;
+            current->fields = malloc(sizeof(FieldDef) * num_fields);
 
+            for (int i = 0; i < num_fields; i++) {
+                char fname[256];
+                int off, sz, typ;
+                fscanf(file, "%255s %d %d %d", fname, &off, &sz, &typ);
+                current->fields[i].name = strdup(fname);
+                current->fields[i].offset = (uint32_t)off;
+                current->fields[i].size = (uint32_t)sz;
+                current->fields[i].type = (FieldType)typ;
+            }
+        } 
+        else if (strcmp(marker, "SYMBOL") == 0) {
+            char sym_name[128];
+            uint32_t sym_addr;
+            // Parse the hex address
+            fscanf(file, "%127s %x", sym_name, &sym_addr);
+            
+            g_symbols[g_num_symbols].name = strdup(sym_name);
+            g_symbols[g_num_symbols].address = sym_addr;
+            g_num_symbols++;
+        }
+    }
     fclose(file);
-    fprintf(stderr, "[FastDyn] Successfully loaded %zu struct schemas.\n", g_num_schemas);
     return true;
+}
+
+uint32_t inspct_get_symbol(const char* symbol_name) {
+    for (size_t i = 0; i < g_num_symbols; i++) {
+        if (strcmp(g_symbols[i].name, symbol_name) == 0) {
+            return g_symbols[i].address;
+        }
+    }
+    return 0; // Symbol not found
 }
 
 bool inspct_get_field(const char* struct_name, uint32_t base_addr, const char* field_name, void* out_buffer) {

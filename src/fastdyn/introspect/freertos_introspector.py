@@ -11,14 +11,17 @@ class FreeRTOSIntrospector(RTOSIntrospector, rtos_name="FreeRTOS"):
         self.tcb_sym = self.symbols.get('pxCurrentTCB')
         # Pass the structs you know you'll need for this RTOS
         generator = SchemaGenerator(self.binary)
-        target_structs = ["tskTaskControlBlock"]
         target_structs = [
-    "tskTaskControlBlock",
-    "xLIST",
-    "xLIST_ITEM",
-    "xMINI_LIST_ITEM"
-]
-        generator.generate_schema(target_structs, output_path=self.out +"/schema.txt")
+            "tskTaskControlBlock",
+            "xLIST",
+            "xLIST_ITEM",
+            "xMINI_LIST_ITEM"
+        ]
+        symbols_to_export = {
+            "pxCurrentTCB": self.symbols.get('pxCurrentTCB').address,
+            "pxReadyTasksLists": self.symbols.get('pxReadyTasksLists').address,
+        }
+        generator.generate_schema(target_structs, symbols_to_export, output_path=self.out +"/schema.txt")
         print("Creating scheme at:" + self.out +"/schema.txt")
 
         

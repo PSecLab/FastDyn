@@ -29,7 +29,7 @@ class SchemaGenerator:
                 cache[die.offset] = die
         return cache
 
-    def generate_schema(self, target_structs, output_path="/tmp/fastdyn_schema.txt"):
+    def generate_schema(self, target_structs, target_symbols, output_path="/tmp/fastdyn_schema.txt"):
         """Extracts the specified structs and writes the flat schema file."""
         parsed_structs = {}
         
@@ -46,9 +46,14 @@ class SchemaGenerator:
         # 2. Write the C-compatible text file
         with open(output_path, 'w') as f:
             for struct_name, fields in parsed_structs.items():
-                f.write(f"{struct_name} {len(fields)}\n")
+                f.write(f"STRUCT {struct_name} {len(fields)}\n")
                 for field in fields:
                     f.write(f"{field['name']} {field['offset']} {field['size']} {field['type']}\n")
+
+            # 2. Write the Global Symbols
+            for sym_name, sym_addr in target_symbols.items():
+                # Write address in hex for easier debugging
+                f.write(f"SYMBOL {sym_name} {hex(sym_addr)}\n")
                     
         print(f"Successfully wrote schema for {len(parsed_structs)} structs to {output_path}")
 
