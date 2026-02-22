@@ -15,6 +15,8 @@ from .utils import helper
 from . import fastdyn_log as fastdyn_log_conf
 from .utils import parse_config as parse_helper
 
+from fastdyn.introspect.introspect import *
+
 from .machine import VirtualInstruction
 
 log = logging.getLogger(__name__)
@@ -65,6 +67,7 @@ class QemuTargetOpts:
         self.semihosting_config: str = "enable=on,target=native"
         self.monitor_port: Optional[int] = 5555
         self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
+        self.print_command = False
 
 class Machine:
     def __init__(self, machine_name, platform_name):
@@ -81,8 +84,8 @@ class Machine:
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
-    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace):
-        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, self) #pass parent for easy referencing to objs like irq_map
+    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect):
+        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, self) #pass parent for easy referencing to objs like irq_map
         self.cpus.append(cpu)
         return cpu
 
@@ -139,7 +142,7 @@ class InstructionModifier:
     patch: str
 
 class CPU:
-    def __init__(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, machine_obj):
+    def __init__(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, machine_obj):
         """One CPU instance belonging to a machine."""
         self.arch = arch
         self.machine = machine
@@ -148,6 +151,8 @@ class CPU:
         self.init_nsvtor: int = init_nsvtor
         self.twintrace = twintrace       #supported options are record, replay or None
         self.hardware_trace = hardware_trace    # hardware log needed in case of replay
+        self.introspect: bool = introspect
+        self.introspect_schema = self.add_introspection()
 
         self.machine_obj = machine_obj
 
@@ -221,6 +226,13 @@ class CPU:
         except (AttributeError, TypeError, ValueError) as e:
             print(f"Unable to set '{param}' to {val!r}: {e}")
             return False
+        
+    def add_introspection(self):
+        schema_content = ""
+        if self.introspect:
+            schema_content = introspect_rtos(self, self.binary)
+
+        return schema_content
 
 @dataclass
 class DeviceHandler:

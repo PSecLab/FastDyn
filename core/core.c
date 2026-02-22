@@ -65,6 +65,8 @@ int coverage;
 
 twintrace_mode_t twintrace_mode = TT_OFF;
 const char *twintrace_bin_path = NULL;
+int introspection_enabled = 0;
+const char *introspection_schema_path = NULL;
 
 // Dumping to fastdyn_work will cause this to be erased after each run, bad if fuzzing restarts
 #define DEFAULT_BBL_DUMP_PATH "fuzz_out/bbl.txt"
@@ -1081,9 +1083,42 @@ static void parse_twintrace_args(int argc, char **argv)
         twintrace_bin_path = bin;
     }
 
-    fprintf(stderr, "fastdyn: twintrace_mode=%d twintrace_binary=%s\n",
-            (int)twintrace_mode,
-            twintrace_bin_path ? twintrace_bin_path : "(none)");
+    // fprintf(stderr, "fastdyn: twintrace_mode=%d twintrace_binary=%s\n",
+            // (int)twintrace_mode,
+            // twintrace_bin_path ? twintrace_bin_path : "(none)");
+}
+
+void parse_introspect_args(int argc, char **argv) {
+    const char *intro = utils_get_arg("introspection", argc, argv);
+    const char *schema = utils_get_arg("introspection_schema", argc, argv);
+    
+    intro = safe_arg(intro);
+    schema = safe_arg(schema);
+
+    introspection_enabled = 0;
+    introspection_schema_path = NULL;
+
+    if (intro) {
+        if (!strcasecmp(intro, "true") || !strcasecmp(intro, "on") || !strcmp(intro, "1")) {
+            introspection_enabled = 1;
+        } else if (!strcasecmp(intro, "false") || !strcasecmp(intro, "off") || !strcmp(intro, "0") || !strcasecmp(intro, "none")) {
+            introspection_enabled = 0;
+        } else {
+            fprintf(stderr, "fastdyn: unknown introspection mode: '%s'\n", intro);
+            utils_die("bad introspection mode");
+        }
+    }
+
+    if (introspection_enabled) {
+        if (!schema || !strcasecmp(schema, "none")) {
+            utils_die("fastdyn: introspection enabled but introspection_schema is missing");
+        }
+        introspection_schema_path = schema;
+    }
+
+    // Forward the parsed schema path to virtuals_init
+    virtuals_init(argc, argv, introspection_schema_path);
+    
 }
 
 void initialize_anchor(char* args);
@@ -1189,6 +1224,8 @@ static int core_parse_arguments(int argc, char ** argv) {
     //parse args for twintrace
     parse_twintrace_args(argc, argv);
 
+    //parse args for introspection
+    parse_introspect_args(argc, argv);
     //basic block coverage calculator
     const char *arg = utils_get_arg("bbl", argc, argv);
     if (!arg_is_disabled(arg) && arg) {
@@ -1228,8 +1265,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Device Init Failed");
 	}
     #endif
-
-	virtuals_init(argc, argv);
 
     if (bbl_enable) {
         bbl_init();

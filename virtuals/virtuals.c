@@ -548,8 +548,8 @@ void dump_log_buffer_to_file(const AddressList* list, const char* filename) {
     fclose(file);
 }
 
-int virtuals_init(int argc, char **argv) {
+int virtuals_init(int argc, char **argv, const char *schema_path) {
 
-	inspct_init(argc, argv);
+	inspct_init(argc, argv, schema_path);
     return 0;
 }

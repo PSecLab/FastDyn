@@ -11,9 +11,11 @@ from ..utils import helper, twintrace
 from ..binary import binary_wrange
 import logging
 
-log = logging.getLogger(__name__)
-
 FASTDYN_DEFAULT_WORKDIR = "fastdyn_work"
+
+from .. import fastdyn_log as fastdyn_log_conf
+log = logging.getLogger(__name__)
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 
 def _dedup_preserve_order(items):
@@ -59,6 +61,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     cpus = machine.cpus
     cpu0 = cpus[0]
     opts = machine.qemu_target_opts
+    print_command = opts.print_command
 
     # QEMU CLI is per-instance: we support SMP (homogeneous CPU model/binary/machine).
     for c in cpus[1:]:
@@ -201,6 +204,20 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         if getattr(c, "plugin_library", None) != plugin_lib:
             raise ValueError("Different plugin_library across CPUs is not supported (QEMU loads plugins per instance).")
 
+    # ------------------------ Introspection ------------------------
+    introspection = cpu0.introspect
+    introspection_schema = cpu0.introspect_schema
+    if introspection:
+        schema_path = os.path.join(out_path, "schema.txt")
+        with open(schema_path, "w") as f:
+            f.write(introspection_schema)
+            fastdyn_log.info(f"Introspection Schema Available at: {schema_path}")
+
+        introspect_plugin = [
+            f"introspection={introspection}",
+            f"introspection_schema={schema_path}"
+        ]
+
     plugin_kv = [
         f"{plugin_lib},dev={dev_config_path}",
         f"virtual={virtuals_path}",
@@ -209,6 +226,10 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"twintrace={twintrace_opt}",
         f"twintrace_binary={replay_binary}",
     ]
+
+    if (introspection):
+        plugin_kv.extend(introspect_plugin)
+
     if (opts.bbl_coverage):
         plugin_kv.append(f"bbl={out_path}/bbl.txt")
 
@@ -219,6 +240,8 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     # ------------------------ GDB command ------------------------
     gdb_cmd, launch_gdb, binary = get_gdb_cmd(machine, out_path)
 
+    if print_command:
+        fastdyn_log.info(f"Running following qemu command:\n{' '.join(cmd)}")
     return cmd, gdb_cmd, launch_gdb, binary
 
 
@@ -258,9 +281,6 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
     """
     Starts QEMU. If enabled, optionally launches a GDB terminal.
     """
-    log.info("Running the following QEMU command:")
-    log.info(" ".join(qemu_cmd))
-    print(" ".join(qemu_cmd))
 
     # best-effort cleanup based on the monitor port in this command
     port = _extract_monitor_port(qemu_cmd)

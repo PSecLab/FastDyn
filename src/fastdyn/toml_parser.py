@@ -2,7 +2,6 @@ import tomli
 import logging
 
 from fastdyn.fastdyn import *
-from fastdyn.introspect.introspect import *
 from . import fastdyn_log as fastdyn_log_conf
 
 log = logging.getLogger(__name__)
@@ -41,6 +40,7 @@ def parser(out_dir, machine_name, toml_config, svd_path):
     q.coverage           = toml_parser.machine_info.get("coverage", False)
     q.finline            = toml_parser.machine_info.get("finline", None)
     q.bbl_coverage       = toml_parser.machine_info.get("bbl_coverage", None)
+    q.print_command       = toml_parser.machine_info.get("print_command", False)
 
     #add cmsis svd if Platform name provided by the user
     if toml_parser.machine_info.get("platform") is not None:
@@ -60,11 +60,9 @@ def parser(out_dir, machine_name, toml_config, svd_path):
                 binary=curr_cpu['binary'],  #mandatory else throw error
                 init_nsvtor= curr_cpu.get("init_nsvtor", None),  #handle by the target to retreive correct value from binary
                 twintrace = curr_cpu.get("twintrace", None),
-                hardware_trace = curr_cpu.get("hardware_trace", None)
+                hardware_trace = curr_cpu.get("hardware_trace", None),
+                introspect = curr_cpu.get("introspect", False),
                 )
-
-        # Make it option driven
-        introspect_rtos(cpu_obj, curr_cpu['binary'], out_dir)
 
         #additional params if set by the user
         cpu_obj.plugin_library  =   curr_cpu.get('plugin_library', 'build/libfastdyn.so')

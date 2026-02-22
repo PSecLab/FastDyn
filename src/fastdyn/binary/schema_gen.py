@@ -29,33 +29,35 @@ class SchemaGenerator:
                 cache[die.offset] = die
         return cache
 
-    def generate_schema(self, target_structs, target_symbols, output_path="/tmp/fastdyn_schema.txt"):
-        """Extracts the specified structs and writes the flat schema file."""
-        parsed_structs = {}
-        
-        # 1. Hunt down the target structs
-        for cu in self.dwarf.iter_CUs():
-            for die in cu.iter_DIEs():
-                if die.tag == 'DW_TAG_structure_type' and 'DW_AT_name' in die.attributes:
-                    struct_name = die.attributes['DW_AT_name'].value.decode('utf-8')
-                    
-                    if struct_name in target_structs and struct_name not in parsed_structs:
-                        # Flatten it!
-                        parsed_structs[struct_name] = self._flatten_struct(die)
+    def generate_schema(self, target_structs, target_symbols):
+            """Extracts the specified structs and returns the flat schema as a string."""
+            parsed_structs = {}
+            
+            # 1. Hunt down the target structs
+            for cu in self.dwarf.iter_CUs():
+                for die in cu.iter_DIEs():
+                    if die.tag == 'DW_TAG_structure_type' and 'DW_AT_name' in die.attributes:
+                        struct_name = die.attributes['DW_AT_name'].value.decode('utf-8')
+                        
+                        if struct_name in target_structs and struct_name not in parsed_structs:
+                            # Flatten it!
+                            parsed_structs[struct_name] = self._flatten_struct(die)
 
-        # 2. Write the C-compatible text file
-        with open(output_path, 'w') as f:
+            # 2. Build the schema string line-by-line
+            output_lines = []
+            
             for struct_name, fields in parsed_structs.items():
-                f.write(f"STRUCT {struct_name} {len(fields)}\n")
+                output_lines.append(f"STRUCT {struct_name} {len(fields)}")
                 for field in fields:
-                    f.write(f"{field['name']} {field['offset']} {field['size']} {field['type']}\n")
+                    output_lines.append(f"{field['name']} {field['offset']} {field['size']} {field['type']}")
 
-            # 2. Write the Global Symbols
+            # 3. Add the Global Symbols
             for sym_name, sym_addr in target_symbols.items():
                 # Write address in hex for easier debugging
-                f.write(f"SYMBOL {sym_name} {hex(sym_addr)}\n")
+                output_lines.append(f"SYMBOL {sym_name} {hex(sym_addr)}")
                     
-        print(f"Successfully wrote schema for {len(parsed_structs)} structs to {output_path}")
+            # 4. Return as a single string joined by newlines (adding a trailing newline)
+            return "\n".join(output_lines) + "\n"
 
     def _flatten_struct(self, struct_die, prefix="", base_offset=0):
         """Recursively flattens fields and calculates absolute offsets."""

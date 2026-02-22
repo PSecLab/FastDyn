@@ -2,6 +2,11 @@ from fastdyn.introspect.introspector_base import RTOSIntrospector
 from fastdyn.binary.schema_gen import *
 from fastdyn.fastdyn import *
 import struct
+import logging
+import pathlib
+
+log = logging.getLogger(__name__)
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 class FreeRTOSIntrospector(RTOSIntrospector, rtos_name="FreeRTOS"):
     
@@ -27,6 +32,7 @@ class FreeRTOSIntrospector(RTOSIntrospector, rtos_name="FreeRTOS"):
             "pxReadyTasksLists": self.symbols.get('pxReadyTasksLists').address,
         }
 
-        # Write the scheme for fastdyn
-        generator.generate_schema(target_structs, symbols_to_export, output_path=self.out +"/schema.txt")
-        print("Creating scheme at:" + self.out +"/schema.txt")
+        # Write the schema for fastdyn
+        schema_content = generator.generate_schema(target_structs, symbols_to_export)
+
+        return schema_content

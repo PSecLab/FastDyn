@@ -16,7 +16,6 @@ from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 from . import toml_parser
 from .fuzzer import fuzzer
-from dataclasses import asdict
 from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 

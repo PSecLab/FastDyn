@@ -47,17 +47,19 @@ def _load_local_introspectors():
             importlib.import_module(f"fastdyn.introspect.{module_name}")
 
 
-def introspect_rtos(cpu_obj, binary, out_dir):
-        resolver = SymbolResolver([DwarfProvider()])
-        syms = resolver.resolve(binary)
-        rtos_name = identify_rtos(syms)
+def introspect_rtos(cpu_obj, binary):
+    resolver = SymbolResolver([DwarfProvider()])
+    syms = resolver.resolve(binary)
+    rtos_name = identify_rtos(syms)
 
-        _load_local_introspectors()
+    _load_local_introspectors()
 
-        if rtos_name == "Unknown/Custom Baremetal":
-            fastdyn_log.info("Cannot introspect custom baremetal firmware.")
-            return 
-        # Dynamically instantiate the correct introspector!
-        introspector = RTOSIntrospector.create(rtos_name, cpu_obj, syms, out_dir, binary)
-        # Fire up the OS-specific hooks
-        introspector.setup_hooks()
+    if rtos_name == "Unknown/Custom Baremetal":
+        fastdyn_log.info("Cannot introspect custom baremetal firmware.")
+        return ""
+    # Dynamically instantiate the correct introspector!
+    introspector = RTOSIntrospector.create(rtos_name, cpu_obj, syms, binary)
+    # Fire up the OS-specific hooks
+    schema_contents = introspector.setup_hooks()
+
+    return schema_contents
