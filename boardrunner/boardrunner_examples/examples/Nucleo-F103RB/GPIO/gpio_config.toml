@@ -40,7 +40,7 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-coverage=false
+coverage=true
 finline='None'
 bbl_coverage=true             #set to true or false to calculate bbl coverage
 
@@ -52,9 +52,9 @@ machine = "cortexm"
 cpu = "cortex-m3"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/GPIO/firmwares/STM32F103RB_Nucleo.elf"
+binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/GPIO/firmwares/GPIO_Firmware.elf"
 init_nsvtor = "0x08000000"
-map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
+map_file = "courbet/rover_v422_map.txt"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 
@@ -64,6 +64,11 @@ logger_content = """
 # level = DEBUG
 # output = stderr
 """
+
+# [[CPU.cpu0.virtuals]]
+# at = "0x080004a2"
+# instruction = "anchor"
+# args = ["3"]
 
 # ==============================================================================
 #                              Device Configuration
@@ -93,7 +98,7 @@ logger_content = """
 # its specific scroll configuration is defined directly within it.
 [Device.gpio]
     ranges = [["0x40010800", "0x40010BFF"], ["0x40011000", "0x400113FF"]] #handles Push button and LED
-    irq = [['1','100']]
+    irq = ['15']
     description = "GPIO Port for general-purpose I/O."
     read_priority = "elder"  #only the read from elder model is considered.
     # The configuration for this specific device when handled by the elder model.
@@ -101,8 +106,8 @@ logger_content = """
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "elder"
-        enabled = false
-        scroll = "boardrunner/boardrunner_sdk/build/model.so"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpio-model.so"
 
     [[Device.gpio.handlers]]
         # This device is now handled by the elder model, directly linking it
@@ -114,7 +119,7 @@ logger_content = """
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "passthrough"
-        enabled = true
+        enabled = false
 
     [[Device.gpio.handlers]]
         # This device is now handled by the elder model, directly linking it
@@ -122,9 +127,28 @@ logger_content = """
         model   = "twintrace"
         enabled = false
 
+# [Device.gpioc]
+#     ranges = [["0x40011000", "0x400113FF"]] #handles push button
+#     irq = ['15']
+#     description = "GPIO Port for general-purpose I/O."
+#     read_priority = "elder"  #only the read from elder model is considered.
+#     # The configuration for this specific device when handled by the elder model.
+#     [[Device.gpioc.handlers]]
+#         # This device is now handled by the elder model, directly linking it
+#         # to the 'scroll_config' defined above.
+#         model   = "elder"
+#         enabled = true
+#         scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+
+#     [[Device.gpioc.handlers]]
+#         # This device is now handled by the elder model, directly linking it
+#         # to the 'scroll_config' defined above.
+#         model   = "passthrough"
+#         enabled = true
+
 [Device.remaining_space]
     ranges = [["0x40000000", "0x400107FF"],["0x40010C00", "0x40010FFF"], ["0x40011400", "0xE0000000"], ["0xE0000000", "0xEFFFFFFF"]]
-    irq = [['1','100']]
+    irq = ['15']
     description = "Memory regions that will handled by passthrough and are not of interest for the modeling."
 
     [[Device.remaining_space.handlers]]

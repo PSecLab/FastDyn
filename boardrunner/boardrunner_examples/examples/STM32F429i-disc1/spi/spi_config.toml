@@ -1,64 +1,106 @@
 # ==============================================================================
-#                              Memory Configuration
+# Machine (machine-wide + QEMU target options)
 # ==============================================================================
-[Memory]
-main_ram_size = "512M"
-shared_ram_size = "512K"
-ram_base_addr = "0x20000000"
-shared_ram_base_addr = "0x30000000"
-shared_mem_path = "/dev/shm"        # Directory for memory backend files
-main_ram_file = "my_m4_ram3"      # Filename for the main RAM backend
-shared_ram_file = "my_m4_ram"     # Filename for the shared RAM backend
-init_nsvtor = "0x08000000"
+[Machine]
+platform = "STM32F429"
 
-# ==============================================================================
-#                                CPU Configuration
-# ==============================================================================
-[CPU]
-# --- Core Emulation & Plugin Settings ---
-arch = "arm"
-machine = "cortexm"
-cpu = "cortex-m4"
-plugin_library = "/scratch/Fastdyn/FastDyn/build/libfastdyn.so"
-monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-platform = "STM32F469"
-binary = "boardrunner_examples/examples/spi/firmwares/master.elf"
-
-# --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
-enable_gdb = false
+
+monitor_port = 5554
+qmp_socket   = "/tmp/qmp.sock"
+
+enable_gdb    = false
 stop_on_start = false
-launch_gdb = false
-monitor_port = 5555
-qmp_socket = "/tmp/qmp.sock"
-log_file = "qemu.log"
-log_options = "in_asm,op"
-semihosting = true
+launch_gdb    = false
+
+semihosting        = true
 semihosting_config = "enable=on,target=native"
 
-# --- Embedded CPU Behavior Configurations ---
-logger_content = """
-# --- Plugin Logger Configuration ---
-# level = DEBUG
-# output = stderr
-"""
+coverage = true
+finline  = ""
 
-# # --- Virtual Instructions (Structured) ---
-# # Each block defines a single virtual instruction to be registered.
-# [[CPU.virtuals]]
-# at = "main+8"
-# instruction = "raiseirq"
-# args = ["TIM1_BRK_TIM9"]
+bbl_coverage = true
 
-# # --- Instruction Modifiers (Structured) ---
-# # Each block defines a runtime binary patch using a high-level representation.
-# [[CPU.modifiers]]
-# at = "main+2"
-# patch = "r2 <- r3"
 
-# [[CPU.modifiers]]
-# at = "main+4"
-# patch = "r15 <- r14"
+
+# ==============================================================================
+# Memory
+# ==============================================================================
+[Memory]
+
+  # ---------------------------------------------------------------------------
+  # Main memory (required)
+  #
+  # Used by:  -machine <...>,memory-backend=<id>
+  # Also maps: ram_baseaddr0 / ram_backend0
+  # ---------------------------------------------------------------------------
+  [Memory.main]
+  id           = "ram0"
+  base_address = "0x20000000"
+  memory_size  = "512M"
+  memory_type  = "SRAM"
+
+  backend     = "file"                 # file | ram | memfd
+  memory_file = "/dev/shm/my_m4_ram3"  # only when backend="file"
+
+  share    = true
+  prealloc = false
+
+
+  # ---------------------------------------------------------------------------
+  # Extra memory banks (optional)
+  #
+  # Each bank becomes:
+  #   -object memory-backend-*
+  #   -global <machine>-soc.ram_baseaddrN=<base_address>
+  #   -global <machine>-soc.ram_backendN=<id>
+  # ---------------------------------------------------------------------------
+  [[Memory.ram1]]
+  id           = "ram1"
+  index        = 1
+  base_address = "0x30000000"
+  memory_size  = "512K"
+  memory_type  = "SRAM"
+
+  backend     = "file"
+  memory_file = "/dev/shm/my_m4_ram"
+
+  share    = true
+  prealloc = false
+
+
+
+# ==============================================================================
+# CPUs
+# ==============================================================================
+[CPU]
+
+  # ---------------------------------------------------------------------------
+  # CPU 0
+  # ---------------------------------------------------------------------------
+  [[CPU.cpu0]]
+  arch    = "arm"
+  machine = "cortexm"
+  cpu     = "cortex-m4"
+
+  binary     = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/spi/firmwares/master.elf"
+  init_nsvtor = "0x08000000"
+
+  map_file        = "courbet/rover_v422_map.txt"
+  plugin_library  = "build/libfastdyn.so"
+  monitor_elf     = "../ws/monitor.elf"
+
+  log_file    = "qemu.log"
+  log_options = "in_asm,op"
+
+  twintrace = "None" #options are record, replay or None
+  hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
+
+  logger_content = """
+  # --- Plugin Logger Configuration ---
+  # level  = DEBUG
+  # output = stderr
+  """
 
 
 # ==============================================================================
@@ -86,8 +128,8 @@ logger_content = """
 # its specific scroll configuration is defined directly within it.
 
 [Device.uart]
-    irq = "0-15:20-25:41"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
-    ranges = ["0x40011000-0x40011FFF"]
+    irq = [[0, 15], [20, 25], 41]                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
+    ranges = [["0x40011000", "0x40011FFF"]]
     description = "Main USART peripheral for serial communication."
     # The configuration for this specific device when handled by the elder model.
     # 'internal_model' is the name of the model compiled into the main plugin library.
@@ -105,16 +147,16 @@ internal_model = "uart_model"
     [[Device.uart.handlers]]
         model   = "elder"
         enabled = false
-        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
     [[Device.uart.handlers]]
         model   = "passthrough"
         enabled = false # This handler is defined but will be skipped for this device.
 
 [Device.gpiog]
-    irq = "0-15:20-25:41"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
+    irq = [[0, 15], [20, 25], 41]                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
     # ranges = ["0x40000000-0x40010FFF"]
-    ranges = ["0x40021800-0x40021BFF"]
+    ranges = [["0x40021800", "0x40021BFF"]]
     description = "GPIO Port G for general-purpose I/O."
     read_priority = "elder"  #only the read from elder model is considered.
     # The configuration for this specific device when handled by the elder model.
@@ -123,7 +165,7 @@ internal_model = "uart_model"
         # to the 'scroll_config' defined above.
         model   = "elder"
         enabled = false
-        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+        scroll = "boardrunner/boardrunner_sdk/build/gpio_model.so"
 
     [[Device.gpiog.handlers]]
         # This device is now handled by the elder model, directly linking it
@@ -141,9 +183,9 @@ internal_model = "uart_model"
 
 
 [Device.spi4]
-    irq = "0-15:20-25:41"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
+    irq = [[0, 15], [20, 25], 41]                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
     # ranges = ["0x40000000-0x40010FFF"]
-    ranges = ["0x40013400-0x40013422"]
+    ranges = [["0x40013400", "0x40013422"]]
     description = "spi4 for data communication."
     read_priority = "elder"  #only the read from elder model is considered.
     # The configuration for this specific device when handled by the elder model.
@@ -152,7 +194,7 @@ internal_model = "uart_model"
         # to the 'scroll_config' defined above.
         model   = "elder"
         enabled = true
-        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+        scroll = "boardrunner/boardrunner_sdk/build/spi_model.so"
 
     [[Device.spi4.handlers]]
         # This device is now handled by the elder model, directly linking it
@@ -164,7 +206,7 @@ internal_model = "uart_model"
         model = ["elder"]       # attach this device to elder model only
         device = "STM32F4"
         cs_id = 0               # <--- CORRECT! (Connect this slave to CS Line 0)
-        device_scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/slave_gen.so"
+        device_scroll = "boardrunner/boardrunner_sdk/build/slave_model.so"
 
     [[Device.spi4.slaves]]
         model = ["elder"]       # attach this device to elder model only
@@ -173,7 +215,7 @@ internal_model = "uart_model"
         device_scroll = "sensor_model1.so"
 
 [Device.unhandled_space]
-    irq = "0-15:20-25:41"                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
+    irq = [[0, 15], [20, 25], 41]                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled
     # ranges = ["0x00000000-0x000000FF", "0x40000000-0x400057FF" , "0x40005800-0xE00FFFFF" , "0xE0000000-0xEFFFFFFF"]
     ranges = ["0x00000000-0x000000FF", "0x40000000-0x400133FF", "0x40013423-0xE00FFFFF" , "0xE0000000-0xEFFFFFFF"]
     description = "Memory regions that are explicitly not handled by any model."

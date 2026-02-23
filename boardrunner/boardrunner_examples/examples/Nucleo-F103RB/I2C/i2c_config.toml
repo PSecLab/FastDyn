@@ -40,7 +40,7 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-coverage=false
+coverage=true
 finline='None'
 bbl_coverage=true             #set to true or false to calculate bbl coverage
 
@@ -52,10 +52,10 @@ machine = "cortexm"
 cpu = "cortex-m3"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "/home/hammad/work/rehosting/stm_repo/STM32CubeF1/Projects/STM32F103RB-Nucleo/Examples/I2C/I2C_TwoBoards_ComPolling/SW4STM32/STM32F103RB_Nucleo/Debug/STM32F103RB_Nucleo.elf"
+binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/I2C/firmwares/STM32F103RB_Nucleo.elf"
 init_nsvtor = "0x08000000"
-map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
-twintrace = "replay" #options are record, replay or None
+map_file = "courbet/rover_v422_map.txt"
+twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 
 # --- Embedded CPU Behavior Configurations ---
@@ -64,6 +64,17 @@ logger_content = """
 # level = DEBUG
 # output = stderr
 """
+
+# [[CPU.cpu0.virtuals]]
+# at = "0x08000DF8"
+# instruction = "anchor"
+# args = ["2"]
+
+# #Assert on hard fault
+# [[CPU.cpu0.virtuals]]
+# at = "0x0800165e"
+# instruction = "assert"
+# args = ["*0x0"]
 
 # ==============================================================================
 #                              Device Configuration
@@ -102,13 +113,13 @@ logger_content = """
         # to the 'scroll_config' defined above.
         model   = "elder"
         enabled = true
-        scroll = "boardrunner/boardrunner_sdk/build/model.so"
+        scroll = "boardrunner/boardrunner_sdk/build/i2c_model.so"
 
     [[Device.i2c1.slaves]]
         model = ["elder"]       #attach this device to elder model only
         device = "bme280"
         address = "0x76"
-        device_scroll = "boardrunner/boardrunner_sdk/build/slave.so"
+        device_scroll = "boardrunner/boardrunner_sdk/build/i2c_slave.so"
 
     [[Device.i2c1.handlers]]
         model   = "classic"

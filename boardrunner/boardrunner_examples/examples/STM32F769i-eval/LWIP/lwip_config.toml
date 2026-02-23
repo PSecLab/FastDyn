@@ -9,7 +9,7 @@ qemu_path = "qemu-system-arm"
 monitor_port = 5555
 qmp_socket   = "/tmp/qmp.sock"
 
-enable_gdb    = false
+enable_gdb    = true
 stop_on_start = false
 launch_gdb    = false
 
@@ -17,7 +17,7 @@ semihosting        = true
 semihosting_config = "enable=on,target=native"
 
 coverage = true
-bbl_coverage = true
+bbl_coverage = false # Adds onto coverage, so coverage must be enabled
 finline  = ""
 
 # ==============================================================================
@@ -78,10 +78,10 @@ finline  = ""
   machine = "cortexm"
   cpu     = "cortex-m7"
 
-  binary     = "/home/hammad/work/side-channel/stm32/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
+  binary     = "boardrunner/boardrunner_examples/examples/STM32F769i-eval/LWIP/firmwares/STM32F769I_EVAL.elf" ##
   init_nsvtor = "0x08000000"
 
-#   map_file        = "/data/Code/rehosting/FastDyn/courbet/rover_v422_map.txt"
+  map_file        = "courbet/rover_v422_map.txt"
   plugin_library  = "build/libfastdyn.so"
   monitor_elf     = "../ws/monitor.elf"
 
@@ -96,99 +96,38 @@ finline  = ""
   # level  = DEBUG
   # output = stderr
   """
-    # 2758
-    # [[CPU.cpu0.virtuals]]
-    # at          = "0x08008ee2"
-    # instruction = "anchor"
-    # args        = ["1:0xFFFFFFFF"]
-
+  # This anchor alters the http request in http_recv, anchor needs target specific modification
     [[CPU.cpu0.virtuals]]
-    at          = "0x0800086c"
+    at          = "0x08008ee2"
     instruction = "anchor"
-    args        = ["1:0xFFFFFFFF"]
+    args        = ["0xFFFFFFFF"]
 
+  # These modifiers keep our http_recv in a loop
+    [[CPU.cpu0.modifiers]]
+    at          = "0x08008efa"
+    patch       = "r15 0x08008ee2"
+
+    [[CPU.cpu0.modifiers]]
+    at          = "0x08008f0e"
+    patch       = "r15 0x08008ee2"
+
+    [[CPU.cpu0.modifiers]]
+    at          = "0x080091ac"
+    patch       = "r15 0x08008ee2"
+
+    [[CPU.cpu0.modifiers]]
+    at          = "0x080091b6"
+    patch       = "r15 0x08008ee2"
+
+    [[CPU.cpu0.modifiers]]
+    at          = "0x0800935a"
+    patch       = "r15 0x08008ee2"
+
+  # This assert triggers a restart on a hard fault
     [[CPU.cpu0.virtuals]]
     at          = "0x0800106a"
     instruction = "assert"
-    args        = ["*0"]
-
-    [[CPU.cpu0.virtuals]]
-    at          = "0x0800106c"
-    instruction = "assert"
-    args        = ["*0"]
-
-    [[CPU.cpu0.virtuals]]
-    at          = "0x0800106e"
-    instruction = "assert"
-    args        = ["*0"]
-
-    [[CPU.cpu0.virtuals]]
-    at          = "0x08001070"
-    instruction = "assert"
-    args        = ["*0"]
-
-
-    [[CPU.cpu0.virtuals]] #error handler
-    at          = "0x08000dc8"
-    instruction = "assert"
-    args        = ["*0"]
-
-
-    # [[CPU.cpu0.modifiers]]
-    # at          = "0x08008efa"
-    # patch       = "r15 0x08008ee2"
-
-    # [[CPU.cpu0.modifiers]]
-    # at          = "0x08008f0e"
-    # patch       = "r15 0x08008ee2"
-
-    # [[CPU.cpu0.modifiers]]
-    # at          = "0x080091ac"
-    # patch       = "r15 0x08008ee2"
-
-    # [[CPU.cpu0.modifiers]]
-    # at          = "0x080091b6"
-    # patch       = "r15 0x08008ee2"
-
-    # [[CPU.cpu0.modifiers]]
-    # at          = "0x0800935a"
-    # patch       = "r15 0x08008ee2"
-
-    # [[CPU.cpu0.virtuals]]
-    # at          = "0x0800106a" # hard fault
-    # instruction = "assert"
-    # args        = ["*0x0"] # restart
-
-    # [[CPU.cpu0.virtuals]]
-    # at          = "0x08000cec" # led handler
-    # instruction = "assert"
-    # args        = ["*0xFFFFFFFF"]
-
-    # [[CPU.cpu0.virtuals]]
-    # at          = "0x1"
-    # instruction = "anchor"
-    # args        = ["1:0xFFFFFFFF"]
-
-    # # [[CPU.cpu0.virtuals]]
-    # # at          = "0x08001C82"
-    # # instruction = "anchor"
-    # # args        = ["1:2"] # fuzz the register it reads to rather than the memory
-
-    # # [[CPU.cpu0.modifiers]]
-    # # at          = "0x080017AA"
-    # # patch       = "*0x40020810 0x00003fc3"
-
-    # [[CPU.cpu0.modifiers]] #skip pin reading
-    # at          = "0x0800059C"
-    # patch       = "r15 0x800059E"
-
-    # [[CPU.cpu0.modifiers]] # Make it skip the read we are doing manually
-    # at          = "0x08000886"
-    # patch       = "r15 0x0800088A"
-
-    # [[CPU.cpu0.modifiers]] # Make it seem like packet is received
-    # at          = "0x08000880"
-    # patch       = "r15 0x08000882"
+    args        = ["*0x0"]
 
 
 # ==============================================================================
@@ -229,7 +168,7 @@ tap_interface = "tap0"
     [[Device.ethernet.handlers]]
         model   = "elder"
         enabled = true                          # Set to TRUE to use your generated .so
-        scroll = "boardrunner/boardrunner_sdk/build/model.so"  # UPDATE THIS PATH
+        scroll = "boardrunner/boardrunner_sdk/build/lwip_model.so"  # UPDATE THIS PATH
 
     [[Device.ethernet.handlers]]
         model   = "passthrough"

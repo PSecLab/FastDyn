@@ -1,4 +1,3 @@
-
 # ==============================================================================
 # Machine (machine-wide + QEMU target options)
 # ==============================================================================
@@ -140,14 +139,14 @@ bbl_coverage = true
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "elder"
-        enabled = true
+        enabled = false
         scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
     [[Device.gpiog.handlers]]
         # This device is now handled by the elder model, directly linking it
         # to the 'scroll_config' defined above.
         model   = "passthrough"
-        enabled = false
+        enabled = true
 
 [Device.unhandled_space]
     ranges = [["0x40000000", "0x400217FF"],["0x40021C00", "0xE00FFFFF"], ["0xE0000000", "0xEFFFFFFF"]]

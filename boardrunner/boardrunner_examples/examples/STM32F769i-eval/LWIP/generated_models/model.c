@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <arpa/inet.h>
 
 #include <device.h>
 #include <boardrunner/vio.h>
@@ -117,7 +118,7 @@ typedef struct EthDesc40 { uint32_t w[10]; } EthDesc40;
 #define TXDESC_CIC_FULL   2u
 
 // ---- Logging ----
-static int g_log_level = 2; // 0=quiet, 1=milestone, 2=verbose
+static int g_log_level = 0; // 0=quiet, 1=milestone, 2=verbose
 #define LOG1(...) do { if (g_log_level >= 1) { printf(__VA_ARGS__); fflush(stdout); } } while (0)
 #define LOG2(...) do { if (g_log_level >= 2) { printf(__VA_ARGS__); fflush(stdout); } } while (0)
 
@@ -847,6 +848,125 @@ static bool deliver_one_rx(const uint8_t *pkt, uint32_t pkt_len)
   return true;
 }
 
+#define ETH_HDR_LEN 14
+#define IP_HDR_LEN  20
+#define TCP_HDR_LEN 20
+
+/* ----------------- Checksums ----------------- */
+
+// static uint16_t csum16(const void *data, size_t len) {
+//     uint32_t sum = 0;
+//     const uint16_t *p = data;
+
+//     while (len > 1) {
+//         sum += *p++;
+//         len -= 2;
+//     }
+//     if (len)
+//         sum += *(uint8_t *)p;
+
+//     while (sum >> 16)
+//         sum = (sum & 0xffff) + (sum >> 16);
+
+//     return ~sum;
+// }
+
+// static uint16_t tcp_checksum(
+//     uint32_t src_ip,
+//     uint32_t dst_ip,
+//     const uint8_t *tcp,
+//     size_t tcp_len
+// ) {
+//     struct {
+//         uint32_t src;
+//         uint32_t dst;
+//         uint8_t zero;
+//         uint8_t proto;
+//         uint16_t len;
+//     } pseudo;
+
+//     pseudo.src  = src_ip;
+//     pseudo.dst  = dst_ip;
+//     pseudo.zero = 0;
+//     pseudo.proto = 6; /* TCP */
+//     pseudo.len  = htons(tcp_len);
+
+//     uint32_t sum = 0;
+//     sum += csum16(&pseudo, sizeof(pseudo));
+//     sum += csum16(tcp, tcp_len);
+
+//     while (sum >> 16)
+//         sum = (sum & 0xffff) + (sum >> 16);
+
+//     return ~sum;
+// }
+
+/* ----------------- Frame Builder ----------------- */
+
+size_t build_eth_ipv4_tcp(
+    uint8_t *out,
+    size_t out_len,
+    const uint8_t *payload,
+    size_t payload_len
+) {
+    size_t total_len =
+        ETH_HDR_LEN + IP_HDR_LEN + TCP_HDR_LEN + payload_len;
+
+    if (out_len < total_len)
+        return 0;
+
+    uint8_t *p = out;
+
+    /* ---------- Ethernet ---------- */
+    uint8_t dst_mac[6] = {0x02,0x00,0x00,0x00,0x00,0x02};
+    uint8_t src_mac[6] = {0x02,0x00,0x00,0x00,0x00,0x01};
+
+    memcpy(p, dst_mac, 6);
+    memcpy(p + 6, src_mac, 6);
+    *(uint16_t *)(p + 12) = htons(0x0800); /* IPv4 */
+    p += ETH_HDR_LEN;
+
+    /* ---------- IPv4 ---------- */
+    memset(p, 0, IP_HDR_LEN);
+    p[0] = 0x45; /* v4, ihl=5 */
+    p[1] = 0x00;
+    *(uint16_t *)(p + 2) = htons(IP_HDR_LEN + TCP_HDR_LEN + payload_len);
+    *(uint16_t *)(p + 4) = htons(0x1337);
+    *(uint16_t *)(p + 6) = htons(0x4000); /* DF */
+    p[8] = 64; /* TTL */
+    p[9] = 6;  /* TCP */
+
+    uint32_t src_ip = htonl(0x0a000001); /* 10.0.0.1 */
+    uint32_t dst_ip = htonl(0xc0a80802); /* 10.0.0.2 */
+
+    memcpy(p + 12, &src_ip, 4);
+    memcpy(p + 16, &dst_ip, 4);
+
+    // *(uint16_t *)(p + 10) = csum16(p, IP_HDR_LEN);
+    // p += IP_HDR_LEN;
+
+    /* ---------- TCP ---------- */
+    memset(p, 0, TCP_HDR_LEN);
+    *(uint16_t *)(p + 0) = htons(12345); /* src port */
+    *(uint16_t *)(p + 2) = htons(80);    /* dst port */
+    *(uint32_t *)(p + 4) = htonl(1);      /* seq */
+    *(uint32_t *)(p + 8) = htonl(1);      /* ack */
+
+    p[12] = (5 << 4);  /* data offset */
+    p[13] = 0x18;      /* PSH | ACK */
+    *(uint16_t *)(p + 14) = htons(4096); /* window */
+
+    memcpy(p + TCP_HDR_LEN, payload, payload_len);
+
+    // *(uint16_t *)(p + 16) =
+    //     tcp_checksum(src_ip, dst_ip, p,
+    //                  TCP_HDR_LEN + payload_len);
+
+    eth_fixup_tx_checksums(p, total_len);
+
+    return total_len;
+}
+
 static void eth_periodic_poll(void *opaque)
 {
   (void)opaque;
@@ -864,6 +984,7 @@ static void eth_periodic_poll(void *opaque)
   uint8_t buf[ETH_MAX_FRAME];
 
   for (int i = 0; i < 32; i++) {
+    //int n = build_eth_ipv4_tcp(buf, ETH_MAX_FRAME, "GET /leds.cgi?led=2&led=4 HTTP/1.0\r\n\r\n", strlen("GET /leds.cgi?led=2&led=4 HTTP/1.0\r\n\r\n") + 1);
     int n = api_tap_recv_nonblock(g_eth.tap_fd, buf, (int)sizeof(buf));
     if (n <= 0) break;
 

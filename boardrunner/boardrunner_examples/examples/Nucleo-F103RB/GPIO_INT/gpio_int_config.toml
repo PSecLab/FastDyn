@@ -56,7 +56,7 @@ monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the targ
 # binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/GPIO/firmwares/STM32F103RB_Nucleo.elf"
 binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/GPIO_INT/firmwares/STM32F103RB_Nucleo.elf"
 init_nsvtor = "0x08000000"
-map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
+map_file = "courbet/rover_v422_map.txt"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 

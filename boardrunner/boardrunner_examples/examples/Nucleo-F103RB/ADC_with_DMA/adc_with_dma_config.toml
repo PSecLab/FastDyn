@@ -40,7 +40,7 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-coverage=false
+coverage=true
 finline='None'
 bbl_coverage=true             #set to true or false to calculate bbl coverage
 
@@ -54,7 +54,7 @@ plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 binary = "boardrunner/boardrunner_examples/examples/Nucleo-F103RB/ADC_with_DMA/firmwares/STM32F103RB_Nucleo.elf"
 init_nsvtor = "0x08000000"
-map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
+map_file = "courbet/rover_v422_map.txt"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 
@@ -64,6 +64,17 @@ logger_content = """
 # level = DEBUG
 # output = stderr
 """
+
+# [[CPU.cpu0.virtuals]]
+# at = "0xFFFFFFFF"
+# instruction = "anchor"
+# args = "0"
+
+# # assert on hardfaults
+# [[CPU.cpu0.virtuals]]
+# at = "0x0800170e"
+# instruction = "assert"
+# args = "*0x0"
 
 # ==============================================================================
 #                              Device Configuration
@@ -101,7 +112,7 @@ logger_content = """
             # This device is now handled by the elder model, directly linking it
             # to the 'scroll_config' defined above.
             model   = "elder"
-            enabled = false
+            enabled = true
             scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
         [[Device.adc_with_dma.handlers]]
@@ -116,7 +127,7 @@ logger_content = """
 
         [[Device.adc_with_dma.handlers]]
             model   = "twintrace"
-            enabled = true
+            enabled = false
 
 
     [Device.remaining_space]
@@ -135,8 +146,8 @@ logger_content = """
 
         [[Device.remaining_space.handlers]]
             model = "passthrough"
-            enabled = false
+            enabled = true
 
         [[Device.remaining_space.handlers]]
             model = "twintrace"
-            enabled = true
+            enabled = false

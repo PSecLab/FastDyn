@@ -5,7 +5,7 @@
 
 // Include the header file defining the required API prototypes
 // (This file is assumed to be provided by the emulation environment)
-#include "devmodels_apis.h"
+#include "boardrunner/vio.h"
 
 // --- Slave State and Data ---
 

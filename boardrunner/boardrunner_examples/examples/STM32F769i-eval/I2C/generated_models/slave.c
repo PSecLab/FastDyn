@@ -5,11 +5,10 @@
 /*
  * These headers would be provided by the emulation environment.
  * "utils.h" might contain logging functions (like t_printf).
- * "devmodels_apis.h" must contain the definition for the SlaveDetails struct,
  * the function pointer typedefs, and the 'enum i2c_event' definition.
  */
 #include "utils.h"
-#include "devmodels_apis.h"
+#include "boardrunner/vio.h"
 
 // --- Constants derived from the slave firmware ---
 

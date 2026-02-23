@@ -2,7 +2,7 @@
 #include <string.h> // For memset
 #include <stdio.h>  // For snprintf
 #include <device.h>
-#include <devmodels_apis.h>
+#include <boardrunner/vio.h>
 
 // Base address for SPI1
 #define SPI1_BASE 0x40013000
