@@ -38,20 +38,21 @@ class RTOSIntrospector(ABC):
         return True
 
     def register_epilogue_hook(self, sym_name):
-        hook_sym = self.symbols.get(sym_name + "_epi")
+        epi_name = sym_name + "_epi"
+        hook_sym = self.symbols.get(epi_name)
         if hook_sym is None:
             print(f"[hook] Symbol '{sym_name}' not found")
             return False
 
         # Many hooks for eiplogues
         for hook_sym_addr in hook_sym.address:
-            hook_sym_addr = hook_sym.address
             cb = VirtualInstruction(
-                        at=hook_sym.address,
-                        instruction=f"{sym_name}_Hook",
+                        at=hook_sym_addr,
+                        instruction=f"{epi_name}_Hook",
                         args=[]
                     )
             self.cpu.add_virtual_instruction(cb)
+
         print(f"[hook] Successfully registered prologue hook for '{sym_name}' at 0x{hook_sym_addr:x}")
         return True
 

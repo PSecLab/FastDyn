@@ -37,7 +37,8 @@ class DwarfProvider(SymbolProvider):
 
     def get_symbols(self, binary_path: str) -> Iterable[SymbolInfo]:
         # TODO: Make it generic Initialize Capstone for ARM Thumb mode (Standard for Cortex-M)
-        md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB)
+        md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB|capstone.CS_MODE_MCLASS)
+        md.skipdata = True
 
         with open(binary_path, "rb") as f:
             elf = ELFFile(f)
@@ -68,7 +69,7 @@ class DwarfProvider(SymbolProvider):
                     symbols.extend(self._walk_die(die))
 
             # 2. Epilogue Scanning Pass
-			#TODO: This won't capture context switch routines as they have weird ways to return, right now not needed, but in future if need rises something to note
+            #TODO: This won't capture context switch routines as they have weird ways to return, right now not needed, but in future if need rises something to note
             epilogue_symbols: List[SymbolInfo] = []
 
             for sym in symbols:

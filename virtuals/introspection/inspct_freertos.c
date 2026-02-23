@@ -38,6 +38,13 @@ static bool freertos_extract_tcb_info(uint32_t tcb_addr, FreeRTOSTaskState *out_
     return true;
 }
 
+uint32_t getCurrentTCB(){
+	uint32_t pxCurrentTCB_global_addr = inspct_get_symbol("pxCurrentTCB");
+    uint32_t active_tcb_addr = 0;
+    qemu_plugin_read_memory(pxCurrentTCB_global_addr, (uint8_t*)&active_tcb_addr, sizeof(uint32_t));
+	return active_tcb_addr;
+}
+
 void inspct_freertos_vTaskSwitchContext(unsigned int cpu_idx, void *arg) {
 	uint32_t pxCurrentTCB_global_addr = inspct_get_symbol("pxCurrentTCB");
     uint32_t active_tcb_addr = 0;
@@ -173,6 +180,21 @@ void inpsct_freertos_xQueueGenericCreate_epi(unsigned int cpu_idx, void *arg) {
     // 4. Save the handle!
     g_tracked_queues[g_num_tracked_queues++] = new_queue_handle;
 
-    printf("[FreeRTOS] [+] New Queue/Mutex Allocated at: 0x%08X\n", new_queue_handle);
+    printf("[FreeRTOS] [+] Queue/Mutex %ld Allocated at: 0x%08X\n", g_num_tracked_queues, new_queue_handle);
+
+	uint32_t curr = getCurrentTCB();
+	if (curr == 0) {
+            printf("[FreeRTOS] Queue not owned by any task, probably Kernel queue or from main.");
+    } else {
+		FreeRTOSTaskState task;
+	    if (!freertos_extract_tcb_info(curr, &task)) {
+    	    return;
+	    }
+
+	    printf("[FreeRTOS] Queue owned by Task: %s | Prio: %u | TCB: 0x%08X\n",
+	           task.task_name, task.priority, task.tcb_addr);
+	}
+
+
     fflush(stdout);
 }
