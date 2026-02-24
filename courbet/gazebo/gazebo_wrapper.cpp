@@ -327,6 +327,8 @@ int get_imu_batch(imu_batch_t *imu_batch) {
         if (ec6 != std::errc()) return 0;
     }
 
+    // debug print out the first 
+
     return 1;
 
 }
