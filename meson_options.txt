@@ -14,3 +14,7 @@ option('enable_libpy', type: 'boolean', value: false, description: 'Enable Pytho
 
 #debugging options
 option('DEBUG_PRINT', type: 'boolean', value: false, description: 'Enable Debugging prints')
+
+
+#sundials support
+option('enable_sundials', type: 'boolean', value: false, description: 'Enable SUNDIALS solver support')

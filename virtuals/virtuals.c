@@ -44,6 +44,9 @@ extern void qemu_set_register(uint32_t value, int reg);
 
 extern void anchor(unsigned int cpu_index, void *udata);
 extern void virt_assert(unsigned int cpu_index, void *udata);
+
+//TODO: temporary
+void sundial_virtual(unsigned int cpu_index, void *udata);
 /**
  * @brief Callback registry
  *
@@ -130,7 +133,91 @@ cb_entry_t cb_registry[] = {
 	{ "vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext}, 
 	{ "prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList},
 	{ "xQueueGenericCreate_epi_Hook", inpsct_freertos_xQueueGenericCreate_epi},
+#if ENABLE_SUNDIALS
+	{ "sundial_virtual", sundial_virtual}
+#endif 
 };
+
+/* Initial version of inline physics engine */
+#include <stdio.h>
+#include <stdlib.h>
+
+// SUNDIALS Core and CVODE Headers
+#include <cvode/cvode.h>
+#include <nvector/nvector_serial.h>
+#include <sunmatrix/sunmatrix_dense.h>
+#include <sunlinsol/sunlinsol_dense.h>
+#include <sundials/sundials_types.h>
+
+// 1. User Data Structure: Pass parameters to your equations
+typedef struct {
+    sunrealtype k; // Decay constant
+} UserData;
+
+// 2. The Right-Hand Side (RHS) Function: dy/dt = -k * y
+int rhs(sunrealtype t, N_Vector y, N_Vector ydot, void *user_data) {
+    UserData *data = (UserData *)user_data;
+    sunrealtype k = data->k;
+    sunrealtype y_val = NV_Ith_S(y, 0);
+
+    // Set the derivative
+    NV_Ith_S(ydot, 0) = -k * y_val;
+
+    return 0;
+}
+
+void sundial_virtual(unsigned int cpu_index, void *udata) {
+    // --- Setup ---
+    SUNContext sunctx;
+    SUNContext_Create(NULL, &sunctx); // Create the SUNDIALS simulation context
+
+    sunrealtype t = 0.0;
+    sunrealtype tout = 0.4; // First output time
+
+    // Create serial vector of length 1 and set initial condition y(0) = 1.0
+    N_Vector y = N_VNew_Serial(1, sunctx);
+    NV_Ith_S(y, 0) = 1.0;
+
+    // Initialize User Data
+    UserData data;
+    data.k = 0.5;
+
+    // --- CVODE Initialization ---
+    // Use CV_BDF for stiff problems, CV_ADAMS for non-stiff
+    void *cvode_mem = CVodeCreate(CV_BDF, sunctx);
+    CVodeInit(cvode_mem, rhs, t, y);
+    CVodeSetUserData(cvode_mem, &data);
+    CVodeSStolerances(cvode_mem, 1e-4, 1e-8);
+
+    // --- Linear Solver Setup ---
+    // Required for BDF/Implicit methods
+    SUNMatrix A = SUNDenseMatrix(1, 1, sunctx);
+    SUNLinearSolver LS = SUNLinSol_Dense(y, A, sunctx);
+    CVodeSetLinearSolver(cvode_mem, LS, A);
+
+    // --- Integration Loop ---
+    printf("Solving dy/dt = -%.2fy, y(0) = 1.0\n", data.k);
+    printf("Time(s)    Value(y)\n");
+    printf("-------------------\n");
+
+    for (int i = 0; i < 10; i++) {
+        int flag = CVode(cvode_mem, tout, y, &t, CV_NORMAL);
+        if (flag < 0) {
+            fprintf(stderr, "Error in CVode: %d\n", flag);
+            break;
+        }
+        printf("%10.4f %10.6f\n", t, NV_Ith_S(y, 0));
+        tout += 0.4;
+    }
+
+    // --- Cleanup ---
+    CVodeFree(&cvode_mem);
+    SUNLinSolFree(LS);
+    SUNMatDestroy(A);
+    N_VDestroy(y);
+    SUNContext_Free(&sunctx);
+
+}
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);
 

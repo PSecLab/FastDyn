@@ -14,6 +14,32 @@ srcs = []
 #debugging FLAGS
 DEBUG_PRINT = get_option('DEBUG_PRINT')
 
+#enable SUNDIALS
+ENABLE_SUNDIALS = get_option('enable_sundials')
+
+if ENABLE_SUNDIALS
+  # 1. Try the automatic way again (just in case)
+  sundials_dep = dependency('sundials', required: false)
+
+  if not sundials_dep.found()
+    # 2. Manual Fallback: Link the specific SUNDIALS components
+    # This assumes the files are in /usr/local/lib and /usr/local/include
+    cpp = meson.get_compiler('c')
+
+    # Manually find the libraries
+    cvode_lib = cpp.find_library('sundials_cvode', required: true)
+    nvec_lib  = cpp.find_library('sundials_nvecserial', required: true)
+    m_lib     = cpp.find_library('m', required: true) # Math library
+
+    sundials_dep = declare_dependency(
+      dependencies: [cvode_lib, nvec_lib, m_lib]
+    )
+  endif
+
+  deps += sundials_dep
+  add_project_arguments('-DENABLE_SUNDIALS', language: 'c')
+endif
+
 #PYTHON Support
 ENABLE_LIBPY = get_option('enable_libpy')
 if ENABLE_LIBPY

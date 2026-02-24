@@ -8,7 +8,7 @@ LIBFUZZ		 ?= false
 DEV          ?= false
 DEBUG_PRINT  ?= false
 LIBPY        ?= false
-
+SUNDIALS     ?= false
 BOARD_RUNNER ?= false
 
 # Top-level target: clean, configure with meson, then build with ninja
@@ -26,7 +26,8 @@ setup: clean fetch
 	-Denable_libfuzz=$(LIBFUZZ) \
 	-Ddevice_models=$(DEV) \
 	-DDEBUG_PRINT=$(DEBUG_PRINT) \
-	-Denable_libpy=$(LIBPY)
+	-Denable_libpy=$(LIBPY) \
+	-Denable_sundials=$(SUNDIALS)
 
 	@if [ "$(BOARD_RUNNER)" = "true" ]; then \
 		$(MAKE) build_boardrunner; \
