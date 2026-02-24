@@ -46,7 +46,9 @@ extern void anchor(unsigned int cpu_index, void *udata);
 extern void virt_assert(unsigned int cpu_index, void *udata);
 
 //TODO: temporary
+#if ENABLE_SUNDIALS
 void sundial_virtual(unsigned int cpu_index, void *udata);
+#endif
 /**
  * @brief Callback registry
  *
@@ -130,14 +132,16 @@ cb_entry_t cb_registry[] = {
     // hardfault status
     { "set_hardfault_status", set_hardfault_status},
 #endif
-	{ "vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext}, 
+	{ "vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext},
 	{ "prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList},
 	{ "xQueueGenericCreate_epi_Hook", inpsct_freertos_xQueueGenericCreate_epi},
 #if ENABLE_SUNDIALS
 	{ "sundial_virtual", sundial_virtual}
-#endif 
+#endif
 };
 
+
+#ifdef ENABLE_SUNDIALS
 /* Initial version of inline physics engine */
 #include <stdio.h>
 #include <stdlib.h>
@@ -218,6 +222,7 @@ void sundial_virtual(unsigned int cpu_index, void *udata) {
     SUNContext_Free(&sunctx);
 
 }
+#endif
 
 const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);
 

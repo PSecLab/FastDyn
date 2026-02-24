@@ -16,6 +16,7 @@ from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 from . import toml_parser
 from .fuzzer import fuzzer
+from .utils import parse_config as parse_helper
 from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 
@@ -43,7 +44,14 @@ def cli():
         show_default=True,
         type=click.Path(resolve_path=True,writable=True),
         help='Path to the work directory.')
-def run(config, map_file, work_dir):
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    metavar='PATH',
+    help='Optional path to an SVD file or directory.'
+)
+def run(config, map_file, work_dir, svd):
     if work_dir is not None:
         if not os.path.isdir(work_dir):
             log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
@@ -57,9 +65,10 @@ def run(config, map_file, work_dir):
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
 
-    #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
-    fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0",toml_config=config, svd_path="third_party/cmsis-svd-data")
+    svd_path = svd if svd is not None else "third_party/cmsis-svd-data"
 
+    #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
+    fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
 
     #run all the machines requested by the user
     for idx, machine in enumerate(fastdyn_handle.machines):
@@ -145,7 +154,15 @@ def run(config, map_file, work_dir):
     type=click.Path(resolve_path=True, writable=True),
     help='Path to the work directory.'
 )
-def generate(hardware_log, slave_model, reference_model, firmware_code, board, peripheral, model_name, method, n, isr_window, work_dir):
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    metavar='PATH',
+    help='Optional path to an SVD file or directory.'
+)
+def generate(hardware_log, slave_model, reference_model, firmware_code, board, peripheral, model_name,
+             method, n, isr_window, work_dir, svd):
     """Generates the LLM Prompt using the hardware log passed by the user."""
     if slave_model:
         if reference_model is None:
@@ -185,15 +202,46 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
         log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
 
         os.makedirs(work_dir)
+
+        #discover svd
+        svd_input = svd if svd is not None else "third_party/cmsis-svd-data"
+        platform = (board or "").strip()
+        if not platform and (svd is None):
+            raise click.UsageError(
+                f"Machine platform is required when CMSIS SVD file path is not explicitly given. "
+                "Pass --board explicitly."
+            )
+
+        if not platform and (svd_input and os.path.isdir(os.path.expanduser(svd_input))):
+            raise click.UsageError(
+                f"Machine platform is required when CMSIS SVD path points to a directory. "
+                "Pass --svd <file> explicitly"
+                "OR just Pass --board explicitly."
+            )
+
+        try:
+            svd_file, svd_key = parse_helper.resolve_svd(
+                platform_or_board=platform or "unused",
+                svd=svd_input,          # user explicitly passed it here
+                default_dir=None,       # no default in this path
+                auto_discover=False,    # don’t do repo search when user already gave a path
+            )
+        except parse_helper.SvdResolutionError as e:
+            log.error(str(e))
+            sys.exit(1)
+
+        log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
+        svd_device = parse_helper.get_svd_device(svd_file)
+
         #minimize the context -- since all the other peripherals are also part of the model, we dont need to do it multiple times
         cm_path = cm.minimize_context(
             out_dir=work_dir,
             log_file=hardware_log,
-            platform=board,
+            platform=platform,
             method=method,
             peripheral=peripheral[0],
             n=n,
-            svd_path="third_party/cmsis-svd-data",
+            svd_device=svd_device,
             isr_window=isr_window,
             cm_dir_name="out_cm"
             )
@@ -302,7 +350,14 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
     type=click.Path(resolve_path=True, writable=True),
     help='Path to the work directory.'
 )
-def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripheral, method, n, isr_window, work_dir):
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    metavar='PATH',
+    help='Optional path to an SVD file or directory.'
+)
+def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripheral, method, n, isr_window, work_dir, svd):
     """Verifies the model against hardware and emulation logs."""
     log.info("Running Verifier")
     #minimize the context for hardware log
@@ -319,17 +374,48 @@ def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripher
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
 
-    #minimize the context--hardware
+
+    #discover svd
+    svd_input = svd if svd is not None else "third_party/cmsis-svd-data"
+    platform = (board or "").strip()
+    if not platform and (svd is None):
+        raise click.UsageError(
+            f"Machine platform is required when CMSIS SVD file path is not explicitly given. "
+            "Pass --board explicitly."
+        )
+
+    if not platform and (svd_input and os.path.isdir(os.path.expanduser(svd_input))):
+        raise click.UsageError(
+            f"Machine platform is required when CMSIS SVD path points to a directory. "
+            "Pass --svd <file> explicitly"
+            "OR just Pass --board explicitly."
+        )
+
+    try:
+        svd_file, svd_key = parse_helper.resolve_svd(
+            platform_or_board=platform or "unused",
+            svd=svd_input,          # user explicitly passed it here
+            default_dir=None,       # no default in this path
+            auto_discover=False,    # don’t do repo search when user already gave a path
+        )
+    except parse_helper.SvdResolutionError as e:
+        log.error(str(e))
+        sys.exit(1)
+
+    log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
+    svd_device = parse_helper.get_svd_device(svd_file)
+
+    #minimize the context -- since all the other peripherals are also part of the model, we dont need to do it multiple times
     cm_path_hardware = cm.minimize_context(
         out_dir=work_dir,
         log_file=hardware_log,
-        platform=board,
+        platform=platform,
         method=method,
         peripheral=peripheral[0],
         n=n,
-        svd_path="third_party/cmsis-svd-data",
+        svd_device=svd_device,
         isr_window=isr_window,
-        cm_dir_name="hardware"
+        cm_dir_name="out_cm"
         )
 
     #TODO: Refactor and clean later
@@ -347,12 +433,12 @@ def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripher
     cm_path_emulation = cm.minimize_context(
         out_dir=work_dir,
         log_file=emulation_log,
-        platform=board,
+        platform=platform,
         method=method,
         peripheral=peripheral[0],
         n=n,
         isr_window=isr_window,
-        svd_path="third_party/cmsis-svd-data",
+        svd_device=svd_device,
         cm_dir_name="emulation"
         )
 
@@ -452,7 +538,14 @@ def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripher
     type=click.Path(resolve_path=True, writable=True),
     help='Path to the work directory.'
 )
-def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_dir):
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    metavar='PATH',
+    help='Optional path to an SVD file or directory.'
+)
+def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_dir, svd):
     """Performs Fuzzing using the context minimizer for data register and then runs using the toml config"""
 
     if work_dir is not None:
@@ -477,7 +570,7 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
         peripheral=peripheral,
         n=n,
         isr_window=isr_window,
-        svd_path="third_party/cmsis-svd-data",
+        svd_path=svd_path,
         cm_dir_name="out_cm"
         )
 
@@ -488,7 +581,7 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
     )
 
     #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
-    fastdyn_handle = toml_parser.parser(machine_name="machine0",toml_config=config, svd_path="third_party/cmsis-svd-data")
+    fastdyn_handle = toml_parser.parser(machine_name="machine0",toml_config=config, svd_path=svd_path)
 
     #TODO: For initial verification of fuzzer, the cpu is hardcoded to be zero, update this once complete fuzzer is added
     for machine in fastdyn_handle.machines:

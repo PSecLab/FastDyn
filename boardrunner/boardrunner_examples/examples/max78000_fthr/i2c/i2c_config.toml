@@ -1,0 +1,167 @@
+# ==============================================================================
+# Machine (machine-wide + QEMU target options)
+# ==============================================================================
+[Machine]
+platform = "Max78000"
+
+qemu_path = "qemu-system-arm"
+
+monitor_port = 5555
+qmp_socket   = "/tmp/qmp.sock"
+
+enable_gdb    = false
+stop_on_start = false
+launch_gdb    = false
+
+semihosting        = true
+semihosting_config = "enable=on,target=native"
+
+coverage     = true
+bbl_coverage = true
+finline      = ""
+
+# ==============================================================================
+# Memory
+# ==============================================================================
+[Memory]
+
+  # ---------------------------------------------------------------------------
+  # Main memory (required)
+  # ---------------------------------------------------------------------------
+  [Memory.main]
+  id           = "ram0"
+  base_address = "0x20000000"
+  memory_size  = "512M"
+  memory_type  = "SRAM"
+
+  backend     = "file"                 # file | ram | memfd
+  memory_file = "/dev/shm/my_m4_ram3"  # main RAM backend file
+
+  share    = true
+  prealloc = false
+
+
+  # ---------------------------------------------------------------------------
+  # Extra memory banks (optional)  (your old "shared RAM")
+  # ---------------------------------------------------------------------------
+  [[Memory.ram1]]
+  id           = "ram1"
+  index        = 1
+  base_address = "0x30000000"
+  memory_size  = "512K"
+  memory_type  = "SRAM"
+
+  backend     = "file"
+  memory_file = "/dev/shm/my_m4_ram"
+
+  share    = true
+  prealloc = false
+
+# ==============================================================================
+# CPUs
+# ==============================================================================
+[CPU]
+
+  [[CPU.cpu0]]
+  arch    = "arm"
+  machine = "cortexm"
+  cpu     = "cortex-m4"
+
+  binary = "boardrunner/boardrunner_examples/examples/max78000_fthr/i2c/firmware/I2C_Sensor.elf"
+
+  init_nsvtor = "0x10000000"
+
+  plugin_library = "build/libfastdyn.so"
+  monitor_elf    = "../ws/monitor.elf"
+
+  log_file    = "qemu.log"
+  log_options = "in_asm,op"
+
+  twintrace       = "None"                 # record | replay | None
+  hardware_trace  = "hardware_log/io.log"  # useful for replay workflows
+
+  logger_content = """
+  # --- Plugin Logger Configuration ---
+  # level  = DEBUG
+  # output = stderr
+  """
+
+# ==============================================================================
+# Device model defaults (global settings per model type)
+# ==============================================================================
+[Device.Models]
+
+  [Device.Models.elder]
+  # (empty by default)
+
+  [Device.Models.passthrough]
+  backend = "openocd"
+
+  [Device.Models.classic]
+  # (empty by default)
+
+  [Device.Models.twintrace]
+  backend = "openocd"
+
+  [Device.Models.unhandled]
+  # (empty by default)
+
+# ==============================================================================
+# Devices (MAX78000)
+# ==============================================================================
+
+# --- Peripheral Definitions ---
+# ONLY I2C1 is defined here as requested.
+# MAX78000 I2C1 Base Address: 0x4001E000
+[Device.i2c1]
+    ranges = [["0x4001E000", "0x4001EFFF"]]
+    irq = [['1','100']]
+    description = "MAX78000 I2C1 Instance only."
+    read_priority = "elder"
+
+    [[Device.i2c1.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"
+
+    [[Device.i2c1.slaves]]
+        model = ["elder"]       #attach this device to elder model only
+        device = "bme280"
+        address = "0x76"
+        device_scroll = "boardrunner/boardrunner_sdk/build/slave.so"
+
+    [[Device.i2c1.handlers]]
+        model   = "classic"
+        enabled = false
+
+    [[Device.i2c1.handlers]]
+        model   = "passthrough"
+        enabled = false
+
+    [[Device.i2c1.handlers]]
+        model   = "twintrace"
+        enabled = false
+
+# --- Remaining Space ---
+# This now includes GPIO (LEDs), System Control, and all other peripherals
+# EXCLUDING the I2C1 range defined above.
+[Device.remaining_space]
+    ranges = [
+        ["0x40000000", "0x4001DFFF"], # Start of Peripherals -> Before I2C1
+        ["0x4001F000", "0xE0000000"], # After I2C1 -> System Base
+        ["0xE0000000", "0xEFFFFFFF"]  # System Space
+    ]
+    irq = [['1','100']]
+    description = "All other memory regions (including GPIO/LEDs) handled by passthrough."
+
+    [[Device.remaining_space.handlers]]
+        model = "classic"
+        enabled = false
+
+    [[Device.remaining_space.handlers]]
+        model = "passthrough"
+        enabled = true
+
+    [[Device.remaining_space.handlers]]
+        model = "twintrace"
+        enabled = false

@@ -222,11 +222,20 @@ void dev_notify_irq(int number) {
     long usec;
     cov_irq_entry(number);
     dev_get_timestamp(&sec, &usec);
-#ifdef DEV_LOGGER
-	utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
-              sec, usec, number);
-#endif
 	DeviceModel* dev = irq_lut[number];
+#ifdef DEV_LOGGER
+        if (twintrace_mode != TT_OFF) {
+            uint64_t icount = core_get_icount();
+            if (number != 15) { //Let's ignore the timer interrupt for now as it is very noisy and not useful for replay
+                const char *dev_name = (dev && dev->name) ? dev->name : "unregistered";
+                utils_log_to_file(io_logger, "[%5ld.%06ld] icount=%" PRIu64" [%s] Interrupt Taken: \t Vector = 0x%08X\n",
+                        sec, usec, icount, dev_name, number);
+            }
+        } else {
+            utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Taken: \t Vector = 0x%08X\n",
+                    sec, usec, number);
+        }
+#endif
 	if (dev != NULL) {
 		dev->interrupt(number);
 	}
@@ -244,8 +253,16 @@ void dev_irqret_hook(int number) {
     cov_irq_exit(number);
     dev_get_timestamp(&sec, &usec);
 #ifdef DEV_LOGGER
-    utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
-              sec, usec, number);
+        if (twintrace_mode != TT_OFF) {
+            uint64_t icount = core_get_icount();
+            if (number != 0xF) { //Let's ignore the timer interrupt for now as it is very noisy and not useful for replay
+                utils_log_to_file(io_logger, "[%5ld.%06ld] icount=%" PRIu64" Interrupt Served: \t Vector = 0x%08X\n",
+                        sec, usec, icount, number);
+                }
+        } else {
+            utils_log_to_file(io_logger, "[%5ld.%06ld] Interrupt Served: \t Vector = 0x%08X\n",
+                    sec, usec, number);
+        }
 #endif
 	DeviceModel* dev = irq_lut[number];
 	if (dev != NULL) {

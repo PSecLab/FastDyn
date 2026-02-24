@@ -253,6 +253,26 @@ def load_symbol_addresses(filename: str) -> dict[str, int]:
 Helper functions to parse the CMSIS-SVD
 '''
 
+import os
+import sys
+import glob
+
+class SvdResolutionError(Exception):
+    pass
+
+
+def _find_ci_key(keys, target):
+    if not target:
+        return None
+    if target in keys:
+        return target
+    tl = target.lower()
+    for k in keys:
+        if k.lower() == tl:
+            return k
+    return None
+
+
 def discover_svd_files(svd_path: str):
     """
     Discover SVD files from a user-provided path.
@@ -263,59 +283,133 @@ def discover_svd_files(svd_path: str):
             - a directory to recursively search for .svd files
 
     Returns:
-        svd_map: dict[str, str] mapping device_name -> absolute path to .svd
+        (svd_map, is_file)
+          - svd_map: dict[str, str] mapping device_name -> absolute path to .svd
+          - is_file: True if single-file mode
     """
     if not svd_path:
-        fastdyn_log.error("No SVD path provided.")
-        sys.exit(1)
+        raise SvdResolutionError("No SVD path provided.")
 
-    svd_path = os.path.expanduser(svd_path)
-    svd_path = os.path.abspath(svd_path)
+    svd_path = os.path.abspath(os.path.expanduser(svd_path))
 
     if not os.path.exists(svd_path):
-        fastdyn_log.error(f"SVD path does not exist: {svd_path}")
-        sys.exit(1)
+        raise SvdResolutionError(f"SVD path does not exist: {svd_path}")
 
-    is_file = False
     svd_map = {}
+    is_file = False
 
-    # Case 1: user provided a single .svd file
+    # Case 1: single file
     if os.path.isfile(svd_path):
         if not svd_path.lower().endswith(".svd"):
-            fastdyn_log.error(f"Provided file is not an .svd: {svd_path}")
-            sys.exit(1)
+            raise SvdResolutionError(f"Provided file is not an .svd: {svd_path}")
 
         device_name = os.path.splitext(os.path.basename(svd_path))[0]
         svd_map[device_name] = svd_path
-        fastdyn_log.info("Discovered 1 SVD file (single-file mode).")
         is_file = True
         return svd_map, is_file
 
-    # Case 2: user provided a directory; recursively find .svd files
+    # Case 2: directory
     if not os.path.isdir(svd_path):
-        fastdyn_log.error(f"SVD path is neither a file nor a directory: {svd_path}")
-        sys.exit(1)
+        raise SvdResolutionError(f"SVD path is neither a file nor a directory: {svd_path}")
 
     for root, _, files in os.walk(svd_path):
         for filename in files:
             if filename.lower().endswith(".svd"):
                 device_name = os.path.splitext(filename)[0]
-                full_path = os.path.join(root, filename)
+                full_path = os.path.abspath(os.path.join(root, filename))
 
+                # Keep first occurrence (current behavior)
                 if device_name in svd_map:
-                    fastdyn_log.debug(
-                        f"Duplicate device name '{device_name}': "
-                        f"keeping '{svd_map[device_name]}', ignoring '{full_path}'."
-                    )
                     continue
 
-                svd_map[device_name] = os.path.abspath(full_path)
+                svd_map[device_name] = full_path
 
-    fastdyn_log.info(f"Automatically discovered {len(svd_map)} SVD files under: {svd_path}")
     return svd_map, is_file
 
-def get_svd_device(svd_file_map, platform):
-    parser = SVDParser.for_xml_file(svd_file_map[platform])
+
+def resolve_svd(
+    platform_or_board: str,
+    svd: str | None = None,
+    default_dir: str | None = "third_party/cmsis-svd-data",
+    auto_discover: bool = True,
+    search_root: str | None = None,
+):
+    """
+    Resolve to a specific SVD file.
+
+    Returns:
+        (svd_file_path, svd_key)
+
+    Policy:
+      - If svd is a file: use it directly
+      - If svd is a directory: resolve by platform_or_board (case-insensitive)
+      - If svd is None: use default_dir (directory), resolve by platform_or_board
+      - If not found AND svd is None AND auto_discover: search repo for <board>.svd
+    """
+    if svd is None:
+        if not default_dir:
+            raise SvdResolutionError("No SVD path provided and no default_dir configured.")
+        svd_input = default_dir
+    else:
+        svd_input = svd
+
+    svd_input = os.path.abspath(os.path.expanduser(svd_input))
+    svd_map, is_file = discover_svd_files(svd_input)
+
+    if not svd_map:
+        raise SvdResolutionError(f"No SVD files discovered from: {svd_input}")
+
+    # Single-file mode: pick the only entry
+    if is_file:
+        svd_key = next(iter(svd_map))
+        return svd_map[svd_key], svd_key
+
+    # Directory mode: resolve by name
+    svd_key = _find_ci_key(svd_map.keys(), platform_or_board)
+    if svd_key is not None:
+        return svd_map[svd_key], svd_key
+
+    # Optional auto-discovery ONLY when user didn't explicitly pass --svd
+    if auto_discover and svd is None:
+        search_root = os.path.abspath(search_root or os.getcwd())
+        target_lower = f"{platform_or_board.lower()}.svd"
+
+        matches = []
+        # Fast-ish glob (case-sensitive). Still useful on most repos.
+        matches.extend(
+            os.path.abspath(p)
+            for p in glob.glob(os.path.join(search_root, "**", f"{platform_or_board}.svd"), recursive=True)
+            if os.path.isfile(p)
+        )
+
+        # Case-insensitive fallback (walk)
+        if not matches:
+            for root, _, files in os.walk(search_root):
+                for fn in files:
+                    if fn.lower() == target_lower:
+                        matches.append(os.path.abspath(os.path.join(root, fn)))
+
+        matches = sorted(set(matches))
+
+        if len(matches) == 1:
+            auto_file = matches[0]
+            auto_map, auto_is_file = discover_svd_files(auto_file)
+            auto_key = next(iter(auto_map))
+            return auto_map[auto_key], auto_key
+
+        if len(matches) > 1:
+            raise SvdResolutionError(
+                f"Multiple SVD files matched board '{platform_or_board}'. "
+                "Pass --svd <file-or-directory> explicitly."
+            )
+
+    raise SvdResolutionError(
+        f"Could not resolve SVD for '{platform_or_board}' from '{svd_input}'. "
+        "Pass --svd <file-or-directory> explicitly."
+    )
+
+def get_svd_device(svd_file):
+    parser = SVDParser.for_xml_file(svd_file)
     svd_device = parser.get_device()
     return svd_device
 

@@ -1,4 +1,9 @@
-project('fastdyn', 'c')
+project(
+  'fastdyn',
+  'c',
+  version: '0.1.0',
+  meson_version: '>=0.61.2'
+)
 cc = meson.get_compiler('c')
 # cpp = meson.get_compiler('cpp')
 

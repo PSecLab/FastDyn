@@ -4,9 +4,12 @@ import re
 import struct
 from pathlib import Path
 
-# Matches both:
+# Matches all:
 #   address = 0x..., size = 4 bytes, value = 0x..., pc=0x...
 #   address=0x...,  size=4 bytes,   value=0x..., pc=0x...
+#   Interrupt Taken:  Vector = 0x...
+#   Interrupt Served: Vector = 0x...
+
 LINE_RE = re.compile(
     r"""
     icount=(?P<icount>\d+)
@@ -21,18 +24,53 @@ LINE_RE = re.compile(
     re.VERBOSE,
 )
 
+IRQ_TAKEN_RE = re.compile(
+    r"""
+    (?:icount=(?P<icount>\d+)\s+)?            # optional icount
+    (?:\[(?P<model>[^\]]+)\]\s+)?             # optional model
+    Interrupt\s+Taken:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)
+    """,
+    re.VERBOSE,
+)
+
+IRQ_SERVED_RE = re.compile(
+    r"""
+    (?:icount=(?P<icount>\d+)\s+)?            # optional icount
+    (?:\[(?P<model>[^\]]+)\]\s+)?             # optional model
+    Interrupt\s+Served:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)
+    """,
+    re.VERBOSE,
+)
+
 HDR_STRUCT = struct.Struct("<4sIIQ")     # magic, version, record_size, count
 REC_STRUCT = struct.Struct("<QQQQII")    # icount, pc, addr, value, size, type
 
 MAGIC = b"TTTR"
 VERSION = 1
 RECORD_SIZE = REC_STRUCT.size  # 40
+IGNORED_IRQS = {0x0F}          # SysTick is noisy and non-deterministic
 
 
 def parse_line(line: str):
     m = LINE_RE.search(line)
     if not m:
-        return None
+        m = IRQ_TAKEN_RE.search(line)
+        if m:
+            icount = int(m.group("icount")) if m.group("icount") else 0
+            vector = int(m.group("vector"), 16)
+            if vector in IGNORED_IRQS:
+                return None, None
+            return (icount, 0, vector, 0, 0, 2), m.group("model")
+
+        m = IRQ_SERVED_RE.search(line)
+        if m:
+            icount = int(m.group("icount")) if m.group("icount") else 0
+            vector = int(m.group("vector"), 16)
+            if vector in IGNORED_IRQS:
+                return None, None
+            return (icount, 0, vector, 0, 0, 3), m.group("model")
+
+        return None, None
 
     icount = int(m.group("icount"))
     rw = m.group("rw")
@@ -42,7 +80,7 @@ def parse_line(line: str):
     pc = int(m.group("pc"), 16)
 
     typ = 0 if rw.lower() == "read" else 1
-    return icount, pc, addr, value, size, typ
+    return (icount, pc, addr, value, size, typ), m.group("model")
 
 
 def convert(in_path, out_path, *, only_model=None):
@@ -58,7 +96,7 @@ def convert(in_path, out_path, *, only_model=None):
         fout.write(HDR_STRUCT.pack(MAGIC, VERSION, RECORD_SIZE, 0))
 
         for line in fin:
-            rec = parse_line(line)
+            rec, model = parse_line(line)
             if rec is None:
                 skipped += 1
                 continue
@@ -67,9 +105,8 @@ def convert(in_path, out_path, *, only_model=None):
 
             if only_model is not None:
                 # Quick model filter using bracket content, e.g. [passthrough]
-                # We re-find the model field cheaply:
-                mm = re.search(r"\[(?P<model>[^\]]+)\]", line)
-                if not mm or mm.group("model") != only_model:
+                # Only filter if a model tag is present.
+                if model is not None and model != only_model:
                     continue
 
             fout.write(REC_STRUCT.pack(*rec))
@@ -98,7 +135,17 @@ def replay_binary_verifier(replay_binary):
         print(magic, ver, rsz, count)
         for i in range(5):
             icount, pc, addr, value, size, typ = REC.unpack(f.read(REC.size))
-            print(i, icount, hex(pc), hex(addr), hex(value), size, "R" if typ==0 else "W")
+            if typ == 0:
+                tname = "R"
+            elif typ == 1:
+                tname = "W"
+            elif typ == 2:
+                tname = "IRQ_TAKEN"
+            elif typ == 3:
+                tname = "IRQ_SERVED"
+            else:
+                tname = f"UNK({typ})"
+            print(i, icount, hex(pc), hex(addr), hex(value), size, tname)
 
 
 def main():

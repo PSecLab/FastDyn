@@ -55,3 +55,13 @@ to get more information about our great tool.
 ### Extras Update the readme later
 We expect the `cmsis-svd-data` to be placed for the generator and verifier wherever you are the running the command!
 We recommend running the command from the main directory of fastdyn. (Do we need to update this?)
+
+
+
+## Required OS Dependencies
+
+For Sundial build of Fastdyn:
+```bash
+sudo apt-get update
+sudo apt-get install -y libsundials-dev pkg-config
+```

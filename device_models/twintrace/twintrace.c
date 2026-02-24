@@ -3,6 +3,7 @@
 #include <device.h>
 #include <hw.h>
 #include <utils.h>
+#include <core.h>
 
 #include <errno.h>
 #include <inttypes.h>
@@ -20,7 +21,12 @@
 //   twintrace_mode_t twintrace_mode;
 //   const char* twintrace_bin;
 
-enum { TT_R = 0, TT_W = 1 };
+enum {
+    TT_R = 0,
+    TT_W = 1,
+    TT_IRQ_TAKEN = 2,
+    TT_IRQ_SERVED = 3,
+};
 
 // -----------------------
 // Packed format structs
@@ -72,9 +78,17 @@ typedef struct {
 } tt_replay_t;
 
 static tt_replay_t g_rep;
+static pthread_mutex_t rep_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t rep_cv = PTHREAD_COND_INITIALIZER;
+static pthread_t rep_irq_thread;
 
 static twintrace_mode_t g_mode = TT_OFF;
 static const char *g_bin_path = NULL;
+
+static bool twintrace_ignore_irq(int line)
+{
+    return line == 15;
+}
 
 // -----------------------
 // Helpers
@@ -83,6 +97,17 @@ static void die_sys(const char *msg, const char *path) {
     fprintf(stderr, "[twintrace] %s (%s): %s\n",
             msg, path ? path : "(null)", strerror(errno));
     utils_die("twintrace fatal");
+}
+
+static const char *tt_type_name(uint32_t type)
+{
+    switch (type) {
+        case TT_R: return "READ";
+        case TT_W: return "WRITE";
+        case TT_IRQ_TAKEN: return "IRQ_TAKEN";
+        case TT_IRQ_SERVED: return "IRQ_SERVED";
+        default: return "UNKNOWN";
+    }
 }
 
 static void tt_abort(const char *why,
@@ -97,12 +122,30 @@ static void tt_abort(const char *why,
         why,
         g_rep.idx, g_rep.hdr.count,
         (uint64_t)addr, size, pc, val,
-        (exp && exp->type == TT_R) ? "READ " : "WRITE",
+        exp ? tt_type_name(exp->type) : "UNKNOWN",
         exp ? exp->icount : 0,
         exp ? exp->addr : 0,
         exp ? exp->size : 0,
         exp ? exp->pc : 0,
         exp ? exp->value : 0
+    );
+    utils_die("twintrace divergence");
+}
+
+static void tt_abort_irq(const char *why, int line, const tt_rec_t *exp)
+{
+    uint64_t icount = core_get_icount();
+    fprintf(stderr,
+        "\n[twintrace] %s\n"
+        "  idx=%" PRIu64 " / %" PRIu64 "\n"
+        "  got: irq=%d icount=%" PRIu64 "\n"
+        "  exp: %s icount=%" PRIu64 " irq=%" PRIu64 "\n\n",
+        why,
+        g_rep.idx, g_rep.hdr.count,
+        line, icount,
+        exp ? tt_type_name(exp->type) : "UNKNOWN",
+        exp ? exp->icount : 0,
+        exp ? exp->addr : 0
     );
     utils_die("twintrace divergence");
 }
@@ -153,6 +196,59 @@ static void tt_replay_open(const char *path)
             path, g_rep.hdr.count);
 }
 
+static void* replay_irq_thread_fn(void* arg)
+{
+    (void)arg;
+
+    while (1) {
+        pthread_mutex_lock(&rep_mutex);
+        while (g_rep.idx < g_rep.hdr.count) {
+            tt_rec_t e;
+            tt_get_rec(g_rep.idx, &e);
+            if (e.type == TT_IRQ_TAKEN) break;
+            pthread_cond_wait(&rep_cv, &rep_mutex);
+        }
+
+        if (g_rep.idx >= g_rep.hdr.count) {
+            pthread_mutex_unlock(&rep_mutex);
+            return NULL;
+        }
+
+        tt_rec_t e;
+        tt_get_rec(g_rep.idx, &e);
+        uint64_t idx = g_rep.idx;
+        pthread_mutex_unlock(&rep_mutex);
+
+        while (core_get_icount() < e.icount) {
+            pthread_mutex_lock(&rep_mutex);
+            if (g_rep.idx != idx) {
+                pthread_mutex_unlock(&rep_mutex);
+                goto next_iter;
+            }
+            pthread_mutex_unlock(&rep_mutex);
+            usleep(50);
+        }
+
+        pthread_mutex_lock(&rep_mutex);
+        if (g_rep.idx != idx) {
+            pthread_mutex_unlock(&rep_mutex);
+            goto next_iter;
+        }
+        pthread_mutex_unlock(&rep_mutex);
+
+        qemu_plugin_raise_irq((int)e.addr, false);
+
+        pthread_mutex_lock(&rep_mutex);
+        while (g_rep.idx == idx) {
+            pthread_cond_wait(&rep_cv, &rep_mutex);
+        }
+        pthread_mutex_unlock(&rep_mutex);
+
+next_iter:
+        continue;
+    }
+}
+
 // -----------------------
 // IRQ thread (record mode only, same idea as passthrough)
 // -----------------------
@@ -180,20 +276,69 @@ static void* dev_thread_fn(void* arg)
 
 static int twintrace_serve(int line)
 {
-    if (g_mode != TT_RECORD) return 0;
+    if (g_mode == TT_RECORD) {
+        pthread_mutex_lock(&hw_mutex);
+        hw_write_reg(hw, 1, line);
+        hw_board_run(hw);
+        irq_pending = 0;
+        pthread_cond_signal(&irq_cv);
+        pthread_mutex_unlock(&hw_mutex);
+        return 0;
+    }
 
-    pthread_mutex_lock(&hw_mutex);
-    hw_write_reg(hw, 1, line);
-    hw_board_run(hw);
-    irq_pending = 0;
-    pthread_cond_signal(&irq_cv);
-    pthread_mutex_unlock(&hw_mutex);
+    if (g_mode != TT_REPLAY) return 0;
+    if (twintrace_ignore_irq(line)) return 0;
+
+    pthread_mutex_lock(&rep_mutex);
+    if (g_rep.idx >= g_rep.hdr.count) {
+        pthread_mutex_unlock(&rep_mutex);
+        utils_die("twintrace: ran out of records");
+    }
+
+    tt_rec_t e;
+    tt_get_rec(g_rep.idx, &e);
+
+    if (e.type != TT_IRQ_SERVED) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort_irq("expected IRQ_SERVED", line, &e);
+    }
+    if (e.addr != (uint64_t)line) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort_irq("IRQ_SERVED vector mismatch", line, &e);
+    }
+
+    g_rep.idx++;
+    pthread_cond_broadcast(&rep_cv);
+    pthread_mutex_unlock(&rep_mutex);
     return 0;
 }
 
 static int twintrace_interrupt(int line)
 {
-    (void)line;
+    if (g_mode != TT_REPLAY) return 0;
+    if (twintrace_ignore_irq(line)) return 0;
+
+    pthread_mutex_lock(&rep_mutex);
+    if (g_rep.idx >= g_rep.hdr.count) {
+        pthread_mutex_unlock(&rep_mutex);
+        utils_die("twintrace: ran out of records");
+    }
+
+    tt_rec_t e;
+    tt_get_rec(g_rep.idx, &e);
+
+    if (e.type != TT_IRQ_TAKEN) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort_irq("expected IRQ_TAKEN", line, &e);
+    }
+    if (e.addr != (uint64_t)line) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort_irq("IRQ_TAKEN vector mismatch", line, &e);
+    }
+
+    g_rep.idx++;
+    pthread_cond_broadcast(&rep_cv);
+    pthread_mutex_unlock(&rep_mutex);
     return 0;
 }
 
@@ -217,17 +362,35 @@ static uint64_t twintrace_read(void *opaque, hwaddr address, unsigned size, uint
     }
 
     // replay
-    if (g_rep.idx >= g_rep.hdr.count) utils_die("twintrace: ran out of records");
+    pthread_mutex_lock(&rep_mutex);
+    if (g_rep.idx >= g_rep.hdr.count) {
+        pthread_mutex_unlock(&rep_mutex);
+        utils_die("twintrace: ran out of records");
+    }
 
     tt_rec_t e;
     tt_get_rec(g_rep.idx, &e);
 
-    if (e.type != TT_R) tt_abort("expected READ, got WRITE", address, size, pc, 0, &e);
-    if (g_rep.strict_addr && e.addr != (uint64_t)address) tt_abort("READ addr mismatch", address, size, pc, 0, &e);
-    if (g_rep.strict_size && e.size != (uint32_t)size) tt_abort("READ size mismatch", address, size, pc, 0, &e);
-    if (g_rep.strict_pc && e.pc != pc) tt_abort("READ pc mismatch", address, size, pc, 0, &e);
+    if (e.type != TT_R) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("expected READ, got non-READ", address, size, pc, 0, &e);
+    }
+    if (g_rep.strict_addr && e.addr != (uint64_t)address) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("READ addr mismatch", address, size, pc, 0, &e);
+    }
+    if (g_rep.strict_size && e.size != (uint32_t)size) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("READ size mismatch", address, size, pc, 0, &e);
+    }
+    if (g_rep.strict_pc && e.pc != pc) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("READ pc mismatch", address, size, pc, 0, &e);
+    }
 
     g_rep.idx++;
+    pthread_cond_broadcast(&rep_cv);
+    pthread_mutex_unlock(&rep_mutex);
     return e.value;
 }
 
@@ -250,18 +413,39 @@ static void twintrace_write(void *opaque, hwaddr address, uint64_t value, unsign
     }
 
     // replay
-    if (g_rep.idx >= g_rep.hdr.count) utils_die("twintrace: ran out of records");
+    pthread_mutex_lock(&rep_mutex);
+    if (g_rep.idx >= g_rep.hdr.count) {
+        pthread_mutex_unlock(&rep_mutex);
+        utils_die("twintrace: ran out of records");
+    }
 
     tt_rec_t e;
     tt_get_rec(g_rep.idx, &e);
 
-    if (e.type != TT_W) tt_abort("expected WRITE, got READ", address, size, pc, value, &e);
-    if (g_rep.strict_addr && e.addr != (uint64_t)address) tt_abort("WRITE addr mismatch", address, size, pc, value, &e);
-    if (g_rep.strict_size && e.size != (uint32_t)size) tt_abort("WRITE size mismatch", address, size, pc, value, &e);
-    if (g_rep.strict_pc && e.pc != pc) tt_abort("WRITE pc mismatch", address, size, pc, value, &e);
-    if (g_rep.strict_value_on_write && e.value != value) tt_abort("WRITE value mismatch", address, size, pc, value, &e);
+    if (e.type != TT_W) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("expected WRITE, got non-WRITE", address, size, pc, value, &e);
+    }
+    if (g_rep.strict_addr && e.addr != (uint64_t)address) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("WRITE addr mismatch", address, size, pc, value, &e);
+    }
+    if (g_rep.strict_size && e.size != (uint32_t)size) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("WRITE size mismatch", address, size, pc, value, &e);
+    }
+    if (g_rep.strict_pc && e.pc != pc) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("WRITE pc mismatch", address, size, pc, value, &e);
+    }
+    if (g_rep.strict_value_on_write && e.value != value) {
+        pthread_mutex_unlock(&rep_mutex);
+        tt_abort("WRITE value mismatch", address, size, pc, value, &e);
+    }
 
     g_rep.idx++;
+    pthread_cond_broadcast(&rep_cv);
+    pthread_mutex_unlock(&rep_mutex);
 }
 
 // -----------------------
@@ -319,6 +503,10 @@ static int twintrace_init(ConfigSection* model_info)
     } else if (g_mode == TT_REPLAY) {
         if (!g_bin_path || !g_bin_path[0]) utils_die("twintrace_bin missing for replay");
         tt_replay_open(g_bin_path);
+        if (pthread_create(&rep_irq_thread, NULL, replay_irq_thread_fn, NULL) != 0) {
+            perror("Failed to create replay IRQ thread");
+            return 1;
+        }
     } else {
         utils_die("twintrace: TT_OFF but model selected");
     }

@@ -49,6 +49,49 @@ def _extract_monitor_port(qemu_cmd):
     except Exception:
         return None
 
+def _extract_plugin_path(qemu_cmd):
+    """
+    Parses `--plugin <plugin_path>,k=v,...` from the cmd list.
+    Returns plugin path or None.
+    """
+    try:
+        i = qemu_cmd.index("--plugin")
+        spec = qemu_cmd[i + 1]
+        return spec.split(",", 1)[0].strip()
+    except Exception:
+        return None
+
+
+def _build_qemu_env(qemu_cmd):
+    """
+    Build an environment for QEMU execution with runtime library paths.
+
+    This avoids requiring users to manually export LD_LIBRARY_PATH for
+    common Fastdyn runtime dependencies.
+    """
+    env = os.environ.copy()
+    existing_paths = [p for p in env.get("LD_LIBRARY_PATH", "").split(":") if p]
+    extra_paths = []
+
+    plugin_path = _extract_plugin_path(qemu_cmd)
+    if plugin_path:
+        plugin_abs = os.path.abspath(plugin_path)
+        plugin_dir = os.path.dirname(plugin_abs)
+        extra_paths.append(plugin_dir)
+
+        # Common repository layout: build/libfastdyn.so
+        # Add known sibling runtime-lib directories automatically.
+        if os.path.basename(plugin_dir) == "build":
+            repo_root = os.path.dirname(plugin_dir)
+            extra_paths.append(os.path.join(repo_root, "fuzzer/fastdyn_fuzz_lib/target/release"))
+            extra_paths.append(os.path.join(repo_root, "device_models/postmartem/verifier"))
+
+    extra_paths = [p for p in extra_paths if os.path.isdir(p)]
+    merged = _dedup_preserve_order(extra_paths + existing_paths)
+    if merged:
+        env["LD_LIBRARY_PATH"] = ":".join(merged)
+
+    return env
 
 def build_qemu_cmd(machine, dev_config_path, out_path):
     """
@@ -287,7 +330,8 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
     if port is not None:
         kill_qemu_process(port)
 
-    qemu_proc = subprocess.Popen(qemu_cmd)
+    qemu_env = _build_qemu_env(qemu_cmd)
+    qemu_proc = subprocess.Popen(qemu_cmd, env=qemu_env)
     log.info("Letting QEMU run.")
 
     if launch_gdb:

@@ -125,14 +125,29 @@ class Machine:
         pass
 
     def add_cmsis_svd(self, cmsis_svd):
-        fastdyn_log.info("Parsing the passed directory path for the CMSIS SVD")
-        svd, is_svd_file = parse_helper.discover_svd_files(cmsis_svd)
-        if not is_svd_file:
-                svd_device = parse_helper.get_svd_device(svd, self.platform)
+        fastdyn_log.info("Parsing the passed path for the CMSIS SVD")
+
+        platform = (self.platform or "").strip()
+        if not platform and (cmsis_svd and os.path.isdir(os.path.expanduser(cmsis_svd))):
+            fastdyn_log.error("Machine platform is required when CMSIS SVD path points to a directory.")
+            sys.exit(1)
+
+        try:
+            svd_file, svd_key = parse_helper.resolve_svd(
+                platform_or_board=platform or "unused",
+                svd=cmsis_svd,          # user explicitly passed it here
+                default_dir=None,       # no default in this path
+                auto_discover=False,    # don’t do repo search when user already gave a path
+            )
+        except parse_helper.SvdResolutionError as e:
+            fastdyn_log.error(str(e))
+            sys.exit(1)
+
+        fastdyn_log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
+        svd_device = parse_helper.get_svd_device(svd_file)
 
         fastdyn_log.info("Creating IRQ Map using the CMSIS SVD")
         self.irq_map = parse_helper.create_svd_irq_map(svd_device)
-
         return True
 
 @dataclass
@@ -167,7 +182,7 @@ class CPU:
                                             # level = DEBUG
                                             # output = stderr
                                             """
-        self.symbol_dict = None
+        self.symbol_dict = {}
 
         if self.introspect:
              self.introspect_schema = self.add_introspection()
@@ -228,7 +243,7 @@ class CPU:
         except (AttributeError, TypeError, ValueError) as e:
             print(f"Unable to set '{param}' to {val!r}: {e}")
             return False
-        
+
     def add_introspection(self):
         schema_content = ""
         if self.introspect:
