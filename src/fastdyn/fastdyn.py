@@ -47,6 +47,8 @@ class Fastdyn:
                 out_path
             )
 
+            sys.exit(1)
+
             qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
 
 
@@ -250,9 +252,6 @@ class CPU:
             schema_content = introspect_rtos(self, self.binary)
 
         print(schema_content)
-
-        # exit here for debugging purposes
-        sys.exit(1)
 
         return schema_content
 

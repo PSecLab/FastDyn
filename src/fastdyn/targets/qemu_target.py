@@ -12,6 +12,7 @@ from ..binary import binary_wrange
 import logging
 
 FASTDYN_DEFAULT_WORKDIR = "fastdyn_work"
+FASTDYN_EXISTING_CONFIG_PATH = "courbet/rover462/unlabeled_conf/"
 
 from .. import fastdyn_log as fastdyn_log_conf
 log = logging.getLogger(__name__)
@@ -179,6 +180,20 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
 
     all_virtuals = []
     all_modifiers = []
+
+    # TODO: Dynamically allow for the user to pass in the existing config path
+    # This is useful for a user that was using fastdyn for one project and 
+    # wants a more readable TOML file for the next project.
+    if FASTDYN_EXISTING_CONFIG_PATH is not None:
+        existing_config_path = os.path.join(FASTDYN_EXISTING_CONFIG_PATH, "virtuals.txt")
+        with open(existing_config_path, "r") as f:
+            existing_virtuals = f.readlines()
+        existing_config_path = os.path.join(FASTDYN_EXISTING_CONFIG_PATH, "modifiers.txt")
+        with open(existing_config_path, "r") as f:
+            existing_modifiers = f.readlines()
+        all_virtuals.extend(existing_virtuals)
+        all_modifiers.extend(existing_modifiers)
+
     for c in cpus:
         all_virtuals.extend(getattr(c, "virtuals", []) or [])
         all_modifiers.extend(getattr(c, "modifiers", []) or [])

@@ -48,8 +48,13 @@ def _load_local_introspectors():
 
 
 def introspect_rtos(cpu_obj, binary):
+    # TODO: Add some sort of persistent storage for symbols between runs
+    # Use a hash of the binary and the symbols to determine if we need to re-resolve the symbols
     resolver = SymbolResolver([DwarfProvider()])
     syms = resolver.resolve(binary)
+    for key, value in syms.items():
+        if "port" in key:
+            print(f"key: {key}, value: {value}")
     rtos_name = identify_rtos(syms)
 
     _load_local_introspectors()
