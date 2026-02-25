@@ -1,0 +1,8 @@
+Max Steering Rate
+Max Steering Acceleration
+Max Lateral Turn Force (g)
+Target Cruise Speed
+Waypoint Speed
+Nominal Throttle
+Max Forward Acceleration
+Minimum Turn Radius

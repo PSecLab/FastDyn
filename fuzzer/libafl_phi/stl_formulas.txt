@@ -1,0 +1,23 @@
+#
+# STL-style formulas evaluated by `PhysicalObserver` using `banquo-parser`.
+# One formula per line; blank lines and lines starting with `#` are ignored.
+#
+# These formulas are the string equivalents of the previously hardcoded
+# Banquo predicates in `phi_observer.rs`.
+#
+
+# Roll boundary: roll must stay within +/- pi/4 radians.
+always -0.78539816339 <= roll and roll <= 0.78539816339
+
+# Pitch boundary: pitch must stay within +/- pi/4 radians.
+always -0.78539816339 <= pitch and pitch <= 0.78539816339
+
+# Pre-fail roll boundary: keep roll closer to level.
+always -0.3 <= roll and roll <= 0.3
+
+# Roll growth boundary: limit roll rate.
+always -0.5 <= roll_rate and roll_rate <= 0.5
+
+# Lateral acceleration boundary.
+always -3.9 <= lateral_accel and lateral_accel <= 3.9
+

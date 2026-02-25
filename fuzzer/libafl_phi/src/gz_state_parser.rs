@@ -7,6 +7,16 @@ use gz_msgs::gz_msgs10::{
     any::Any, empty::Empty, stringmsg::StringMsg
 };
 
+/**
+ * After making repeated, rapid succession service calls over the course of a fuzzing campaign,
+ * sometimes Gazebo services become unresponsive. Maybe if we reset the node we can repair it?
+ */
+pub fn reset_gz_node(node: &mut Node) {
+    println!("Resetting Gazebo transport node in an attempt to repair it...");
+    *node = Node::new().unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(3));
+}
+
 /*
     Use the /get_trace_state service to get the raw gz data as a string.
     Returns String::new() if the service call fails.
@@ -30,7 +40,10 @@ pub fn get_raw_gz_data(node: &mut Node) -> String {
     }
     
     if response_opt.is_none() {
-        panic!("Error: Service call to {} failed!", service_name);
+        // panic!("Error: Service call to {} failed!", service_name);
+        println!("Warning: Service call to {} failed!", service_name);
+        // reset_gz_node(node);
+        return String::new();
     }
 
     let (response, result): (Any, bool) = response_opt.unwrap();
@@ -72,7 +85,9 @@ pub fn get_raw_hf_status(node: &mut Node) -> String {
     }
     
     if response_opt.is_none() {
-        panic!("Error: Service call to {} failed!", service_name);
+        println!("Warning: Service call to {} failed!", service_name);
+        // reset_gz_node(node);
+        return String::new();
     }
 
     let (response, result): (StringMsg, bool) = response_opt.unwrap();

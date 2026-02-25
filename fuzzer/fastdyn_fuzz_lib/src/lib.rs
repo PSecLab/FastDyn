@@ -166,7 +166,7 @@ where
                     OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open("./fuzz_out/fuzzer.log")
+                        .open("/root/rooney/FastDyn/fuzz_out/fuzzer.log")
                         .expect("Failed to open file"),
                 ));
 

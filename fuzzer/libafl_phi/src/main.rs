@@ -6,9 +6,11 @@ mod phi_stage;
 mod cpexp_input;
 mod lambda_mutational;
 mod mission_execution;
+mod param_shim;
 
 #[cfg(windows)]
 use std::ptr::write_volatile;
+use std::env;
 use std::{path::{self, PathBuf}, process::exit, ptr::write, thread::sleep, time::Duration};
 
 use env_logger::Target;
@@ -22,13 +24,13 @@ use libafl::{
     events::SimpleEventManager,
     executors::{CommandExecutor, ExitKind, InProcessExecutor},
     feedback_or,
-    feedbacks::{CrashFeedback, MaxMapFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeoutFeedback},
     fuzzer::{Fuzzer, StdFuzzer}, generators::RandPrintablesGenerator,
     inputs::{BytesInput, HasTargetBytes},
     mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
     observers::StdMapObserver,
     schedulers::QueueScheduler,
-    stages::mutational::StdMutationalStage,
+    stages::{mutational::StdMutationalStage, AflStatsStage, CalibrationStage},
     state::StdState
 };
 use libafl_bolts::{
@@ -61,8 +63,8 @@ use libafl::state::{HasCorpus, HasExecutions};
 
 // -------------------------------
 // CONSTANT VALUES
-const MISSION_TIMEOUT: f64 = 20.0; // seconds == 7 minutes for rover_rectangle.txt
-const RECORDING_TIMESTEP: f64 = 0.5; // seconds
+const MISSION_TIMEOUT: f64 = 420.0; // seconds == 7 minutes max for rollover mission
+const RECORDING_TIMESTEP: f64 = 0.1; // seconds
 const TRACE_LOG_PATH: &str = "./trace_logs";
 const ROBUSTNESS_LOG_PATH: &str = "./robustness_logs";
 const CRASH_LOG_PATH: &str = "./crashes";
@@ -134,8 +136,6 @@ where
         let executions = state.executions_mut();
         *executions += 1;
 
-        let mission_timeout: f64 = MISSION_TIMEOUT; // seconds
-
         let param_info = state.input_library().get_param_input().clone();
         let mut param_names = String::new();
         for param in param_info.iter() {
@@ -143,17 +143,33 @@ where
             param_names.push(',');
         }
 
-        Ok(execute_mission(input, param_names, mission_timeout))
+        Ok(execute_mission(input, param_names, MISSION_TIMEOUT))
     }
 }
 
 pub fn main() {
-    env_logger::init();
+    let api_key = env::var("OPENAI_API_KEY")
+        .expect("Set OPENAI_API_KEY in your environment");
 
-    // INPUT YOUR PATHS HERE
-    let run_services_path = "/root/rooney/FastDyn/courbet/gazebo/"; // run_and_attach_services.sh
-    let qemu_build_path = "/root/rooney/qemu/build"; // ../fd_rover.sh
-    let mav_c2_path = "/root/rooney/FastDyn/courbet/mavlink/"; // mav_command_and_control.py
+    let response = param_shim::get_parameter_shim_from_openai(
+        &api_key,
+        "ArduPilot",
+        "Rover-4.6",
+    ).expect("Failed to get parameter shim from OpenAI");
+
+    let mut generated_param_input: Vec<ParamInput> = param_shim::parse_param_shim_response(&api_key, &response)
+        .expect("Failed to parse parameter shim response");
+
+    // For debugging print out the generated parameter input
+    println!("Generated parameter inputs from OpenAI:");
+    for param in generated_param_input.iter() {
+        println!("  - {}: {:?}", param.get_name(), param.get_range());
+    }
+
+
+    // println!("OpenAI says: {}", response);
+
+    env_logger::init();
 
     let physical_observer = PhysicalObserver::new(
         RECORDING_TIMESTEP, // time step
@@ -166,10 +182,18 @@ pub fn main() {
     // Feedback to rate the interestingness of an input
     let mut physical_feedback = PhysicalFeedback::new();
     let mut coverage_feedback = MaxMapFeedback::new(&cvg_observer);
+
+    let stats_stage = AflStatsStage::builder()
+        .map_feedback(&coverage_feedback)
+        .build()
+        .unwrap();
+
     let mut feedback = feedback_or!(physical_feedback, coverage_feedback); // MaxMapFeedback::new(&observer), );
 
     // A feedback to choose if an input is a solution or not
-    let mut objective = feedback_or!(PhysicalObjective::new(), ); // CrashFeedback::new(),);
+    // let mut objective = feedback_or!(PhysicalObjective::new(), CrashFeedback::new(), TimeoutFeedback::new());
+    let mut objective = feedback_or!(PhysicalObjective::new(), CrashFeedback::new(),); // No timeout for debugging
+
 
     // Build the optimizer and input library (CPExpInput) here
     // TODO: Load all this stuff from a file + create a function
@@ -182,16 +206,73 @@ pub fn main() {
 
     let mut param_info_vec: Vec<ParamInput> = Vec::new();
 
+    /*
+        ChatGPT recommendations for causing rollover:
+            - ATC_STR_RAT_MAX
+            - ATC_STR_ACC_MAX
+            - ATC_TURN_MAX_G
+            - CRUISE_SPEED
+            - CRUISE_THROTTLE
+            - ATC_ACCEL_MAX
+            - TURN_RADIUS
+            - ATC_TURN_MAX_G
+            - WP_SPEED
+     */
+
     param_info_vec.push(ParamInput::new_float(
-        "TELEM_DELAY",
-        (0.0, 30.0), // min, max
+        "ATC_STR_RAT_MAX",
+        (0.0, 1000.0), // min, max
+        0.1, // increment
+    ));
+
+    param_info_vec.push(ParamInput::new_float(
+        "ATC_STR_ACC_MAX",
+        (0.0, 1000.0), // min, max
+        0.1, // increment
+    ));
+
+    param_info_vec.push(ParamInput::new_float(
+        "ATC_TURN_MAX_G",
+        (0.1, 10.0), // min, max
+        0.01, // increment
+    ));
+
+    param_info_vec.push(ParamInput::new_float(
+        "CRUISE_SPEED",
+        // (0.0, 100.0), // min, max
+        (50.0, 100.0), // We want high speed by default.
+        0.1, // increment
+    ));
+
+    param_info_vec.push(ParamInput::new_float(
+        "CRUISE_THROTTLE",
+        // (0.0, 100.0), // min, max
+        (50.0, 100.0), // We want high throttle by default.
         1.0, // increment
     ));
 
     param_info_vec.push(ParamInput::new_float(
-        "FS_OPTIONS",
-        (0.0, 100.0), // min, max
-        0.0, // increment
+        "ATC_ACCEL_MAX",
+        (0.0, 10.0), // min, max
+        0.1, // increment
+    ));
+
+    param_info_vec.push(ParamInput::new_float(
+        "TURN_RADIUS",
+        (0.0, 5.0), // min, max
+        0.1, // increment
+    ));
+
+    param_info_vec.push(ParamInput::new_float(
+        "ATC_TURN_MAX_G",
+        (0.1, 10.0), // min, max
+        0.01, // increment
+    ));
+
+    param_info_vec.push(ParamInput::new_float(
+        "WP_SPEED",
+        (50.0, 100.0), // min, max
+        0.1, // increment
     ));
 
     // Example of categorical parameter input
@@ -202,17 +283,17 @@ pub fn main() {
 
     let mut env_info_vec: Vec<EnvInput> = Vec::new();
 
-    env_info_vec.push(EnvInput::new(
-        "wind_speed",
-        (0.0, 20.0), // min, max
-        false, // truncate = false --> float
-    ));
+    // env_info_vec.push(EnvInput::new(
+    //     "wind_speed",
+    //     (0.0, 20.0), // min, max
+    //     false, // truncate = false --> float
+    // ));
 
-    env_info_vec.push(EnvInput::new(
-        "terrain_type",
-        (0.0, 3.0), // 3 types: 0, 1, 2
-        true, // truncate = true --> integer
-    ));
+    // env_info_vec.push(EnvInput::new(
+    //     "terrain_type",
+    //     (0.0, 3.0), // 3 types: 0, 1, 2
+    //     true, // truncate = true --> integer
+    // ));
 
     let input_library = CPExpInput::new(param_info_vec, env_info_vec);
 
@@ -223,11 +304,11 @@ pub fn main() {
     // println!("Search space: {:?}", space);
 
     // Create options object
-    let initial_points = 2; // This controls how many initial inputs are generated before fuzzing starts
+    let initial_points = 20; // This controls how many initial inputs are generated before fuzzing starts
     let mut opt = BayesianOptimizationOptions::default();
     opt.n_initial_points = initial_points.clone();
 
-    let bo = BayesianOptimizer::new(space, Some(opt));
+    let mut bo = BayesianOptimizer::new(space, Some(opt));
 
     let mut state = CPExpState::new(
         // RNG
@@ -245,7 +326,7 @@ pub fn main() {
         // Bayesian Optimizer!
         Some(bo),
         // Start with phi stage first?
-        false,
+        // false,
         // CPExpInput object for transforming TargetInputs (serializable) into usable values
         input_library,
 
@@ -271,7 +352,6 @@ pub fn main() {
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
-    // let executor = FastDynExecutor::new(&state, fuzz_buffer);
     let executor = FastDynExecutor::new(&state);
     let mut executor = WithObservers::new(executor, tuple_list!(physical_observer, cvg_observer));
 
@@ -285,19 +365,17 @@ pub fn main() {
         )
         .expect("Failed to generate the initial corpus");
 
-    for _ in 0..3 {
-        println!("Starting the fuzzing loop!");
-    }
+    println!("Starting the fuzzing loop!");
 
     // Setup a mutational stage with a basic bytes mutator
     let mutator = HavocScheduledMutator::new(havoc_mutations());
 
-    // TODO: @mike - Add calibration and stats stages once you put in your lambda feedback
+    // TODO: Do we need a calibration stage?
     let mut stages = tuple_list!(
         // calibration_stage,
-        PhiStage::new(5),
-        LambdaMutationalStage::new(mutator),
-        // stats_stage,
+        PhiStage::new(10), // 10 optimizer executions per phi stage
+        LambdaMutationalStage::with_max_iterations(mutator, nonzero!(10)),
+        stats_stage,
     );
 
     fuzzer

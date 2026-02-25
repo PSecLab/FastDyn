@@ -183,7 +183,7 @@ endif
 endif
 
 if ENABLE_LIBGZ
-mavlink_include = include_directories('submodules/mavlink_headers/ardupilotmega')
+mavlink_include = include_directories('third_party/courbet_deps/mavlink_headers/ardupilotmega')
 
 local_include = [local_include, mavlink_include]
 endif

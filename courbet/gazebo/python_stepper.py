@@ -144,7 +144,7 @@ def main():
     # initial_yaw_deg = float(sys.argv[1])
     # curr_yaw_deg = initial_yaw_deg
 
-    # set_pose(0.0)
+    # set_pose(255.0)
     # sleep(1)  # Allow some time for the pose to be set
     # read_magnetometer()
 

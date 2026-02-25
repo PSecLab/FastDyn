@@ -193,7 +193,7 @@ int get_joint_state(double *motor_0_pos, double *motor_2_pos) {
 
 int get_mag_reading(double *mag_x, double *mag_y, double *mag_z) {
     gz::msgs::Magnetometer response;
-    if (!request_service("/get_mag_reading", response)) { // replace with /get_corrected_mag
+    if (!request_service("/get_corrected_mag_reading", response)) {         // replace with /get_corrected_mag_reading not to use wrong gazebo data
         return 0;
     }
     *mag_x = response.field_tesla().x();
@@ -223,7 +223,7 @@ int get_navsat_reading(gps_data_t *gps_data) {
     data.alt = response.altitude();
     data.vel_n = response.velocity_north();
     data.vel_e = response.velocity_east();
-    data.vel_d = response.velocity_up();
+    data.vel_d = -1 * response.velocity_up();
     data.sec = (uint64_t)response.header().stamp().sec();
     data.nsec = (uint32_t)response.header().stamp().nsec();
     data.yaw_deg = yaw_deg;
@@ -326,6 +326,8 @@ int get_imu_batch(imu_batch_t *imu_batch) {
         auto [gyro_z, ec6] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.z);
         if (ec6 != std::errc()) return 0;
     }
+
+    // debug print out the first 
 
     return 1;
 

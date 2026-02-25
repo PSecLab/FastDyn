@@ -171,37 +171,136 @@ imu_data_t parse_imu_json(const std::string &input)
 class CorrectMagService
 {
 public:
+  struct SensorRPY {
+    double roll;
+    double pitch;
+    double yaw;
+    SensorRPY(double r=0.0, double p=0.0, double y=0.0) : roll(r), pitch(p), yaw(y) {}
+  };
+
   CorrectMagService(gz::transport::Node &node,
-                       const std::string &topic_name,
-                       const std::string &service_name)
+                    const std::string &pose_topic,
+                    const std::string &mag_topic,
+                    const std::string &service_name,
+                    SensorRPY sensor_rpy = SensorRPY())
+    : sensor_rpy_(sensor_rpy)
   {
-    if (topic_name == "NONE")
-      return;
-    node.Subscribe(topic_name, &CorrectMagService::OnPoseMsg, this);
+    if (pose_topic != "NONE")
+      node.Subscribe(pose_topic, &CorrectMagService::OnPoseMsg, this);
+
+    if (mag_topic != "NONE")
+      node.Subscribe(mag_topic, &CorrectMagService::OnMagMsg, this);
+
     node.Advertise(service_name, &CorrectMagService::OnServiceRequest, this);
   }
+
 private:
-  void OnPoseMsg(const gz::msgs::Pose_V &msg)
+  // === Helpers: build R = Rz(yaw)*Ry(pitch)*Rx(roll) ===
+  static gz::math::Matrix3d RzRyRx(double roll, double pitch, double yaw)
   {
-    // TODO: create a magnetometer message with proper transform
-    gz::msgs::Magnetometer mag_msg;
-    mag_msg.mutable_field_tesla()->set_x(0.1);
-    mag_msg.mutable_field_tesla()->set_y(0.0);
-    mag_msg.mutable_field_tesla()->set_z(0.0);
-    std::lock_guard<std::mutex> lock(mutex_);
-    latest_msg_ = mag_msg; // replace msg with your created gz::msgs::Magnetometer
+    const double cr = std::cos(roll),  sr = std::sin(roll);
+    const double cp = std::cos(pitch), sp = std::sin(pitch);
+    const double cy = std::cos(yaw),   sy = std::sin(yaw);
+
+    gz::math::Matrix3d R;
+    R(0,0) = cy*cp;            R(0,1) = cy*sp*sr - sy*cr;  R(0,2) = cy*sp*cr + sy*sr;
+    R(1,0) = sy*cp;            R(1,1) = sy*sp*sr + cy*cr;  R(1,2) = sy*sp*cr - cy*sr;
+    R(2,0) = -sp;              R(2,1) = cp*sr;             R(2,2) = cp*cr;
+    return R;
   }
 
-  bool OnServiceRequest(const gz::msgs::Empty &,
-                        gz::msgs::Magnetometer &rep)
+  static gz::math::Matrix3d RotFromQuat(const gz::msgs::Quaternion &qmsg)
+  {
+    // Assumption (matches your python): msg orientation is body->world quaternion (w,x,y,z)
+    const double w = qmsg.w();
+    const double x = qmsg.x();
+    const double y = qmsg.y();
+    const double z = qmsg.z();
+
+    const double n = std::sqrt(w*w + x*x + y*y + z*z);
+    if (n == 0.0) return gz::math::Matrix3d::Identity;
+
+    const double qw = w/n, qx = x/n, qy = y/n, qz = z/n;
+
+    gz::math::Matrix3d R;
+    R(0,0) = 1 - 2*(qy*qy + qz*qz);  R(0,1) = 2*(qx*qy - qw*qz);      R(0,2) = 2*(qx*qz + qw*qy);
+    R(1,0) = 2*(qx*qy + qw*qz);      R(1,1) = 1 - 2*(qx*qx + qz*qz);  R(1,2) = 2*(qy*qz - qw*qx);
+    R(2,0) = 2*(qx*qz - qw*qy);      R(2,1) = 2*(qy*qz + qw*qx);      R(2,2) = 1 - 2*(qx*qx + qy*qy);
+    return R;
+  }
+
+  void OnPoseMsg(const gz::msgs::Pose_V &msg)
+  {
+    if (msg.pose_size() <= 0) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_pose_q_ = msg.pose(0).orientation();
+    have_pose_ = true;
+  }
+
+  void OnMagMsg(const gz::msgs::Magnetometer &msg)
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    rep = latest_msg_;
+    latest_raw_mag_ = msg;
+    have_mag_ = true;
+  }
+
+  bool OnServiceRequest(const gz::msgs::Empty &, gz::msgs::Magnetometer &rep)
+  {
+    gz::msgs::Quaternion q;
+    gz::msgs::Magnetometer raw;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!have_pose_ || !have_mag_) {
+        // raw (or 0) return when data not ready
+        rep = latest_raw_mag_;
+        return true;
+      }
+      q = latest_pose_q_;
+      raw = latest_raw_mag_;
+    }
+
+    // === Build coordinate transformation matrix from world to sensor ===
+    const gz::math::Matrix3d R_wb = RotFromQuat(q);
+    const gz::math::Matrix3d C_wb = R_wb.Transposed();
+    const gz::math::Matrix3d R_bs = RzRyRx(sensor_rpy_.roll, sensor_rpy_.pitch, sensor_rpy_.yaw);
+    const gz::math::Matrix3d C_bs = R_bs.Transposed();
+    const gz::math::Matrix3d C_ws = C_bs * C_wb;
+
+    // === Build NED -> ENU transformation matrix ===
+    gz::math::Matrix3d C_ww;
+    C_ww(0,0)=0; C_ww(0,1)=1; C_ww(0,2)=0;
+    C_ww(1,0)=1; C_ww(1,1)=0; C_ww(1,2)=0;
+    C_ww(2,0)=0; C_ww(2,1)=0; C_ww(2,2)=-1;
+
+    gz::math::Vector3d m_raw(raw.field_tesla().x(),
+                             raw.field_tesla().y(),
+                             raw.field_tesla().z());
+
+    // corrected = C_ws * C_ww * (C_ws^T * m_raw)
+    const gz::math::Vector3d tmp = C_ws.Transposed() * m_raw;
+    const gz::math::Vector3d m_corr = C_ws * (C_ww * tmp);
+
+    double dt = 0.01; // assuming 100 Hz update rate
+    gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
+    gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
+
+    gz::msgs::Magnetometer latest_msg_corr_ = raw; // timestamp/frame_id 유지
+    latest_msg_corr_.mutable_field_tesla()->set_x(noisy_msg_corr.X());
+    latest_msg_corr_.mutable_field_tesla()->set_y(noisy_msg_corr.Y());
+    latest_msg_corr_.mutable_field_tesla()->set_z(noisy_msg_corr.Z());
+
+    rep = latest_msg_corr_;
     return true;
   }
 
-  gz::msgs::Magnetometer latest_msg_;
+  SensorRPY sensor_rpy_;
+
   std::mutex mutex_;
+  bool have_pose_{false};
+  bool have_mag_{false};
+
+  gz::msgs::Quaternion latest_pose_q_;
+  gz::msgs::Magnetometer latest_raw_mag_;
 };
 
 /**
@@ -975,6 +1074,7 @@ int main(int argc, char **argv)
   std::string navsat_topic = "/world/runway/model/r1_rover/link/base_link/sensor/navsat_sensor/navsat";
   std::string mag_topic = "/world/runway/model/r1_rover/link/base_link/sensor/magnetometer_sensor/magnetometer";
   std::string joint_states_topic = "/joint_states";
+  std::string pose_topic = "/model/r1_rover/pose";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
@@ -990,6 +1090,8 @@ int main(int argc, char **argv)
   } else if (model_name == "vtail_plane") {
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    pose_topic = "/model/skywalker_x8/pose";
+    // pose_topic = "/world/runway/dynamic_pose/info";
     // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
     // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
@@ -1045,7 +1147,7 @@ int main(int argc, char **argv)
     5200
   );
 
-  std::string pose_topic = "/model/r1_rover/pose";
+  // std::string pose_topic = "/model/r1_rover/pose";
   // std::string pose_topic = "/model/gs_drone/pose";
   std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
   std::string clock_topic = "/world/runway/clock";
@@ -1068,10 +1170,17 @@ int main(int argc, char **argv)
   //   "/get_yaw_reading"
   // );
 
+  CorrectMagService::SensorRPY mag_rpy;
+  mag_rpy.roll  = 0.0;
+  mag_rpy.pitch = 0.0;
+  mag_rpy.yaw   = 0.0;
+
   CorrectMagService correctMagService(
     node,
-    "/model/" + model_name + "/pose",
-    "/get_corrected_mag"
+    pose_topic,
+    mag_topic,
+    "/get_corrected_mag_reading",
+    mag_rpy
   );
 
   std::cout << "ArduPilot Services running...\n";
