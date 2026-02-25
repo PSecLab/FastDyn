@@ -15,6 +15,8 @@ from .utils import helper
 from . import fastdyn_log as fastdyn_log_conf
 from .utils import parse_config as parse_helper
 
+from fastdyn.introspect.introspect import *
+
 from .machine import VirtualInstruction
 
 log = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ class Fastdyn:
 
             qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
 
+
     def shutdown(self):
         qemu_target.kill_qemu_process(port='5555')
 
@@ -64,6 +67,7 @@ class QemuTargetOpts:
         self.semihosting_config: str = "enable=on,target=native"
         self.monitor_port: Optional[int] = 5555
         self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
+        self.print_command = False
 
 class Machine:
     def __init__(self, machine_name, platform_name):
@@ -80,8 +84,8 @@ class Machine:
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
-    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace):
-        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, self) #pass parent for easy referencing to objs like irq_map
+    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect):
+        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, self) #pass parent for easy referencing to objs like irq_map
         self.cpus.append(cpu)
         return cpu
 
@@ -121,14 +125,29 @@ class Machine:
         pass
 
     def add_cmsis_svd(self, cmsis_svd):
-        fastdyn_log.info("Parsing the passed directory path for the CMSIS SVD")
-        svd, is_svd_file = parse_helper.discover_svd_files(cmsis_svd)
-        if not is_svd_file:
-                svd_device = parse_helper.get_svd_device(svd, self.platform)
+        fastdyn_log.info("Parsing the passed path for the CMSIS SVD")
+
+        platform = (self.platform or "").strip()
+        if not platform and (cmsis_svd and os.path.isdir(os.path.expanduser(cmsis_svd))):
+            fastdyn_log.error("Machine platform is required when CMSIS SVD path points to a directory.")
+            sys.exit(1)
+
+        try:
+            svd_file, svd_key = parse_helper.resolve_svd(
+                platform_or_board=platform or "unused",
+                svd=cmsis_svd,          # user explicitly passed it here
+                default_dir=None,       # no default in this path
+                auto_discover=False,    # don’t do repo search when user already gave a path
+            )
+        except parse_helper.SvdResolutionError as e:
+            fastdyn_log.error(str(e))
+            sys.exit(1)
+
+        fastdyn_log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
+        svd_device = parse_helper.get_svd_device(svd_file)
 
         fastdyn_log.info("Creating IRQ Map using the CMSIS SVD")
         self.irq_map = parse_helper.create_svd_irq_map(svd_device)
-
         return True
 
 @dataclass
@@ -138,7 +157,7 @@ class InstructionModifier:
     patch: str
 
 class CPU:
-    def __init__(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, machine_obj):
+    def __init__(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, machine_obj):
         """One CPU instance belonging to a machine."""
         self.arch = arch
         self.machine = machine
@@ -147,7 +166,7 @@ class CPU:
         self.init_nsvtor: int = init_nsvtor
         self.twintrace = twintrace       #supported options are record, replay or None
         self.hardware_trace = hardware_trace    # hardware log needed in case of replay
-
+        self.introspect: bool = introspect
         self.machine_obj = machine_obj
 
         self.plugin_library: Optional[str] = "build/libfastdyn.so"
@@ -163,7 +182,11 @@ class CPU:
                                             # level = DEBUG
                                             # output = stderr
                                             """
-        self.symbol_dict = None
+        self.symbol_dict = {}
+
+        if self.introspect:
+             self.introspect_schema = self.add_introspection()
+
 
     def add_virtual_instruction(self, vi: Union["VirtualInstruction", str, Sequence[Union["VirtualInstruction", str]]]) -> bool:
         items = vi if isinstance(vi, (list, tuple)) else [vi]
@@ -221,15 +244,12 @@ class CPU:
             print(f"Unable to set '{param}' to {val!r}: {e}")
             return False
 
-    def add_map_file(self, map_file):
-        #parse the map file to create a symbol lookup
-        if os.path.exists(map_file):
-            fastdyn_log.info(f"Parsing Config file: {map_file}")
-            self.symbol_dict = parse_helper.load_symbol_addresses(map_file)
-        else:
-            fastdyn_log.error(f"Map file Path not found")
-            return False
-        return True
+    def add_introspection(self):
+        schema_content = ""
+        if self.introspect:
+            schema_content = introspect_rtos(self, self.binary)
+
+        return schema_content
 
 @dataclass
 class DeviceHandler:

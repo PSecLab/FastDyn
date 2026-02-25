@@ -74,7 +74,7 @@
 #   INSTALL_RPATH "\$ORIGIN"
 # )
 
-# target_compile_options(model PRIVATE -g -fPIC)
+# target_compile_options(model PRIVATE -g -fPIC -rdynamic)
 
 # target_include_directories(model PRIVATE
 #   "${CMAKE_CURRENT_LIST_DIR}/include"

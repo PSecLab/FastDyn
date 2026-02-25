@@ -8,3 +8,4 @@ tomli==2.2.1
 click==8.0.3
 dotenv==0.9.9
 pyelftools==0.32
+capstone==5.0.7

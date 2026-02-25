@@ -2,14 +2,14 @@
 
 qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
-LIBGZ        ?= true
+LIBGZ        ?= false
 LIBHW        ?= false
 LIBFUZZ		 ?= false
 DEV          ?= false
 DEBUG_PRINT  ?= false
 LIBPY        ?= false
-
-BOARD_RUNNER ?= true
+SUNDIALS     ?= false
+BOARD_RUNNER ?= false
 
 # Top-level target: clean, configure with meson, then build with ninja
 all: setup
@@ -26,7 +26,8 @@ setup: clean fetch
 	-Denable_libfuzz=$(LIBFUZZ) \
 	-Ddevice_models=$(DEV) \
 	-DDEBUG_PRINT=$(DEBUG_PRINT) \
-	-Denable_libpy=$(LIBPY)
+	-Denable_libpy=$(LIBPY) \
+	-Denable_sundials=$(SUNDIALS)
 
 	@if [ "$(BOARD_RUNNER)" = "true" ]; then \
 		$(MAKE) build_boardrunner; \
@@ -45,6 +46,7 @@ clean:
 	rm -rf build docs/html
 
 fetch:
+	git submodule update --init third_party/cmsis-svd-data;
 	@# Only fetch submodules that are required for the selected features.
 	@if [ "$(DEV)" = "true" ] && [ "$(LIBHW)" = "true" ]; then \
 		git submodule update --init device_models/elder/inih third_party/cmsis-svd-data; \

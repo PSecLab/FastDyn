@@ -52,7 +52,7 @@ const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this 
 #[no_mangle]
 pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 
-static STATE_PATH: &str = "/root/rooney/FastDyn/fuzz_out/state.bin";
+static STATE_PATH: &str = "fuzz_out/state.bin";
 
 #[repr(C)]
 pub struct FuzzInput {
@@ -60,32 +60,23 @@ pub struct FuzzInput {
     data: *mut u8,
 }
 
-#[repr(C)]
-pub struct FuzzBuffer {
-    status: std::sync::atomic::AtomicU32,
-    assert: std::sync::atomic::AtomicU32,
-    buffer: *mut *mut FuzzInput,
-}
-
+// For future: Find a better way to check state if running in a tight loop
 extern "C" {
-    fn fuzz_buffer_create(anchor_id: u32) -> *mut FuzzBuffer;
-    //fn fuzz_buffer_destroy(fb: *mut FuzzBuffer); // This should never really need to be removed
-    fn fuzz_buffer_write(fb: *mut FuzzBuffer, input: *mut FuzzInput) -> bool;
-    fn fuzz_check_assert(fb: *mut FuzzBuffer) -> u32;
+    fn fuzz_buffer_write(input: *mut FuzzInput) -> bool;
+    fn fuzz_check_empty() -> bool;
+    fn fuzz_check_assert() -> u32;
     fn dump_bbl();
 }
 
 struct FastDynExecutor<S> {
     phantom: PhantomData<S>,
-    fuzz_buffer: *mut FuzzBuffer,
     crashed: bool,
 }
 
 impl<S> FastDynExecutor<S> {
-    pub fn new(_state: &S, fuzz_buffer: *mut FuzzBuffer) -> Self {
+    pub fn new(_state: &S) -> Self {
         Self {
             phantom: PhantomData,
-            fuzz_buffer,
             crashed: false,
         }
     }
@@ -128,18 +119,18 @@ where
 
         let input_ptr = Box::into_raw(input);
 
-        unsafe { fuzz_buffer_write(self.fuzz_buffer, input_ptr); }
+        unsafe { fuzz_buffer_write(input_ptr); }
 
         const SPIN_ITERS: usize = 10_000;
         let mut spins = 0;
         // timeout for 60 seconds using wall clock
         let start_time = std::time::Instant::now();
         let mut timed_out = false;
-        while unsafe { (*self.fuzz_buffer).status.load(Ordering::Acquire) } != 0 { // wait until C empties buffer, then its done
-            // if start_time.elapsed().as_secs() > 60 {
-            //     timed_out = true;
-            //     break;
-            // }
+        while unsafe { fuzz_check_empty() } != true { // wait until C empties buffer, then its done
+            if start_time.elapsed().as_secs() > 60 {
+                timed_out = true;
+                break;
+            }
 
             if spins < SPIN_ITERS {
                 std::hint::spin_loop();
@@ -155,7 +146,7 @@ where
                     OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open("/root/rooney/FastDyn/fuzz_out/timeout.log")
+                        .open("./fuzz_out/timeout.log")
                         .expect("Failed to open file"),
                 ));
 
@@ -167,7 +158,7 @@ where
 
                 return Ok(ExitKind::Crash);
             }
-            let value = fuzz_check_assert(self.fuzz_buffer);
+            let value = fuzz_check_assert();
             if value == 1 {
                 return Ok(ExitKind::Crash);
             } else if value == 2 { // fatal error
@@ -191,12 +182,7 @@ where
     }
 }
 
-pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
-    let fuzz_buffer;
-    unsafe {
-        fuzz_buffer = fuzz_buffer_create(anchor_id);
-    }
-
+pub fn fuzzer_thread_main(input_size: usize) {
     // Create an observation channel using the signals map
     let observer = unsafe { StdMapObserver::new("cvg", &mut CVG) };
 
@@ -219,8 +205,8 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         MaxMapFeedback::with_name("on_crash", &observer)
     );
 
-    let corpus_path = PathBuf::from("/root/rooney/FastDyn/fuzz_out/corpus");
-    let crashes_path = PathBuf::from("/root/rooney/FastDyn/fuzz_out/crashes");
+    let corpus_path = PathBuf::from("fuzz_out/corpus");
+    let crashes_path = PathBuf::from("fuzz_out/crashes");
 
     //let mut corpus = OnDiskCorpus::<BytesInput>::new(corpus_path.clone()).unwrap();
     let mut corpus = InMemoryCorpus::new();
@@ -278,16 +264,16 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
         .build();
 
     // Create the executor for an in-process function with just one observer
-    let executor = FastDynExecutor::new(&state, fuzz_buffer);
+    let executor = FastDynExecutor::new(&state);
     let mut executor = WithObservers::new(executor, tuple_list!(observer));
 
     // If corpus is empty, generate random inputs
     if state.corpus().count() == 0 {
-        let nz = NonZeroUsize::new(input_size)
-            .expect("input_size must be non-zero");
-        let mut generator = RandPrintablesGenerator::with_min_size(nz, nz); // sized based on arguments to anchor
-        //let mut generator = RandPrintablesGenerator::with_min_size(NonZeroUsize::new(8).expect(""), NonZeroUsize::new(12).expect("")); // fixed size
-
+        // let nz = NonZeroUsize::new(input_size)
+        //     .expect("input_size must be non-zero");
+        // let mut generator = RandPrintablesGenerator::with_min_size(nz, nz); // sized based on arguments to anchor
+        let mut generator = RandPrintablesGenerator::with_min_size(NonZeroUsize::new(8).expect(""), NonZeroUsize::new(16).expect("")); // fixed size
+        println!("Generating new inputs");
         state
             .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
             .expect("Failed to generate the initial corpus");
@@ -319,7 +305,7 @@ pub fn fuzzer_thread_main(anchor_id: u32, input_size: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn fuzz_init(anchor_id: u32, cstr: *const c_char) -> u32 {
+pub extern "C" fn fuzz_init(cstr: *const c_char) -> u32 {
     // Safety: cstr must be a valid null-terminated C string
     let c_str = unsafe { CStr::from_ptr(cstr) };
     let r_str = c_str.to_str().unwrap(); // handle errors in production
@@ -329,31 +315,10 @@ pub extern "C" fn fuzz_init(anchor_id: u32, cstr: *const c_char) -> u32 {
     STOP_FLAG.store(false, Ordering::SeqCst);
 
     let handle = std::thread::spawn(move || {
-        fuzzer_thread_main(anchor_id, input_size);
+        fuzzer_thread_main(input_size);
     });
 
     *FUZZ_THREAD.lock().unwrap() = Some(handle);
 
     return 1;
-}
-
-#[no_mangle]
-pub extern "C" fn fuzz_stop() -> u32 {
-    STOP_FLAG.store(true, Ordering::SeqCst);
-
-    if let Some(handle) = FUZZ_THREAD.lock().unwrap().take() {
-        handle.join().unwrap();
-    }
-
-    return 1;
-}
-
-#[no_mangle]
-pub extern "C" fn fuzz_is_running() -> u32 {
-    // stop flag is false means running
-    if STOP_FLAG.load(Ordering::SeqCst) {
-        return 0;
-    } else {
-        return 1;
-    }
 }

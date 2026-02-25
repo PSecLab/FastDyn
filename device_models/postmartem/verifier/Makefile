@@ -2,7 +2,7 @@
 CC = gcc
 CFLAGS = -g -shared -fPIC -I../../../include/ -I../../../../qemu/include/ -Iapis/include
 LDFLAGS = `pkg-config --cflags --libs glib-2.0`
-UTILS = /scratch/Fastdyn/FastDyn/utils/utils.c
+UTILS = ../../../utils/utils.c
 
 # All API source files that will be built into a single shared library
 API_SOURCES = ./apis/src/devmodels_apis.c ./apis/src/i2c_bus.c ./apis/src/spi_bus.c

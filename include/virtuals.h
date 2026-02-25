@@ -236,6 +236,6 @@ extern uint32_t qemu_get_register(int reg);
 extern void qemu_set_register(uint32_t value, int reg);
 
 // Initialization function
-int virtuals_init(int argc, char **argv);
+int virtuals_init(int argc, char **argv, const char *schema_path);
 
 #endif // VIRTUALS_H

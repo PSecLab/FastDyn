@@ -31,14 +31,17 @@ int core_read_ram(uintptr_t address, size_t size, void* buffer);
  */
 int core_write_ram(uintptr_t address, size_t size, const void* buffer);
 
+void cov_irq_entry(int irq);
+void cov_irq_exit(int irq);
+
 // fuzz buffer read
-int fuzz_buffer_read(uint32_t anchor_id, char *buf, size_t buf_size);
+int fuzz_buffer_read(char *buf, size_t buf_size);
 
 // fuzz finish
-void fuzz_finish(uint32_t anchor_id);
+void fuzz_finish();
 
 // fuzz report assert
-void fuzz_report_assert(uint32_t anchor_id, bool fatal);
+void fuzz_report_assert(bool fatal);
 
 void add_observed_value(uint32_t val);
 uint32_t dump_trace_info(void *hFuzz);

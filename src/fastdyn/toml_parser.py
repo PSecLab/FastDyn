@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 #parse a single toml per machine, use as many instances as you want in future to parse multiple machines
-def parser(machine_name, toml_config, svd_path):
+def parser(out_dir, machine_name, toml_config, svd_path):
     #parse the toml configuration
     fastdyn_log.info(f"Parsing Config file: {toml_config}")
 
@@ -40,10 +40,13 @@ def parser(machine_name, toml_config, svd_path):
     q.coverage           = toml_parser.machine_info.get("coverage", False)
     q.finline            = toml_parser.machine_info.get("finline", None)
     q.bbl_coverage       = toml_parser.machine_info.get("bbl_coverage", None)
+    q.print_command       = toml_parser.machine_info.get("print_command", False)
 
     #add cmsis svd if Platform name provided by the user
     if toml_parser.machine_info.get("platform") is not None:
         machine0.add_cmsis_svd(cmsis_svd=svd_path)
+
+
 
     #add cpus information per machine
     cpus = []
@@ -57,7 +60,8 @@ def parser(machine_name, toml_config, svd_path):
                 binary=curr_cpu['binary'],  #mandatory else throw error
                 init_nsvtor= curr_cpu.get("init_nsvtor", None),  #handle by the target to retreive correct value from binary
                 twintrace = curr_cpu.get("twintrace", None),
-                hardware_trace = curr_cpu.get("hardware_trace", None)
+                hardware_trace = curr_cpu.get("hardware_trace", None),
+                introspect = curr_cpu.get("introspect", False),
                 )
 
         #additional params if set by the user
@@ -65,8 +69,10 @@ def parser(machine_name, toml_config, svd_path):
         cpu_obj.monitor_elf     =   curr_cpu.get('monitor_elf', '../ws/monitor.elf')
 
         #symbol resolution per cpu
-        if curr_cpu.get("map_file") is not None:
-            cpu_obj.add_map_file(curr_cpu.get("map_file"))
+		#if curr_cpu.get("map_file") is not None:
+		#	cpu_obj.add_map_file(curr_cpu.get("map_file"))
+
+
 
         #add virtual instructions per cpu
         if curr_cpu.get("virtuals"):

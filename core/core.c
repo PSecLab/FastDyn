@@ -54,7 +54,6 @@ int isdigit(int c);
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdatomic.h>
-#include <signal.h>
 
 static _Atomic uint64_t g_icount = 0;
 
@@ -64,26 +63,19 @@ AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
 int coverage;
 
-int optifuzz = 0;
-
 twintrace_mode_t twintrace_mode = TT_OFF;
 const char *twintrace_bin_path = NULL;
+int introspection_enabled = 0;
+const char *introspection_schema_path = NULL;
 
-#define MAX_VCPUS 8
-#define DEFAULT_BBL_DUMP_PATH "bbl.txt"
-#define DEFAULT_BBL_COVERAGE_PATH "fastdyn_work/bbl_coverage.txt"
+// Dumping to fastdyn_work will cause this to be erased after each run, bad if fuzzing restarts
+#define DEFAULT_BBL_DUMP_PATH "fuzz_out/bbl.txt"
 
 static int bbl_enable = 0;
 static const char *bbl_dump_path = DEFAULT_BBL_DUMP_PATH;
 
-// per-vCPU unique set of TB entry PCs
-static GHashTable *bbl_sets[MAX_VCPUS];
-
-// stores the size of a basic block for coverage info
-static GHashTable *bbl_length;
-
-// optional: total TB executions (not unique)
-static uint64_t bbl_total_tb_exec[MAX_VCPUS];
+// Unique set of TBs
+static GHashTable *bbl_set;
 
 /**
  * @brief Parses a token string into a logger entry.
@@ -647,37 +639,6 @@ static void tb_exec_cb(unsigned int cpu_index, void *udata)
     core_icount_add(n);
 }
 
-static void bbl_log() {
-    uint64_t unique = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        if (bbl_sets[i]) unique += (uint64_t)g_hash_table_size(bbl_sets[i]);
-    }
-
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t cur_time = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
-
-    fprintf(stderr, "[TB] Unique blocks = %lu at time %lu\n", unique, cur_time);
-}
-
-static void bbl_tb_exec_cb(unsigned int vcpu_index, void *userdata)
-{
-    uint64_t tb_pc = (uint64_t)(uintptr_t)userdata;
-
-    if (vcpu_index >= MAX_VCPUS) return;
-
-    // normalize thumb bit if you want stable BB ids
-    tb_pc &= ~1ULL;
-
-    bbl_total_tb_exec[vcpu_index] += 1;
-    gboolean is_new = !g_hash_table_contains(bbl_sets[vcpu_index], (gpointer)(uintptr_t)tb_pc);
-    g_hash_table_add(bbl_sets[vcpu_index], (gpointer)(uintptr_t)tb_pc);
-
-    if (is_new) {
-        bbl_log();
-    }
-}
-
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
 	if (runtime && !init) {
@@ -694,20 +655,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
             QEMU_PLUGIN_CB_NO_REGS,
             (void *)(uintptr_t)n
         );
-    }
-
-    if (bbl_enable && n > 0) {
-        uint64_t tb_pc = qemu_plugin_insn_vaddr(qemu_plugin_tb_get_insn(tb, 0));
-        tb_pc &= ~1ULL;
-
-        qemu_plugin_register_vcpu_tb_exec_cb(
-            tb,
-            bbl_tb_exec_cb,
-            QEMU_PLUGIN_CB_NO_REGS,
-            (void *)(uintptr_t)tb_pc
-        );
-
-        g_hash_table_insert(bbl_length, (gpointer)qemu_plugin_tb_vaddr(tb), (gpointer)qemu_plugin_tb_n_insns(tb));
     }
 
 	DEBUG_LOG("->Virtual Clock: %llu \n", (unsigned long long)qemu_plugin_get_virtual_timer());
@@ -862,202 +809,34 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 // ---------------------------
 static uint32_t *g_observed_values = NULL; // Buffer for new values
 static size_t g_observed_count = 0;        // Number of values currently buffered
-static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
-static uint32_t g_prev_pc = 0;
+uint32_t g_prev_pc = 0;
 
 #if ENABLE_LIBFUZZ
-typedef enum {
-    FUZZ_EMPTY = 0, // buffer is ready for fuzzer to give an input
-    FUZZ_READY = 1, // buffer is ready for anchor to read input
-    FUZZ_BUSY = 2, // anchor as successfully read input
-} fuzz_state_t;
-
-typedef struct fuzz_input {
-    size_t len;
-    uint8_t *data;
-} fuzz_input_t;
-
-// Designed for a system where producer and consumer are each single threaded
-typedef struct fuzz_buffer {
-    _Atomic fuzz_state_t state;
-    _Atomic uint32_t assert; // 0 = input didn't reach assert, 1 = assert, 2 = fatal assert
-    fuzz_input_t *buffer;
-} fuzz_buffer_t;
-
-// since the fuzzer creates more threads, we need to use a lock in the callbacks that read/write fuzz_buffers and anchor_count
-static fuzz_buffer_t **fuzz_buffers = NULL; // size is always a power of two, if anchor count reaches new power of two, double
-static int anchor_count = -1;
-static int buffer_capacity = 0;
-static pthread_rwlock_t anchor_lock;
 
 #define MAP_SIZE 65536 // should always match the rust definition
 extern uint8_t CVG[MAP_SIZE];
+extern GArray *current_run;
 
-// 0 on fail, 1 otherwise
-int fuzz_init(uint32_t anchor_id, char *numbers);
-
-// allocate buffer (Rust -> C)
-fuzz_buffer_t *fuzz_buffer_create(uint32_t anchor_id) {
-    pthread_rwlock_wrlock(&anchor_lock);
-    if (anchor_count > buffer_capacity) {
-        if (buffer_capacity == 0) buffer_capacity = 1;
-        while (anchor_count > buffer_capacity) {
-            buffer_capacity *= 2;
-        }
-
-        fuzz_buffers = realloc(fuzz_buffers, buffer_capacity * sizeof(fuzz_buffer_t*));
-        if (fuzz_buffers == NULL) {
-            utils_die("Failed to realloc buffer for fuzzing");
-        }
-    }
-
-    fuzz_buffers[anchor_id] = malloc(sizeof(fuzz_buffer_t));
-    if (fuzz_buffers[anchor_id] == NULL) {
-        utils_die("Failed to allocate new fuzzing object");
-    }
-
-    atomic_init(&fuzz_buffers[anchor_id]->state, FUZZ_EMPTY);
-    atomic_init(&fuzz_buffers[anchor_id]->assert, 0);
-    fuzz_buffers[anchor_id]->buffer = NULL;
-
-    fuzz_buffer_t *buffer = fuzz_buffers[anchor_id];
-
-    pthread_rwlock_unlock(&anchor_lock);
-
-    return buffer;
-}
-
-// input side (Rust -> C)
-bool fuzz_buffer_write(fuzz_buffer_t *fb, fuzz_input_t *input) {
-    fuzz_state_t state = atomic_load_explicit(&fb->state, memory_order_acquire);
-    if (state == FUZZ_EMPTY) {
-        fb->buffer = input;
-        atomic_store_explicit(&fb->state, FUZZ_READY, memory_order_release);
-        return true;
-    } else {
-        fprintf(stderr, "Fuzzer not empty\n");
-        return false;
-    }
-}
-
-// C function for retrieving input
-int fuzz_buffer_read(uint32_t anchor_id, char* out, size_t len) {
-    pthread_rwlock_rdlock(&anchor_lock);
-    fuzz_buffer_t *fb = fuzz_buffers[anchor_id];
-    pthread_rwlock_unlock(&anchor_lock);
-
-    while (atomic_load_explicit(&fb->state, memory_order_acquire) != FUZZ_READY) {
-        _mm_pause();
-    }
-    if (fb->buffer == NULL) {
-        fprintf(stderr, "Input is ready but buffer is null\n");
-        return 0;
-    }
-
-    atomic_store_explicit(&fb->state, FUZZ_BUSY, memory_order_release); // clear assert flag
-    atomic_store_explicit(&fb->assert, 0, memory_order_release); // clear assert flag
-
-    memcpy(out, fb->buffer->data, len < fb->buffer->len ? len : fb->buffer->len);
-    size_t input_size = fb->buffer->len;
-
-    free(fb->buffer->data);
-    free(fb->buffer);
-
-    fb->buffer = NULL;
-
-    return input_size;
-}
-
-bool fuzz_check_empty(fuzz_buffer_t *fb) {
-    return (atomic_load_explicit(&fb->state, memory_order_relaxed) == FUZZ_EMPTY);
-}
-
-void fuzz_start(uint32_t anchor_id) {
-    while (anchor_id >= buffer_capacity) {
-        _mm_pause();
-    }
-}
-
-// If the anchor is busy (didn't skip consuming input), set it to done
-void fuzz_finish(uint32_t anchor_id) {
-    pthread_rwlock_rdlock(&anchor_lock);
-    fuzz_buffer_t *fb = fuzz_buffers[anchor_id];
-    pthread_rwlock_unlock(&anchor_lock);
-
-    if (atomic_load_explicit(&fb->state, memory_order_acquire) == FUZZ_BUSY) {
-        atomic_store_explicit(&fb->state, FUZZ_EMPTY, memory_order_release);
-    }
-}
-
-uint32_t fuzz_check_assert(fuzz_buffer_t *fb) {
-    uint32_t assrt = atomic_load_explicit(&fb->assert, memory_order_relaxed);
-    return assrt;
-}
-
-void fuzz_report_assert(uint32_t anchor_id, bool fatal) {
-    pthread_rwlock_rdlock(&anchor_lock);
-    if (fatal) {
-        atomic_store_explicit(&fuzz_buffers[anchor_id]->assert, 2, memory_order_release);
-    } else {
-        atomic_store_explicit(&fuzz_buffers[anchor_id]->assert, 1, memory_order_release);
-    }
-    pthread_rwlock_unlock(&anchor_lock);
-}
-
-void initialize_anchor(char* args) {
-    if (!args) return;
-
-    if (anchor_count == -1) {
-        pthread_rwlock_init(&anchor_lock, NULL);
-        anchor_count = 0;
-    }
-
-    char tmp[301] = {0};
-
-    char *ignored_id = strtok(args, ":"); // consume the assigned id, we're just going to assign from 0 up and overwrite this
-    char *numbers = strtok(NULL, ":");
-    if (numbers == NULL) {
-        utils_die("Failed to read anchor targets");
-    }
-
-    strncpy(tmp, numbers, sizeof(tmp) - 1);
-
-    pthread_rwlock_wrlock(&anchor_lock);
-    int anchor_id = anchor_count++;
-    pthread_rwlock_unlock(&anchor_lock);
-
-    sprintf(args, "%d", anchor_id);
-    strcat(args, ":");
-    strcat(args, tmp);
-
-    if (!fuzz_init(anchor_id, numbers)) {
-        utils_die("Failed initialization");
-    }
-}
-
+// If using fuzzing library, internally modify coverage map
 void add_observed_value(uint32_t val) {
-    //printf("Observing %lx\n", val);
+    // we don't want stale value from before trace
     if (g_prev_pc != 0) {
         uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
         CVG[idx] = CVG[idx] + 1;
     }
 
+    //printf("[trace] %x\n", val);
+
+    if (current_run) g_array_append_val(current_run, val);
     g_prev_pc = val;
 }
 
 #else
 
-#define MAP_SIZE 65536 // should always match the rust definition
-static uint8_t CVG[MAP_SIZE];
+static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
 
+// If not using fuzzing library, keep buffer of blocks
 void add_observed_value(uint32_t val) {
-    if (g_prev_pc != 0) {
-        uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
-        CVG[idx] = CVG[idx] + 1;
-    }
-
-    g_prev_pc = val;
-
     if (g_observed_count >= g_observed_capacity) {
         // Grow the buffer (double the capacity, or start with initial size)
         size_t new_capacity = (g_observed_capacity == 0) ? INITIAL_CAPACITY : g_observed_capacity * 2;
@@ -1073,6 +852,7 @@ void add_observed_value(uint32_t val) {
 }
 #endif
 
+// The following two functions are useful if fuzzing with an external fuzzer rather than as a library
 /**
  * @brief Writes the buffered values to a binary file.
  * @param filename The path to the output file.
@@ -1102,47 +882,104 @@ void dump_values(const char *filename) {
     fclose(f);
 }
 
-void serialize_coverage(const char *filename) {
-    char tmp[512];
-
-    /* Construct temp filename in same directory */
-    snprintf(tmp, sizeof(tmp), "%s.tmp", filename);
-
-    FILE *f = fopen(tmp, "wb");
-    if (!f) {
-        perror("[-] Failed to open temp coverage file for writing");
-        return;
-    }
-
-    // comma separated values
-    for (size_t i = 0; i < MAP_SIZE; i++) {
-        if (fprintf(f, "%u", CVG[i]) < 0) {
-            perror("[-] Write error");
-            fclose(f);
-            remove(tmp);
-            return;
-        }
-        if (i < MAP_SIZE - 1) {
-            fputc(',', f);
-        }
-    }
-    fputc('\n', f);
-
-    /* Ensure data is flushed to disk before rename */
-    fflush(f);
-    fsync(fileno(f));
-    fclose(f);
-
-    /* Atomic rename replaces old file */
-    if (rename(tmp, filename) != 0) {
-        perror("[-] Failed to rename temp coverage file");
-        remove(tmp);
-    }
-}
-
 void reset_and_dump_values(const char *filename) {
     g_observed_count = 0; // Reset count after dumpin
     dump_values(filename);
+}
+
+// Track when irqs are called and returned
+// Unfortunately, need another check for coverage since dev.c may overwrite our registered callback, so we need to call these from its callbacks too, which can't check if coverage is enabled
+void cov_irq_entry(int irq) {
+    if (coverage) {
+        cc_list.log_buf.buffer[(uint16_t)cc_list.log_buf.index / 4] = 0xFFFFFFFF;
+        cc_list.log_buf.index = (uint16_t)(cc_list.log_buf.index + 4);
+    }
+}
+void cov_irq_exit(int irq) {
+    if (coverage) {
+        cc_list.log_buf.buffer[(uint16_t)cc_list.log_buf.index / 4] = 0xFFFFFFFD;
+        cc_list.log_buf.index = (uint16_t)(cc_list.log_buf.index + 4);
+    }
+}
+
+void bbl_add(uint32_t pc) {
+    guint bbl_pc = pc & (~1ULL);
+    if (!g_hash_table_lookup(bbl_set, GUINT_TO_POINTER(bbl_pc))) {
+        guint timestamp = (guint)(g_get_monotonic_time() / 1000);
+
+        g_hash_table_insert(
+            bbl_set,
+            GUINT_TO_POINTER(bbl_pc),
+            GUINT_TO_POINTER(timestamp)
+        );
+    }
+}
+
+void dump_bbl(void)
+{
+    if (!bbl_set) {
+        utils_die("bbl_set is not initialized");
+    }
+
+    FILE *f = fopen(bbl_dump_path, "w");
+    if (!f) {
+        utils_die("Failed to open dump file for writing");
+    }
+
+    GHashTableIter iter;
+    gpointer key, value;
+    int total = 0;
+
+    g_hash_table_iter_init(&iter, bbl_set);
+
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        guint pc = GPOINTER_TO_UINT(key);
+        guint timestamp = GPOINTER_TO_UINT(value);
+
+        /* Write as: hex_pc<TAB>timestamp */
+        fprintf(f, "%08x\t%u\n", pc, timestamp);
+
+        total++;
+    }
+
+    fclose(f);
+
+    printf("Dumped %d blocks\n", total);
+}
+
+
+void bbl_init(void)
+{
+    int total = 0;
+
+    bbl_set = g_hash_table_new(g_direct_hash, g_direct_equal);
+    if (!bbl_set) {
+        utils_die("Failed to allocate bbl_set");
+    }
+
+    FILE *f = fopen(bbl_dump_path, "r");
+    if (!f) {
+        printf("Allocating new bbl_set\n");
+        return;
+    }
+
+    guint pc;
+    guint timestamp;
+
+    /* Read lines like: 08001234<TAB>1573 */
+    while (fscanf(f, "%x\t%u", &pc, &timestamp) == 2) {
+        total++;
+
+        g_hash_table_insert(
+            bbl_set,
+            GUINT_TO_POINTER(pc),
+            GUINT_TO_POINTER(timestamp)
+        );
+    }
+
+    fclose(f);
+
+    printf("Loaded %d blocks\n", total);
 }
 
 void* tracer(void* arg) {
@@ -1152,172 +989,40 @@ void* tracer(void* arg) {
 	cc_ret.entry->reg = 15;
 	cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
 	uint16_t tracer_index =0;
+    int irq_depth = 0;
 
 	tracer_ready=1;
 
 	//Maybe make read atomic
 	while(true) {
 		while((uint16_t) (cc_list.log_buf.index - tracer_index)) {
-			add_observed_value(cc_list.log_buf.buffer[tracer_index/4]);
+            bool special_val = false;
+            uint32_t value = cc_list.log_buf.buffer[tracer_index/4];
+            if (value == 0xFFFFFFFF) {
+                irq_depth++;
+                special_val = true;
+            }
+            if (value == 0xFFFFFFFD) {
+                irq_depth--;
+                special_val = true;
+            }
+
+            if (special_val == false) {
+                if (irq_depth == 0) add_observed_value(value);
+                if (bbl_enable) bbl_add(value);
+            }
+
 			tracer_index +=4;//32bit PC
 		}
 	}
 }
 
-void save_all_bbl_sets(const char *dir) {
-    int total = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        if (!bbl_sets[i])
-            continue;
-
-        char path[256];
-        snprintf(path, sizeof(path), "%s/bbl_set_%d.bin", dir, i);
-
-        FILE *f = fopen(path, "wb");
-        if (!f)
-            continue;
-
-        GHashTableIter iter;
-        gpointer key, value;
-
-        g_hash_table_iter_init(&iter, bbl_sets[i]);
-        while (g_hash_table_iter_next(&iter, &key, &value)) {
-            gulong pc = (gulong) key;
-            fwrite(&pc, sizeof(pc), 1, f);
-            total = total + 1;
-        }
-
-        fclose(f);
-    }
-    printf("Saved %d basic blocks\n", total);
-}
-
-void load_all_bbl_sets(const char *dir) {
-    int total = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        char path[256];
-        snprintf(path, sizeof(path), "%s/bbl_set_%d.bin", dir, i);
-
-        FILE *f = fopen(path, "rb");
-        if (!f) {
-            bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
-            continue;
-        }
-
-        GHashTable *table = g_hash_table_new(g_direct_hash, g_direct_equal);
-
-        gulong pc;
-        while (fread(&pc, sizeof(pc), 1, f) == 1) {
-            total = total + 1;
-            g_hash_table_insert(table, (gpointer) pc, NULL);
-        }
-
-        fclose(f);
-        bbl_sets[i] = table;
-    }
-    printf("Loaded %d blocks\n", total);
-}
-
-void save_bbl_length(const char *path) {
-    if (!bbl_length)
-        return;
-
-    FILE *f = fopen(path, "wb");
-    if (!f)
-        return;
-
-    GHashTableIter iter;
-    gpointer key, value;
-
-    g_hash_table_iter_init(&iter, bbl_length);
-    while (g_hash_table_iter_next(&iter, &key, &value)) {
-        gulong pc = (gulong) key;
-        guint size = GPOINTER_TO_UINT(value);
-
-        fwrite(&pc, sizeof(pc), 1, f);
-        fwrite(&size, sizeof(size), 1, f);
-    }
-
-    fclose(f);
-}
-
-void load_bbl_length(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        bbl_length = g_hash_table_new(g_direct_hash, g_direct_equal);
-        return;
-    }
-
-    GHashTable *table = g_hash_table_new(g_direct_hash, g_direct_equal);
-
-    gulong pc;
-    guint size;
-
-    while (fread(&pc, sizeof(pc), 1, f) == 1 &&
-           fread(&size, sizeof(size), 1, f) == 1) {
-        g_hash_table_insert(table, (gpointer) pc, GUINT_TO_POINTER(size));
-    }
-
-    fclose(f);
-    bbl_length = table;
-}
-
-void print_unique_bbl(void)
-{
-    uint64_t unique_blocks = 0;
-    uint64_t total_blocks = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        if (bbl_sets[i]) unique_blocks += (uint64_t)g_hash_table_size(bbl_sets[i]);
-        total_blocks += bbl_total_tb_exec[i];
-    }
-
-    printf("Unique Blocks: %lu, Total Blocks: %lu\n", unique_blocks, total_blocks);
-}
-
-void dump_bbl(void)
-{
-    save_all_bbl_sets("/root/rooney/FastDyn/fuzz_out");
-    save_bbl_length("/root/rooneyFastDyn/fuzz_out/bbl_length.bin");
-
-    uint64_t unique = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        if (bbl_sets[i]) unique += (uint64_t)g_hash_table_size(bbl_sets[i]);
-    }
-
-    FILE *f = fopen(bbl_dump_path ? bbl_dump_path : DEFAULT_BBL_DUMP_PATH, "w");
-    if (!f) return;
-    FILE *f_extra = fopen(DEFAULT_BBL_COVERAGE_PATH, "w");
-    if (!f_extra) return;
-
-    fprintf(f, "bbl_unique=%" PRIu64 "\n", unique);
-    uint64_t total_tb = 0;
-    for (int i = 0; i < MAX_VCPUS; i++) total_tb += bbl_total_tb_exec[i];
-    fprintf(f, "tb_exec_total=%" PRIu64 "\n", total_tb);
-    for (int i = 0; i < MAX_VCPUS; i++) {
-        guint glength;
-        gpointer* gptr = g_hash_table_get_keys_as_array(bbl_sets[i], &glength);
-        if (gptr) {
-            for (uint32_t n = 0; n < glength; n++) {
-                fprintf(f_extra, "%lx\t%lu\n", (uintptr_t)gptr[n], (uintptr_t)g_hash_table_lookup(bbl_length, gptr[n]));
-            }
-        }
-    }
-
-    fclose(f);
-    fclose(f_extra);
-}
-
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
 	printf("FastDyn Exit.\n");
-	if (coverage && !optifuzz) {
+	if (coverage) {
 		dump_values(DEFAULT_DUMP_PATH);
 	}
-
-    if (optifuzz) {
-        serialize_coverage("/root/rooney/FastDyn/fuzzer/libafl_phi/covg.csv");
-        printf("Serialized coverage to /root/rooney/FastDyn/fuzzer/libafl_phi/covg.csv\n");
-    }
 
     if (bbl_enable) {
         dump_bbl();
@@ -1378,11 +1083,45 @@ static void parse_twintrace_args(int argc, char **argv)
         twintrace_bin_path = bin;
     }
 
-    fprintf(stderr, "fastdyn: twintrace_mode=%d twintrace_binary=%s\n",
-            (int)twintrace_mode,
-            twintrace_bin_path ? twintrace_bin_path : "(none)");
+    // fprintf(stderr, "fastdyn: twintrace_mode=%d twintrace_binary=%s\n",
+            // (int)twintrace_mode,
+            // twintrace_bin_path ? twintrace_bin_path : "(none)");
 }
 
+void parse_introspect_args(int argc, char **argv) {
+    const char *intro = utils_get_arg("introspection", argc, argv);
+    const char *schema = utils_get_arg("introspection_schema", argc, argv);
+    
+    intro = safe_arg(intro);
+    schema = safe_arg(schema);
+
+    introspection_enabled = 0;
+    introspection_schema_path = NULL;
+
+    if (intro) {
+        if (!strcasecmp(intro, "true") || !strcasecmp(intro, "on") || !strcmp(intro, "1")) {
+            introspection_enabled = 1;
+        } else if (!strcasecmp(intro, "false") || !strcasecmp(intro, "off") || !strcmp(intro, "0") || !strcasecmp(intro, "none")) {
+            introspection_enabled = 0;
+        } else {
+            fprintf(stderr, "fastdyn: unknown introspection mode: '%s'\n", intro);
+            utils_die("bad introspection mode");
+        }
+    }
+
+    if (introspection_enabled) {
+        if (!schema || !strcasecmp(schema, "none")) {
+            utils_die("fastdyn: introspection enabled but introspection_schema is missing");
+        }
+        introspection_schema_path = schema;
+    }
+
+    // Forward the parsed schema path to virtuals_init
+    virtuals_init(argc, argv, introspection_schema_path);
+    
+}
+
+void initialize_anchor(char* args);
 void parse_rules_file(const char *filename);
 void parse_rules_file(const char *filename) {
     FILE *f = fopen(filename, "r");
@@ -1477,27 +1216,22 @@ static int core_parse_arguments(int argc, char ** argv) {
             perror("Failed to create thread");
             exit(1);
         }
+        qemu_plugin_register_irq_hook(cov_irq_entry, cov_irq_exit);
     } else {
         coverage = 0;
-    }
-
-    filename = utils_get_arg("optifuzz", argc, argv);
-    if (!arg_is_disabled(filename) &&
-        (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
-        optifuzz = 1;
-    } else {
-        optifuzz = 0;
     }
 
     //parse args for twintrace
     parse_twintrace_args(argc, argv);
 
+    //parse args for introspection
+    parse_introspect_args(argc, argv);
     //basic block coverage calculator
     const char *arg = utils_get_arg("bbl", argc, argv);
     if (!arg_is_disabled(arg) && arg) {
         bbl_enable = 1;
         if (strcmp(arg, "1") != 0 && strcasecmp(arg, "true") != 0) {
-            bbl_dump_path = arg; // treat as path
+            //bbl_dump_path = arg; // treat as path
         }
     }
 
@@ -1533,19 +1267,11 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     #endif
 
     if (bbl_enable) {
-        for (int i = 0; i < MAX_VCPUS; i++) {
-            bbl_sets[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
-        }
-        bbl_length = g_hash_table_new(g_direct_hash, g_direct_equal);
-        memset(bbl_total_tb_exec, 0, sizeof(bbl_total_tb_exec));
-
-        load_all_bbl_sets("/root/rooney/FastDyn/fuzz_out");
-        load_bbl_length("/root/rooney/FastDyn/fuzz_out/bbl_length.bin");
+        bbl_init();
     }
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
-
     #if ENABLE_LIBPY
         if (python_vm_setup() != 0) {
                 utils_die("Python VM Init Failed");

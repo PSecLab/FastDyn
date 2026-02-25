@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "device.h"
-#include "devmodels_apis.h"
+#include "boardrunner/vio.h"
 
 // Base address for DMA2
 #define DMA2_BASE 0x40026400
@@ -169,7 +169,7 @@ static void dma_stream0_request_handler(void *opaque) {
         // Raise interrupt if enabled
         if (dma2_state.s0cr & DMA_SxCR_TCIE) {
             dev_debug("DMA2: Raising IRQ %d.\n", DMA2_STREAM0_IRQ);
-            qemu_plugin_raise_irq(DMA2_STREAM0_IRQ);
+            qemu_plugin_raise_irq(DMA2_STREAM0_IRQ, false);
         }
 
         // Handle circular vs. normal mode

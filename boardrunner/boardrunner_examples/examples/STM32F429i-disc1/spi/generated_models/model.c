@@ -1,6 +1,6 @@
 // Device Model for SPI4
 #include <device.h>
-#include <devmodels_apis.h>
+#include <boardrunner/vio.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>

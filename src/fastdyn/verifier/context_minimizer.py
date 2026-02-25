@@ -18,19 +18,10 @@ from ..utils import parse_config as svd_parser
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
-def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window, cm_dir_name, svd_path="third_party/cmsis-svd-data"):
+def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window, cm_dir_name, svd_device):
     fastdyn_log.info("Minimizing the context")
 
-    svd_file_map, is_file = svd_parser.discover_svd_files(svd_path)
-    if not is_file:
-        svd_file_path = svd_file_map[platform]
-    else:
-        svd_file_path = svd_file_map
-
-    if platform not in svd_file_map:
-        fastdyn_log.error(f"Platform '{platform}' not found in the discovered platforms from the cmsis-svd-data."); sys.exit(1)
-
-    analyzer = MMIOAnalyzer(svd_path=svd_file_path)
+    analyzer = MMIOAnalyzer(svd_device=svd_device)
     all_accesses = analyzer.load_and_correlate_log(log_file)
 
     output_dir = os.path.join(out_dir, cm_dir_name)
@@ -150,20 +141,13 @@ class MMIOAccess:
         return access_str
 
 class MMIOAnalyzer:
-    def __init__(self, svd_path: str):
-        fastdyn_log.info(f"Parsing SVD file: {svd_path}")
+    def __init__(self, svd_device):
         try:
-            parser = SVDParser.for_xml_file(svd_path)
+            parser = svd_device
             self.device = parser.get_device()
             self._build_peripheral_map()
         except FileNotFoundError:
-            fastdyn_log.error(f"SVD file not found at '{svd_path}'"); sys.exit(1)
-        except AttributeError as e:
-            fastdyn_log.warn(f"SVD parsing issue: {e}. Attempting to continue.")
-            if not hasattr(self, 'device'): self.device = parser.get_device()
-            self._build_peripheral_map()
-        except Exception as e:
-            fastdyn_log.error(f"Could not parse SVD file: {e}"); self.device, self.peripheral_map = None, {}
+            fastdyn_log.error(f"SVD Device not correctly passed to context minimizer"); sys.exit(1)
 
     def _build_peripheral_map(self):
         self.peripheral_map = {}

@@ -8,12 +8,15 @@ machine0 = fastdyn.create_machine(machine_name="machine0",
                                   platform="STM32F429"
                                   )
 
+machine0.qemu_target_opts.print_command = True  #qemu related options
+
 cpu0 = machine0.add_cpu(
     arch="arm",
     machine="cortexm",
     cpu="cortex-m4",
     binary="boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf",
-    init_nsvtor="0x08000000"
+    init_nsvtor="0x08000000",
+    introspect=False,
     )
 
 machine0.add_cmsis_svd(cmsis_svd="third_party/cmsis-svd-data")

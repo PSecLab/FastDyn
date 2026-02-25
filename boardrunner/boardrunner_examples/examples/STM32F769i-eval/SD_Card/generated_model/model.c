@@ -15,7 +15,7 @@
 // FIFO    : 32-bit FIFO data port
 
 #include <device.h>
-#include <devmodels_apis.h>
+#include <boardrunner/vio.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -302,7 +302,9 @@ static void exec_cmd(uint32_t cmd_val) {
                     if (off >= s.card_size) want = 0;
                     else want = (int)(s.card_size - off);
                 }
-                if (want > 0) (void)api_file_pread(s.host_fd, s.fifo, want, off);
+                if (want > 0) {
+                    (void)api_file_pread(s.host_fd, s.fifo, want, off);
+                }
             }
 
             // Like ACMD51 behavior: present CMDREND + DATAEND/DBCKEND while FIFO still has bytes
@@ -484,7 +486,7 @@ void sdmmc1_init(ConfigSection* model_info) {
     s.card_size = 0;
 
     // Match where you actually created the image (from your shell commands)
-    const char *img_path = "/scratch/Fastdyn/sdcard.img";
+    const char *img_path = "sdcard.img";
 
     s.host_fd = api_file_open(img_path, 1); // 1 = Read/Write
     if (s.host_fd >= 0) {

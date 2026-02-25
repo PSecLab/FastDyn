@@ -1,68 +1,106 @@
 # ==============================================================================
-#                              Memory Configuration
-# ==============================================================================
-[Memory]
-
-[Memory.main]   # required: goes to -machine ... memory-backend=<id>
-id = "ram0"
-base_address = "0x20000000"
-memory_size  = "512M"
-memory_type  = "SRAM"
-backend      = "file"          # file | ram | memfd
-memory_file  = "/dev/shm/my_m4_ram3"
-share        = true
-prealloc     = false
-
-[[Memory.ram1]]   # optional banks: go to -global cortexm-soc.ram_backendN / ram_baseaddrN
-id = "ram1"
-index = 1
-base_address = "0x30000000"
-memory_size  = "512K"
-memory_type  = "SRAM"
-backend      = "file"
-memory_file  = "/dev/shm/my_m4_ram"
-share        = true
-prealloc     = false
-
-# ==============================================================================
-#                                CPU Configuration
+# Machine (machine-wide + QEMU target options)
 # ==============================================================================
 [Machine]
 platform = "STM32F429"
-# --- Debugging, Control, and Logging ---
+
 qemu_path = "qemu-system-arm"
-enable_gdb = false
+
+monitor_port = 5554
+qmp_socket   = "/tmp/qmp.sock"
+
+enable_gdb    = false
 stop_on_start = false
-launch_gdb = false
-monitor_port = 5555
-qmp_socket = "/tmp/qmp.sock"
-log_file = "qemu.log"
-log_options = "in_asm,op"
-semihosting = true
+launch_gdb    = false
+
+semihosting        = true
 semihosting_config = "enable=on,target=native"
-coverage=false
-finline='None'
 
+coverage = true
+finline  = ""
+
+bbl_coverage = true
+
+
+
+# ==============================================================================
+# Memory
+# ==============================================================================
+[Memory]
+
+  # ---------------------------------------------------------------------------
+  # Main memory (required)
+  #
+  # Used by:  -machine <...>,memory-backend=<id>
+  # Also maps: ram_baseaddr0 / ram_backend0
+  # ---------------------------------------------------------------------------
+  [Memory.main]
+  id           = "ram0"
+  base_address = "0x20000000"
+  memory_size  = "512M"
+  memory_type  = "SRAM"
+
+  backend     = "file"                 # file | ram | memfd
+  memory_file = "/dev/shm/my_m4_ram3"  # only when backend="file"
+
+  share    = true
+  prealloc = false
+
+
+  # ---------------------------------------------------------------------------
+  # Extra memory banks (optional)
+  #
+  # Each bank becomes:
+  #   -object memory-backend-*
+  #   -global <machine>-soc.ram_baseaddrN=<base_address>
+  #   -global <machine>-soc.ram_backendN=<id>
+  # ---------------------------------------------------------------------------
+  [[Memory.ram1]]
+  id           = "ram1"
+  index        = 1
+  base_address = "0x30000000"
+  memory_size  = "512K"
+  memory_type  = "SRAM"
+
+  backend     = "file"
+  memory_file = "/dev/shm/my_m4_ram"
+
+  share    = true
+  prealloc = false
+
+
+
+# ==============================================================================
+# CPUs
+# ==============================================================================
 [CPU]
-[[CPU.cpu0]]
-# --- Core Emulation & Plugin Settings ---
-arch = "arm"
-machine = "cortexm"
-cpu = "cortex-m4"
-plugin_library = "build/libfastdyn.so"
-monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
-init_nsvtor = "0x08000000"
-map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
-twintrace = "replay" #options are record, replay or None
-hardware_trace = '/home/hammad/work/rehosting/FastDyn/hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 
-# --- Embedded CPU Behavior Configurations ---
-logger_content = """
-# --- Plugin Logger Configuration ---
-# level = DEBUG
-# output = stderr
-"""
+  # ---------------------------------------------------------------------------
+  # CPU 0
+  # ---------------------------------------------------------------------------
+  [[CPU.cpu0]]
+  arch    = "arm"
+  machine = "cortexm"
+  cpu     = "cortex-m4"
+
+  binary     = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
+  init_nsvtor = "0x08000000"
+
+  map_file        = "courbet/rover_v422_map.txt"
+  plugin_library  = "build/libfastdyn.so"
+  monitor_elf     = "../ws/monitor.elf"
+
+  log_file    = "qemu.log"
+  log_options = "in_asm,op"
+
+  twintrace = "None" #options are record, replay or None
+  hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
+
+  logger_content = """
+  # --- Plugin Logger Configuration ---
+  # level  = DEBUG
+  # output = stderr
+  """
 
 # ==============================================================================
 #                              Device Configuration
@@ -102,7 +140,7 @@ logger_content = """
         # to the 'scroll_config' defined above.
         model   = "elder"
         enabled = false
-        scroll = "/scratch/Fastdyn/FastDyn/device_models/postmartem/verifier/gen.so"
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
     [[Device.gpiog.handlers]]
         # This device is now handled by the elder model, directly linking it

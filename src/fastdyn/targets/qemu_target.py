@@ -8,11 +8,14 @@ import subprocess
 import signal
 
 from ..utils import helper, twintrace
+from ..binary import binary_wrange
 import logging
 
-log = logging.getLogger(__name__)
-
 FASTDYN_DEFAULT_WORKDIR = "fastdyn_work"
+
+from .. import fastdyn_log as fastdyn_log_conf
+log = logging.getLogger(__name__)
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 
 def _dedup_preserve_order(items):
@@ -46,6 +49,49 @@ def _extract_monitor_port(qemu_cmd):
     except Exception:
         return None
 
+def _extract_plugin_path(qemu_cmd):
+    """
+    Parses `--plugin <plugin_path>,k=v,...` from the cmd list.
+    Returns plugin path or None.
+    """
+    try:
+        i = qemu_cmd.index("--plugin")
+        spec = qemu_cmd[i + 1]
+        return spec.split(",", 1)[0].strip()
+    except Exception:
+        return None
+
+
+def _build_qemu_env(qemu_cmd):
+    """
+    Build an environment for QEMU execution with runtime library paths.
+
+    This avoids requiring users to manually export LD_LIBRARY_PATH for
+    common Fastdyn runtime dependencies.
+    """
+    env = os.environ.copy()
+    existing_paths = [p for p in env.get("LD_LIBRARY_PATH", "").split(":") if p]
+    extra_paths = []
+
+    plugin_path = _extract_plugin_path(qemu_cmd)
+    if plugin_path:
+        plugin_abs = os.path.abspath(plugin_path)
+        plugin_dir = os.path.dirname(plugin_abs)
+        extra_paths.append(plugin_dir)
+
+        # Common repository layout: build/libfastdyn.so
+        # Add known sibling runtime-lib directories automatically.
+        if os.path.basename(plugin_dir) == "build":
+            repo_root = os.path.dirname(plugin_dir)
+            extra_paths.append(os.path.join(repo_root, "fuzzer/fastdyn_fuzz_lib/target/release"))
+            extra_paths.append(os.path.join(repo_root, "device_models/postmartem/verifier"))
+
+    extra_paths = [p for p in extra_paths if os.path.isdir(p)]
+    merged = _dedup_preserve_order(extra_paths + existing_paths)
+    if merged:
+        env["LD_LIBRARY_PATH"] = ":".join(merged)
+
+    return env
 
 def build_qemu_cmd(machine, dev_config_path, out_path):
     """
@@ -58,6 +104,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     cpus = machine.cpus
     cpu0 = cpus[0]
     opts = machine.qemu_target_opts
+    print_command = opts.print_command
 
     # QEMU CLI is per-instance: we support SMP (homogeneous CPU model/binary/machine).
     for c in cpus[1:]:
@@ -190,11 +237,29 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     elif twintrace_opt == "None":
         twintrace_opt= "off"
 
+    # ------------- generate writable regions for fuzzer ---------------
+    if (opts.coverage):
+        binary_wrange.run(f"{out_path}/bin-writable-ranges", cpu0.binary)
+
     # ------------------------ Plugin ------------------------
     plugin_lib = cpu0.plugin_library
     for c in cpus[1:]:
         if getattr(c, "plugin_library", None) != plugin_lib:
             raise ValueError("Different plugin_library across CPUs is not supported (QEMU loads plugins per instance).")
+
+    # ------------------------ Introspection ------------------------
+    introspection = cpu0.introspect
+    introspection_schema = cpu0.introspect_schema
+    if introspection:
+        schema_path = os.path.join(out_path, "schema.txt")
+        with open(schema_path, "w") as f:
+            f.write(introspection_schema)
+            fastdyn_log.info(f"Introspection Schema Available at: {schema_path}")
+
+        introspect_plugin = [
+            f"introspection={introspection}",
+            f"introspection_schema={schema_path}"
+        ]
 
     plugin_kv = [
         f"{plugin_lib},dev={dev_config_path}",
@@ -204,6 +269,10 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"twintrace={twintrace_opt}",
         f"twintrace_binary={replay_binary}",
     ]
+
+    if (introspection):
+        plugin_kv.extend(introspect_plugin)
+
     if (opts.bbl_coverage):
         plugin_kv.append(f"bbl={out_path}/bbl.txt")
 
@@ -214,6 +283,8 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     # ------------------------ GDB command ------------------------
     gdb_cmd, launch_gdb, binary = get_gdb_cmd(machine, out_path)
 
+    if print_command:
+        fastdyn_log.info(f"Running following qemu command:\n{' '.join(cmd)}")
     return cmd, gdb_cmd, launch_gdb, binary
 
 
@@ -243,19 +314,6 @@ def setup_qemu(machine, work_dir=None):
     """
     Prepares output dir, writes device config, returns QEMU and GDB commands.
     """
-    if work_dir is not None:
-        if not os.path.isdir(work_dir):
-            log.warning(f"The output directory: {work_dir} passed by the user does not exist.")
-    else:
-        work_dir = FASTDYN_DEFAULT_WORKDIR
-
-    if os.path.exists(work_dir):
-        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
-        shutil.rmtree(work_dir)
-
-    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
-    os.makedirs(work_dir, exist_ok=True)
-
     dev_config_path = helper.write_dev_config_json(output_dir=work_dir, data=machine.parsed_device)
 
     qemu_cmd, gdb_cmd, launch_gdb, binary = build_qemu_cmd(machine, dev_config_path, work_dir)
@@ -266,15 +324,14 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
     """
     Starts QEMU. If enabled, optionally launches a GDB terminal.
     """
-    log.info("Running the following QEMU command:")
-    log.info(" ".join(qemu_cmd))
 
     # best-effort cleanup based on the monitor port in this command
     port = _extract_monitor_port(qemu_cmd)
     if port is not None:
         kill_qemu_process(port)
 
-    qemu_proc = subprocess.Popen(qemu_cmd)
+    qemu_env = _build_qemu_env(qemu_cmd)
+    qemu_proc = subprocess.Popen(qemu_cmd, env=qemu_env)
     log.info("Letting QEMU run.")
 
     if launch_gdb:
