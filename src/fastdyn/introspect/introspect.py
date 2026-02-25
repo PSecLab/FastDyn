@@ -19,7 +19,7 @@ def identify_rtos(symbols):
         "MicroC/OS-II": {"OSTCBCur", "OSTaskCreate"},
         "NuttX": {"g_readytorun", "nx_start"},
         "VxWorks": {"taskSpawn", "windLoadContext"},
-        "ChibiOS": {"ch", "chSchReadyI"} 
+        "ChibiOS": {"chSchReadyI"} 
     }
     
     symbol_set = set(symbols.keys())

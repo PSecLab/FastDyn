@@ -249,6 +249,11 @@ class CPU:
         if self.introspect:
             schema_content = introspect_rtos(self, self.binary)
 
+        print(schema_content)
+
+        # exit here for debugging purposes
+        sys.exit(1)
+
         return schema_content
 
 @dataclass

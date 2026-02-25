@@ -23,7 +23,7 @@ class RTOSIntrospector(ABC):
         pass
 
     def register_prologue_hook(self, sym_name):
-        hook_sym = self.symbols.get(sym_name) 
+        hook_sym = self.symbols.get(sym_name)
         if hook_sym is None:
             print(f"[hook] Symbol '{sym_name}' not found")
             return False
@@ -53,7 +53,7 @@ class RTOSIntrospector(ABC):
                     )
             self.cpu.add_virtual_instruction(cb)
 
-        print(f"[hook] Successfully registered prologue hook for '{sym_name}' at 0x{hook_sym_addr:x}")
+        print(f"[hook] Successfully registered epilogue hook for '{sym_name}' at 0x{hook_sym_addr:x}")
         return True
 
     @classmethod
@@ -62,5 +62,5 @@ class RTOSIntrospector(ABC):
         introspector_class = cls._registry.get(rtos_name)
         if not introspector_class:
             raise NotImplementedError(f"No introspector plugin registered for: {rtos_name}")
-        
+
         return introspector_class(cpu_obj, symbols, binary)

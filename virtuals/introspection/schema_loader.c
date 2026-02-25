@@ -104,6 +104,22 @@ uint32_t inspct_get_symbol(const char* symbol_name) {
     return 0; // Symbol not found
 }
 
+uint32_t inspct_get_field_offset(const char* struct_name, const char* field_name) {
+    if (!struct_name || !field_name) return 0;
+
+    for (size_t i = 0; i < g_num_schemas; i++) {
+        if (strcmp(g_schemas[i].struct_name, struct_name) == 0) {
+            for (size_t j = 0; j < g_schemas[i].field_count; j++) {
+                if (strcmp(g_schemas[i].fields[j].name, field_name) == 0) {
+                    return g_schemas[i].fields[j].offset;
+                }
+            }
+            return 0; /* struct found but field not found */
+        }
+    }
+    return 0; /* struct not found */
+}
+
 bool inspct_get_field(const char* struct_name, uint32_t base_addr, const char* field_name, void* out_buffer) {
     if (!struct_name || !base_addr || !field_name || !out_buffer) return false;
 
