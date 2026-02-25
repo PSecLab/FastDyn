@@ -710,34 +710,35 @@ void ins_block_read(unsigned int cpu_index, void *udata)
             // gyro_z = -1 * gyro_z;
 
             // Invense remapping
-            accel_x = accel_y;
-            accel_y = accel_x;
-            accel_z = -1 * accel_z;
-            gyro_x = gyro_y;
-            gyro_y = gyro_x;
-            gyro_z = -1 * gyro_z;
+            float temp_accel_x = -1 * accel_y;
+            float temp_accel_y = -1 * accel_x;
+            float temp_accel_z = -1 * accel_z;
+            float temp_gyro_x = -1 * gyro_y;
+            float temp_gyro_y = -1 * gyro_x;
+            float temp_gyro_z = -1 * gyro_z;
 
             // Apply remapping and sign adjustments here if needed
             float imu_data[7] = {
-                accel_x,
-                accel_y,
-                accel_z,
+                temp_accel_x,
+                temp_accel_y,
+                temp_accel_z,
                 temp_celsius,
-                gyro_x,
-                gyro_y,
-                gyro_z};
+                temp_gyro_x,
+                temp_gyro_y,
+                temp_gyro_z};
 
             int16_t imu_data_int16[7];
             convert_to_invensense(imu_data, imu_data_int16);
 
             uint8_t imu_sample[14];
             convert_int16_array_to_be_bytes(imu_data_int16, 7, imu_sample);
-
+    
+            // Raw IMU sensor values from Gazebo
             if (i == 0)
             {
-                printf("First IMU sample (accel_x, accel_y, accel_z, temp_celsius, gyro_x, gyro_y, gyro_z):\n");
-                printf("  %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f\n",
-                       accel_x, accel_y, accel_z, temp_celsius, gyro_x, gyro_y, gyro_z);
+                printf("IMU reading from Gazebo (m/s^2, rad/s, first sample only):\n");
+                printf("  %.3f, %.3f, %.3f, %.3f, %.3f, %.3f  \n",
+                       imu.accel_body.x, imu.accel_body.y, imu.accel_body.z, imu.gyro.x, imu.gyro.y, imu.gyro.z);
             }
 
             memcpy(imu_data_bytes + (i * 14), imu_sample, 14);
@@ -828,6 +829,11 @@ HMC5843RawData convert_to_hmc5843(SimulatorMagnetometer sim_data)
     int mag_x_raw = temp_y;
     int mag_y_raw = -temp_x;
     int mag_z_raw = temp_z;
+
+
+    // int mag_x_raw = temp_x;
+    // int mag_y_raw = temp_y;
+    // int mag_z_raw = temp_z;
 
     // Clamp to ±2048
     mag_x_raw = constrain_int16(mag_x_raw, -2048, 2047);
@@ -959,8 +965,8 @@ void compass_read_block(unsigned int cpu_index, void *udata)
     compass_read_count++;
     // #endif // PROFILE_COMPASS_READS
 
+    // Raw magnetometer values from Gazebo
     // printf("Magnetometer reading from Gazebo (Gauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_x, mag_y, mag_z);
-    // yaw
     // double yaw = atan2(mag_y, mag_x) * 180.0 / M_PI;
     // printf("Calculated yaw: %.3f degrees\n", yaw);
 
@@ -1421,7 +1427,7 @@ void ap_fs_open(unsigned int cpu_index, void *udata)
     // printf("Opening file: /root/rooney/FastDyn/courbet/flight_logs/%s\n", fname);
 
     char path[256];
-    snprintf(path, sizeof(path) + 41, "/root/rooney/FastDyn/courbet/flight_logs/%s", fname);
+    snprintf(path, sizeof(path) + 59, "/home/mhcho/ws/courbet_project/FastDyn/courbet/flight_logs/%s", fname);
 
     int fd = open(path, O_RDWR | O_CREAT, 0666);
     mark_open_flight_log_fd(fd);
@@ -1580,7 +1586,7 @@ void scheduler_trace(unsigned int cpu_index, void *udata)
 // UDP sender for mag data
 // -----------------------
 #ifndef MAG_UDP_MAX_SAMPLES
-#define MAG_UDP_MAX_SAMPLES 100
+#define MAG_UDP_MAX_SAMPLES 10000
 #endif
 
 static int mag_udp_sock = -1;
@@ -1662,34 +1668,31 @@ void read_imu_when_published(unsigned int cpu_index, void *udata)
     uint32_t imu_pointer_addr = (uint32_t)qemu_get_register(ARM_V7M_R2);
     qemu_plugin_read_memory(imu_pointer_addr, (uint8_t *)imu_values, sizeof(imu_values));
 
-    if (mag_udp_sent_count > MAG_UDP_MAX_SAMPLES)
-    {
+    if (mag_udp_sent_count > MAG_UDP_MAX_SAMPLES) {
         return;
     }
-    else
-    {
+    else {
         fprintf(stderr, "HIT: read_imu_when_published\n");
-        printf("IMU reading from Driver Backend (m/s^2): X=%.3f, Y=%.3f, Z=%.3f\n", imu_values[0], imu_values[1], imu_values[2]);
+        printf("Accel reading from Driver Backend (m/s^2): X=%.3f, Y=%.3f, Z=%.3f\n", imu_values[0], imu_values[1], imu_values[2]);
         // mag_udp_send_mg(imu_values[0], imu_values[1], imu_values[2]);
     }
+
 }
 
-void read_gyro_when_published(unsigned int cpu_index, void *udata)
-{
+void read_gyro_when_published(unsigned int cpu_index, void *udata) {
     float gyro_values[3] = {0.0f, 0.0f, 0.0f};
     uint32_t gyro_pointer_addr = (uint32_t)qemu_get_register(ARM_V7M_R2);
-    qemu_plugin_read_memory(gyro_pointer_addr, (uint8_t *)gyro_values, sizeof(gyro_values));
+    qemu_plugin_read_memory(gyro_pointer_addr, (uint8_t*)gyro_values, sizeof(gyro_values));
 
-    if (mag_udp_sent_count > MAG_UDP_MAX_SAMPLES)
-    {
+    if (mag_udp_sent_count > MAG_UDP_MAX_SAMPLES) {
         return;
     }
-    else
-    {
-        fprintf(stderr, "HIT: read_gyro_when_published\n");
-        printf("Gyroscope reading from Driver Backend (degrees per second): X=%.3f, Y=%.3f, Z=%.3f\n", gyro_values[0], gyro_values[1], gyro_values[2]);
+    else {
+        // fprintf(stderr, "HIT: read_gyro_when_published\n");
+        // printf("Gyroscope reading from Driver Backend (degrees per second): X=%.3f, Y=%.3f, Z=%.3f\n", gyro_values[0], gyro_values[1], gyro_values[2]);
         // mag_udp_send_mg(gyro_values[0], gyro_values[1], gyro_values[2]);
     }
+
 }
 
 /**

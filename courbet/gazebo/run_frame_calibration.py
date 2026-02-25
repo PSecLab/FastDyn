@@ -593,15 +593,16 @@ def main():
       - model quaternion from /model/<name>/pose
     """
     WORLD_NAME = "runway"
-    MODEL_NAME = "r1_rover"
+    # MODEL_NAME = "r1_rover"
+    MODEL_NAME = "skywalker_x8"
     SENSOR_NAME = "magnetometer_sensor"
     POSE_TOPIC = f"/model/{MODEL_NAME}/pose"
     SENSOR_TOPIC = f"/world/runway/model/{MODEL_NAME}/link/base_link/sensor/{SENSOR_NAME}/{SENSOR_NAME.removesuffix("_sensor")}"
-    DEBUG_MODE = False
-    CALIBRATION_MODE = True
+    DEBUG_MODE = True
+    CALIBRATION_MODE = False
 
     # model.sdf path
-    MODEL_SDF_PATH = "submodules/SITL_Models/Gazebo/models/r1_rover/model.sdf"
+    MODEL_SDF_PATH = "submodules/SITL_Models/Gazebo/models/skywalker_x8/model.sdf"
 
     # lookup-table 옵션
     PATCH_ROUND_ERROR = False
