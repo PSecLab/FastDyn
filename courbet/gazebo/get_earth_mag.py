@@ -120,7 +120,7 @@ def _get_table_data(lat_deg: float, lon_deg: float, table: list[list[int]], *, p
     get_table_data(float lat, float lon, const int8_t table[13][37])
     including the bilinear interpolation logic.
     """
-    # Out-of-range returns 0.0 
+    # Out-of-range returns 0.0
     if lat_deg < -90.0 or lat_deg > 90.0 or lon_deg < -180.0 or lon_deg > 180.0:
         return 0.0
 
@@ -128,7 +128,7 @@ def _get_table_data(lat_deg: float, lon_deg: float, table: list[list[int]], *, p
     if patch_round_error:
         min_lat = math.floor(lat_deg / SAMPLING_RES) * SAMPLING_RES
         min_lon = math.floor(lon_deg / SAMPLING_RES) * SAMPLING_RES
-    
+
     # note: C++ uses static_cast<int> which truncates toward 0
     # emulate int() truncation toward 0, not floor() to match C++ truncation (note: this only matters for negative values)
     else:
@@ -258,7 +258,7 @@ def read_latlon_from_world_sdf(sdf_path: str) -> Tuple[float, float]:
     world = root.find("./world")  # direct child
     if world is None:
         raise ValueError("No <world> found under <sdf>.")
-    
+
     sph = world.find("./spherical_coordinates")  # direct child
     if sph is None:
         raise ValueError("No <spherical_coordinates> found under <world>.")
@@ -267,7 +267,7 @@ def read_latlon_from_world_sdf(sdf_path: str) -> Tuple[float, float]:
     lon_text = sph.findtext("longitude_deg")
     if lat_text is None or lon_text is None:
         raise ValueError("Missing <latitude_deg> or <longitude_deg> under <spherical_coordinates>.")
-    
+
     return float(lat_text.strip()), float(lon_text.strip())
 
 
@@ -291,10 +291,10 @@ def earth_magnetic_field_from_sdf(
 if __name__ == "__main__":
     # compute the magnetic field strength from an example world SDF
     res = earth_magnetic_field_from_sdf(
-        "submodules/SITL_Models/Gazebo/worlds/r1_rover_runway.sdf",
-        use_units_gauss=True,       # default value true in gz-sim 
-        use_earth_frame_ned=True,   # default value true in gz-sim 
-        patch_round_error=False,    # apply rounding error patch 
+        "third_party/courbet_deps/SITL_Models/Gazebo/worlds/r1_rover_runway.sdf",
+        use_units_gauss=True,       # default value true in gz-sim
+        use_earth_frame_ned=True,   # default value true in gz-sim
+        patch_round_error=False,    # apply rounding error patch
     )
 
     print(res)

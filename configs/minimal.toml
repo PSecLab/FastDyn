@@ -57,7 +57,7 @@ binary = "tests/RTOSDemo.axf"
 init_nsvtor = "0x08000000"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
-introspect = true 
+introspect = true
 
 
 # --- Embedded CPU Behavior Configurations ---

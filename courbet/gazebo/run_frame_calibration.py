@@ -150,7 +150,7 @@ def parse_sensor_pose_rpy_from_model_sdf_file(
     model = root.find("model")
     if model is None:
         raise ValueError("No <model> found under <sdf>.")
-    
+
     # model.sdf typically: <sdf><model>...<link>...<sensor>...</sensor>...
     link = model.find("link")
     if link is None:
@@ -172,7 +172,7 @@ def parse_sensor_pose_rpy_from_model_sdf_file(
     vals = [float(v) for v in pose_el.text.split()]
     if len(vals) != 6:
         raise ValueError(f"Sensor <pose> must have 6 values, got {len(vals)}")
-    
+
     return SensorAttitude(roll=vals[3], pitch=vals[4], yaw=vals[5])
 
 
@@ -312,10 +312,10 @@ def repro_magnetometer_vector_sensor_frame(
 ) -> np.ndarray:
     """
     Bug reproduction helper.
-    
+
     Intentionally applies an incorrect ENU->NED conversion to the world magnetic field
     to reproduce the frame-mismatch bug (treating Gazebo's NED magnetic field as if it
-    were expressed in ENU).    
+    were expressed in ENU).
     """
     C_wb = quat_to_R_wb(body_quat.w, body_quat.x, body_quat.y, body_quat.z).T
     C_bs = rpy_to_R_wb(sensor_rpy.roll, sensor_rpy.pitch, sensor_rpy.yaw).T
@@ -333,13 +333,13 @@ def debug_magnetometer_vector_sensor_frame(
     Debug function.
 
     Applies the NED->ENU conversion to the world magnetic field to show that it matches
-    Rotation matrix from world to sensor frame from model pose quaternion and sensor fixed RPY 
+    Rotation matrix from world to sensor frame from model pose quaternion and sensor fixed RPY
     """
     C_wb = quat_to_R_wb(body_quat.w, body_quat.x, body_quat.y, body_quat.z).T
     C_bs = rpy_to_R_wb(sensor_rpy.roll, sensor_rpy.pitch, sensor_rpy.yaw).T
     C_ws = C_bs @ C_wb
 
-    return C_ws @ np.array([[0, 1, 0],[1, 0, 0],[0, 0, -1]]) @ (C_ws.T @ Ref_sensor) 
+    return C_ws @ np.array([[0, 1, 0],[1, 0, 0],[0, 0, -1]]) @ (C_ws.T @ Ref_sensor)
 
 
 # ---------------------------------------------------------------------
@@ -575,7 +575,7 @@ def frame_calibration_auto(
 
     # solve orthogonal Procrustes using Kabsch-Umeyama method
     best = kabsch_fit(X, Y, estimate_scale=False, estimate_bias=False, brute_force=brute_kabsch)
-    
+
     return best
 
 
@@ -602,7 +602,7 @@ def main():
     CALIBRATION_MODE = False
 
     # model.sdf path
-    MODEL_SDF_PATH = "submodules/SITL_Models/Gazebo/models/skywalker_x8/model.sdf"
+    MODEL_SDF_PATH = "third_party/courbet_deps/SITL_Models/Gazebo/models/skywalker_x8/model.sdf"
 
     # lookup-table 옵션
     PATCH_ROUND_ERROR = False
@@ -642,7 +642,7 @@ def main():
                 entity_name=MODEL_NAME,
                 timeout_s=2.0,
             )
-        
+
             # debugging Gazebo magnetic sensor model issue
             # 6-1) expected sensor field
             B_sensor_exp = expected_measurement_vector_sensor_frame(
