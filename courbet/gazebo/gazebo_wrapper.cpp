@@ -223,7 +223,7 @@ int get_navsat_reading(gps_data_t *gps_data) {
     data.alt = response.altitude();
     data.vel_n = response.velocity_north();
     data.vel_e = response.velocity_east();
-    data.vel_d = response.velocity_up();
+    data.vel_d = -1 * response.velocity_up();
     data.sec = (uint64_t)response.header().stamp().sec();
     data.nsec = (uint32_t)response.header().stamp().nsec();
     data.yaw_deg = yaw_deg;
