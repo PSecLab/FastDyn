@@ -1,38 +1,48 @@
-use libafl::observers::Observer;
 use libafl::executors::ExitKind;
+use libafl::observers::Observer;
 use libafl::state::HasExecutions;
 use libafl::Error;
 use libafl_bolts::Named;
 
 use core::f64;
-use std::process::{Command, Child};
+use csv::Reader;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions, create_dir_all};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
-use csv::Reader;
-use std::collections::HashMap;
 
-use banquo::{EvaluationError, Formula, Trace, evaluate, predicate};
-use banquo::operators::{Always, And, Eventually, Implies, Not, Or};
-use banquo::predicate::FormulaError;
-
-use std::fs::{File, OpenOptions, create_dir_all};
-use std::io::Write;
-use std::path::Path;
+use banquo_parser::{parse_formula, Formula, ParsedFormula, Trace};
 
 use crate::cpexp_state::{HasLatestRobustness, HasOptimizer};
 
+/// Path to the text file containing STL-style formulas, one per line.
+/// Lines starting with `#` and blank lines are ignored.
+const STL_FORMULAS_PATH: &str = "stl_formulas.txt";
+
 // Example: Capturing timestamp, x, y, z coords
+// #[derive(Deserialize)]
+// struct State {
+//     time: f64,
+//     x: f64,
+//     y: f64,
+//     z: f64,
+// }
+
 #[derive(Deserialize)]
 struct State {
     time: f64,
-    x: f64,
-    y: f64,
-    z: f64,
+    roll: f64,
+    pitch: f64,
+    roll_rate: f64,
+    lateral_accel: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct PhysicalObserver {
     name: Cow<'static, str>,
     trace_time_step: f64, // Time step between recorded trace points
@@ -40,6 +50,10 @@ pub struct PhysicalObserver {
     trace_log_dir: String, // Directory to store the trace logs
     robustness_log_dir: String, // Directory to store the robustness logs
     latest_robustness_vec: Vec<f64>, // Vector to store latest robustness values for each STL formula
+
+    /// Parsed STL-style formulas loaded from `stl_formulas.txt` at startup.
+    #[serde(skip)]
+    formulas: Vec<ParsedFormula>,
 
     #[serde(skip)]
     recorder_process: Option<Child>, // Child process handle for the recorder
@@ -58,9 +72,21 @@ impl PhysicalObserver {
         let step: f64 = if step <= 0.0 { 0.1 } else { step };
         let limit: f64 = if limit <= 0.0 { 10.0 } else { limit };
 
-        let mut robustness_vec: Vec<f64> = Vec::new();
-        // TODO: Push as many infinity values as there are formulas being tracked
-        robustness_vec.push(f64::INFINITY); // Placeholder for now
+        // Load STL formulas from the configured text file.
+        let formulas = Self::load_formulas_from_file(STL_FORMULAS_PATH);
+
+        // Initialize robustness vector with +inf for each loaded formula so that
+        // the first evaluation will always improve it.
+        let robustness_vec: Vec<f64> = if formulas.is_empty() {
+            // Fail fast with a clear message if no formulas were loaded.
+            panic!(
+                "No STL formulas loaded from '{}'. \
+                 Please create this file with one STL-style formula per line.",
+                STL_FORMULAS_PATH
+            );
+        } else {
+            vec![f64::INFINITY; formulas.len()]
+        };
 
         Self {
             name: Cow::from("PhysicalObserver"),
@@ -69,12 +95,58 @@ impl PhysicalObserver {
             trace_log_dir: String::from(trace_log_dir),
             robustness_log_dir: String::from(robustness_log_dir),
             latest_robustness_vec: robustness_vec,
+            formulas,
             recorder_process: None,
         }
     }
 
     pub fn get_robustness_vec(&self) -> &Vec<f64> {
         &self.latest_robustness_vec
+    }
+
+    /// Load STL-style formulas from a plain text file using `banquo-parser`.
+    ///
+    /// - One formula per non-empty line.
+    /// - Lines starting with `#` are treated as comments and ignored.
+    fn load_formulas_from_file(path: &str) -> Vec<ParsedFormula> {
+        let file = File::open(path).unwrap_or_else(|err| {
+            panic!(
+                "Failed to open STL formula file '{}': {}\n\
+                 Create this file and add one formula per line, \
+                 e.g.:\n  always -0.78539816339 <= roll and roll <= 0.78539816339",
+                path, err
+            )
+        });
+
+        let reader = BufReader::new(file);
+        let mut formulas = Vec::new();
+
+        for (idx, line_res) in reader.lines().enumerate() {
+            let line_num = idx + 1;
+            let line = line_res.unwrap_or_else(|err| {
+                panic!("Error reading line {} from '{}': {}", line_num, path, err)
+            });
+
+            // Work with an owned string for the formula to avoid lifetime
+            // issues tied to the `line` binding.
+            let formula_str = line.trim().to_owned();
+
+            // Skip blank lines and comments.
+            if formula_str.is_empty() || formula_str.starts_with('#') {
+                continue;
+            }
+
+            let parsed = parse_formula(&formula_str).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to parse STL formula on line {} of '{}': \"{}\"\nError: {}",
+                    line_num, path, formula_str, e
+                );
+            });
+
+            formulas.push(parsed);
+        }
+
+        formulas
     }
 
 }
@@ -86,7 +158,7 @@ where
 
     fn pre_exec(&mut self, state: &mut S, _input: &I) -> Result<(), Error> {
 
-        println!("Hello from PhysicalObserver PRE_exec!");
+        // println!("Hello from PhysicalObserver PRE_exec!");
         // self.latest_robustness_vec[0] = self.count as f64;
         
         if self.recorder_process.is_some() {
@@ -120,15 +192,29 @@ where
     fn post_exec(&mut self, state: &mut S, _input: &I, _exit_kind: &ExitKind,) -> Result<(), Error> {
 
         // lambda function to add a state as a hashmap into the banquo Trace object
-        fn create_state(x_val: f64, y_val: f64, z_val: f64) -> HashMap<&'static str, f64> {
-            HashMap::from([
-                ("x", x_val), 
-                ("y", y_val), 
-                ("z", z_val),
-            ])
-        } 
+        // fn create_state(x_val: f64, y_val: f64, z_val: f64) -> HashMap<&'static str, f64> {
+        //     HashMap::from([
+        //         ("x", x_val), 
+        //         ("y", y_val), 
+        //         ("z", z_val),
+        //     ])
+        // } 
 
-        println!("Hello from PhysicalObserver POST_exec!");
+        fn create_state(
+            roll: f64,
+            pitch: f64,
+            roll_rate: f64,
+            lateral_accel: f64,
+        ) -> HashMap<String, f64> {
+            HashMap::from([
+                ("roll".to_string(), roll),
+                ("pitch".to_string(), pitch),
+                ("roll_rate".to_string(), roll_rate),
+                ("lateral_accel".to_string(), lateral_accel),
+            ])
+        }
+
+        // println!("Hello from PhysicalObserver POST_exec!");
 
         if self.recorder_process.is_none() {
             // The recorder process should NOT be none...
@@ -144,7 +230,7 @@ where
         self.recorder_process = None;
 
         let newest_trace_log_path = format!("{}/trace_{}.csv", self.trace_log_dir, state.executions());
-        println!("Newest trace log path: {}", newest_trace_log_path);
+        // println!("Newest trace log path: {}", newest_trace_log_path);
 
         let csv_reader_status = csv::ReaderBuilder::new()
             .has_headers(false)
@@ -158,45 +244,45 @@ where
 
         let mut csv_reader = csv_reader_status.unwrap();
 
-        let mut trace: Trace<HashMap<&str, f64>> = Trace::new();
+        let mut trace: Trace<HashMap<String, f64>> = Trace::new();
         for result in csv_reader.deserialize() {
             let state: State = result.unwrap();
-            trace.insert(state.time, create_state(state.x, state.y, state.z)); 
+            trace.insert(state.time, create_state(state.roll, state.pitch, state.roll_rate, state.lateral_accel));
+            // trace.insert(state.time, create_state(state.x, state.y, state.z)); 
             // println!("Time: {}, x: {}, y: {}, z: {}", state.time, state.x, state.y, state.z);
         }
 
         // println!("Trace: {:?}", trace);
 
-        // Finally, evaluate the trace against all STL formulas
-
-        // So originally I asked chat to come up with mission boundaries for
-        // the rover_rectangle.txt mission, but the mavlink map coordinates
-        // do not line up with gazebo world coordinates. So I just watched the
-        // mission a few times and the rover's pose throughout
-
-        // let x_bounds = (-25, 10);
-        // let y_bounds = (-5, 60);
-        // Don't add z_bounds as its a very small bound and would hog the robustness reporting
-        // let z_bounds = (0, 0.1);
-
-        // Note: with banquo you can only use <= and constants in predicates
-        let x_min_pred: banquo::Predicate = predicate!{ -25.0 <= x };
-        let x_max_pred: banquo::Predicate = predicate!{ x <= 10.0 };
-        let y_min_pred: banquo::Predicate = predicate!{ -5.0 <= y };
-        let y_max_pred: banquo::Predicate = predicate!{ y <= 60.0 };
-        // let z_min_pred: banquo::Predicate = predicate!{ -1.0 <= z };
-        // let z_max_pred: banquo::Predicate = predicate!{ z <= 5.0 };
-
-        // Either formulas are impossible to store generically in a single vector or I am a bot (most likely)
-        // So for now just manually call evaluate() and push the results into latest_robustness_vec
-        let formula_x = Always::unbounded(And::new(x_min_pred, x_max_pred));
-        let formula_y = Always::unbounded(And::new(y_min_pred, y_max_pred));
-        // let formula_z = Always::unbounded(And::new(z_min_pred, z_max_pred));
+        // Finally, evaluate the trace against all STL formulas that were
+        // parsed from the external file using `banquo-parser`.
 
         self.latest_robustness_vec.clear();
-        self.latest_robustness_vec.push(evaluate(&trace, &formula_x).unwrap());
-        self.latest_robustness_vec.push(evaluate(&trace, &formula_y).unwrap());
-        // self.latest_robustness_vec.push(evaluate(&trace, &formula_z).unwrap());
+
+        for (idx, formula) in self.formulas.iter().enumerate() {
+            let metrics = formula
+                .evaluate(&trace)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Error evaluating STL formula #{} from '{}': {}",
+                        idx + 1,
+                        STL_FORMULAS_PATH,
+                        e
+                    )
+                });
+
+            // Reduce the per-time-step metrics to a single robustness value by
+            // taking the minimum over the trace, matching the classic STL
+            // robustness semantics.
+            let robustness = metrics
+                .iter()
+                .fold(f64::INFINITY, |acc, (t, v)| {
+                    let _ = t; // ignore time, only robustness value matters
+                    if *v < acc { *v } else { acc }
+                });
+
+            self.latest_robustness_vec.push(robustness);
+        }
 
         // println!("Robustness for execution {}: {:?}", state.executions(), self.latest_robustness_vec);
 
@@ -223,9 +309,9 @@ where
             .expect("Unable to create robustness log file");
 
         writeln!(file, "Formula,Robustness").unwrap();
-        writeln!(file, "X_boundary,{}", self.latest_robustness_vec[0]).unwrap();
-        writeln!(file, "Y_boundary,{}", self.latest_robustness_vec[1]).unwrap();
-        // writeln!(file, "Z_boundary,{}", self.latest_robustness_vec[2]).unwrap();
+        for (i, robustness) in self.latest_robustness_vec.iter().enumerate() {
+            writeln!(file, "Formula_{},{}", i, robustness).unwrap();
+        }
         file.flush().unwrap();
 
         Ok(())

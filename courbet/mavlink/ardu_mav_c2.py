@@ -67,22 +67,6 @@ def read_until(master_fd, proc, key, timeout=sys.maxsize):
 def send(master_fd, cmd):
     os.write(master_fd, (cmd + "\n").encode())
 
-    # while True:
-    #     param_name = input("enter param name: ")
-    #     command = input("enter value: ")
-
-    #     raw = float(command)
-    #     param_set(mav, param_name, raw)
-
-    #     time.sleep(0.1)
-
-    #     try:
-    #         data = os.read(master_fd, 1024)
-    #         if data:
-    #             print(data.decode(errors="ignore"), end="")
-    #     except BlockingIOError:
-    #         pass
-
 def main():
 
     usage = "Usage: python3 ardu_mav_c2.py /path/to/init/params.txt"
@@ -132,36 +116,23 @@ def main():
 
     print("Connected")
 
-    # while True:
-    #     msg = mav.recv_match(type='STATUSTEXT', blocking=True)
-    #     if msg:
-    #         text = msg.text
-    #         severity = msg.severity
-    #         print(f"STATUSTEXT[{severity}]: {text}")
-
     # Wait for initialization
     read_until(master_fd, proc, "Received")
 
     # Load initial parameters
     send(master_fd, f"param load {init_param_file_path}")
     read_until(master_fd, proc, f"parameters from {init_param_file_path}")
+    
+    # Wait for EKF3 active
+    while True:
+        mav_msg = mav.recv_match(type='STATUSTEXT', blocking=True)
+        if mav_msg and "EKF3 active" in mav_msg.text:
+            break
 
-    time.sleep(5)
-
-    send(master_fd, f"param load {init_param_file_path}")
-    time.sleep(60) # Wait a long time for EKF to be healthy again
-
+    # Load mission and set AUTO
     send(master_fd, f"wp load {mission_file_path}")
     read_until(master_fd, proc, f"waypoints in")
-    time.sleep(3)
-
     send(master_fd, "mode auto")
-    # read_until(master_fd, proc, "waypoint 1")
-    time.sleep(3)
-
-    send(master_fd, "arm throttle")
-    # read_until(master_fd, proc, "Throttle armed")
-    time.sleep(20)
 
     # Start sending over the mutated parameters
     bin_file = open(param_bytes_path, "rb")
@@ -170,6 +141,30 @@ def main():
         print("Bytes for param", param, ":", bytes)
         param_set(mav, param, struct.unpack("f", bytes)[0])
         time.sleep(0.5)
+
+    send(master_fd, "arm throttle")
+    # read_until(master_fd, proc, "Throttle armed")
+    
+    # while True:
+    #     mav_msg = mav.recv_match(type='MISSION_CURRENT', blocking=True)
+    #     if mav_msg and mav_msg.mission_state == MISSION_IN_PROGRESS:
+    #         break
+
+    # # Start sending over the mutated parameters
+    # bin_file = open(param_bytes_path, "rb")
+    # for param in param_name_list:
+    #     bytes = bin_file.read(4).ljust(4, b'\x00')
+    #     print("Bytes for param", param, ":", bytes)
+    #     param_set(mav, param, struct.unpack("f", bytes)[0])
+    #     time.sleep(0.5)
+
+    # Check if arming check failed.
+    # If so, we'll report a timeout in mission executor.
+    mav_msg = mav.recv_match(type='STATUSTEXT', blocking=True, timeout=3)
+    if mav_msg and "AP: PreArm" in mav_msg.text and mav_msg.severity >= mavutil.mavlink.MAV_SEVERITY_WARNING:
+        print("Arming check failed:", mav_msg.text)
+        cleanup(master_fd, proc)
+        sys.exit(1)
 
     # Monitor mavlink until mission complete
     mission_success = False

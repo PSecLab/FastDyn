@@ -23,7 +23,8 @@ opt-level = 3
 debug = true
 
 [dependencies]
-banquo = "0.1.0"
+banquo = { path = "/home/michael-rooney/banquo/banquo" }
+banquo-parser = { path = "/home/michael-rooney/banquo/banquo-parser" }
 csv = "1.4.0"
 env_logger = "0.11.7"
 gz-msgs = "0.9.0"
@@ -31,8 +32,8 @@ gz-transport = "0.9.0"
 
 # libafl = { path = "../../../crates/libafl", features = ["tui_monitor"] }
 # libafl_bolts = { path = "../../../crates/libafl_bolts" }
-libafl = { path = "/root/fire/LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
-libafl_bolts = { path = "/root/fire/LibAFL-0.15.4/crates/libafl_bolts" }
+libafl = { path = "/home/michael-rooney/LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
+libafl_bolts = { path = "/home/michael-rooney/LibAFL-0.15.4/crates/libafl_bolts" }
 
 log = { version = "0.4.22", features = ["release_max_level_info"] }
 ordered-float = "5.1.0"
@@ -41,3 +42,4 @@ scirs2-core = "0.1.1"
 scirs2-optimize = "0.1.1"
 serde = "1.0.228"
 serde_json = "1.0.149"
+reqwest = { version = "0.11", features = ["json", "blocking"] }

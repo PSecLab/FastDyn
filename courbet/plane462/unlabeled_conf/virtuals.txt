@@ -25,3 +25,6 @@
 0x80cc624 ap_fs_write *
 0x80cc5e4 ap_fs_close *
 0x8010fa8 ignore_cpu_failsafe_disarm *
+0x802bd5c read_mag_when_published
+0x815d96c read_gyro_when_published 
+0x815da08 read_imu_when_published 
