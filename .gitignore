@@ -11,3 +11,4 @@ fastdyn-env
 *build
 *.bin
 *bbl.txt
+.cflags
