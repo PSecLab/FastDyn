@@ -37,6 +37,9 @@ class RTOSIntrospector(ABC):
                 for sym in symtab.iter_symbols():
                     if sym.name == sym_name:
                         hook_sym_addr = sym.entry.st_value
+                        # handle thumb bit for arm binaries
+                        if hook_sym_addr & 1:
+                            hook_sym_addr &= ~1
                         found_sym_with_elf = True
             if not found_sym_with_elf:
                 print(f"[hook] Symbol '{sym_name}' not found")

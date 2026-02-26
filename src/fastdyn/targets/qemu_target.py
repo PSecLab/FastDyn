@@ -12,7 +12,7 @@ from ..binary import binary_wrange
 import logging
 
 FASTDYN_DEFAULT_WORKDIR = "fastdyn_work"
-FASTDYN_EXISTING_CONFIG_PATH = "courbet/rover462/unlabeled_conf/"
+FASTDYN_EXISTING_CONFIG_PATH = None
 
 from .. import fastdyn_log as fastdyn_log_conf
 log = logging.getLogger(__name__)

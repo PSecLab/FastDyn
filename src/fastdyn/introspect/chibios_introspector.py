@@ -34,7 +34,7 @@ class ChibiOSIntrospector(RTOSIntrospector, rtos_name="ChibiOS"):
             "ch_priority_queue",
         ]
 
-        # Get symbol address from elf 
+        # Get symbol address from elf
         symbols_to_export = {}
         for sym_name in ["ch_system", "ch_debug"]:
             sym = self.symbols.get(sym_name)
@@ -45,6 +45,9 @@ class ChibiOSIntrospector(RTOSIntrospector, rtos_name="ChibiOS"):
                         for symbol in section.iter_symbols():
                             if symbol.name == sym_name:
                                 symbols_to_export[sym_name] = symbol.entry.st_value
+                                # handle thumb bit for arm binaries
+                                if symbols_to_export[sym_name] & 1:
+                                    symbols_to_export[sym_name] &= ~1
                                 break
             else:
                 symbols_to_export[sym_name] = sym.address

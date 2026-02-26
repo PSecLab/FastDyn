@@ -11,7 +11,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
 #include "inspct.h"
+#include "virtuals.h"
 
 #define CHIBIOS_TASK_NAME_MAX 32
 
@@ -68,12 +71,16 @@ void inspct_chibios_trace_switch(unsigned int cpu_idx, void *arg) {
     (void)cpu_idx;
     (void)arg;
 
-    uint32_t ntp = (uint32_t)qemu_get_register(0);  /* in */
-    uint32_t otp = (uint32_t)qemu_get_register(1);  /* out */
+    uint32_t ntp = (uint32_t)qemu_get_register(ARM_V7M_R0);  /* in */
+    uint32_t otp = (uint32_t)qemu_get_register(ARM_V7M_R1);  /* out */
 
     ChibiOSThreadState in_task, out_task;
-    if (!chibios_extract_thread_info(ntp, &in_task)) return;
-    if (!chibios_extract_thread_info(otp, &out_task)) return;
+    if (!chibios_extract_thread_info(ntp, &in_task) ||
+        !chibios_extract_thread_info(otp, &out_task))
+    {
+        fprintf(stderr, "[ChibiOS] Failed to extract thread info for switch: ntp=0x%08X otp=0x%08X\n", ntp, otp);
+        return;
+    }
 
     printf("[ChibiOS] Switch out: %s (Prio %u) -> in: %s (Prio %u) | ntp=0x%08X otp=0x%08X\n",
            out_task.name[0] ? out_task.name : "(null)",
@@ -94,7 +101,7 @@ void inspct_chibios_thd_object_init(unsigned int cpu_idx, void *arg) {
     (void)cpu_idx;
     (void)arg;
 
-    uint32_t tp = (uint32_t)qemu_get_register(1);
+    uint32_t tp = (uint32_t)qemu_get_register(ARM_V7M_R1);
     if (tp == 0) return;
 
     ChibiOSThreadState task;
@@ -168,7 +175,7 @@ void inspct_chibios_dump_ready_list(uint32_t ch_system_addr) {
 
     printf("[ChibiOS] === Ready list (instance 0) ===\n");
     chibios_walk_ready_pqueue(pqueue_addr, current_tp, "ready");
-    printf("[ChibiOS] Current: 0x%08X\n", current_tp);
+    // printf("[ChibiOS] Current: 0x%08X\n", current_tp);
     printf("[ChibiOS] =================================\n");
     fflush(stdout);
 }
