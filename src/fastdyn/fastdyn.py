@@ -47,8 +47,6 @@ class Fastdyn:
                 out_path
             )
 
-            sys.exit(1)
-
             qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
 
 

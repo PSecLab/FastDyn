@@ -732,14 +732,14 @@ void ins_block_read(unsigned int cpu_index, void *udata)
 
             uint8_t imu_sample[14];
             convert_int16_array_to_be_bytes(imu_data_int16, 7, imu_sample);
-    
+
             // Raw IMU sensor values from Gazebo
-            if (i == 0)
-            {
-                printf("IMU reading from Gazebo (m/s^2, rad/s, first sample only):\n");
-                printf("  %.3f, %.3f, %.3f, %.3f, %.3f, %.3f  \n",
-                       imu.accel_body.x, imu.accel_body.y, imu.accel_body.z, imu.gyro.x, imu.gyro.y, imu.gyro.z);
-            }
+            // if (i == 0)
+            // {
+            //     printf("IMU reading from Gazebo (m/s^2, rad/s, first sample only):\n");
+            //     printf("  %.3f, %.3f, %.3f, %.3f, %.3f, %.3f  \n",
+            //            imu.accel_body.x, imu.accel_body.y, imu.accel_body.z, imu.gyro.x, imu.gyro.y, imu.gyro.z);
+            // }
 
             memcpy(imu_data_bytes + (i * 14), imu_sample, 14);
         }

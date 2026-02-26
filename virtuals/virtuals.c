@@ -138,7 +138,8 @@ cb_entry_t cb_registry[] = {
 	{ "vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext},
 	{ "prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList},
 	{ "xQueueGenericCreate_epi_Hook", inpsct_freertos_xQueueGenericCreate_epi},
-	/* ChibiOS/RT introspection */
+	/* ChibiOS/RT introspection (port_switch is the actual call site in many builds) */
+	{ "__port_switch_Hook", inspct_chibios_trace_switch},
 	{ "__trace_switch_Hook", inspct_chibios_trace_switch},
 	{ "__thd_object_init_Hook", inspct_chibios_thd_object_init},
 #if ENABLE_SUNDIALS

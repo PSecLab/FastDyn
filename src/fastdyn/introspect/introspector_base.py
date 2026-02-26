@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from elftools.elf.elffile import ELFFile
 from fastdyn.fastdyn import *
 from fastdyn.machine import *
 import struct
@@ -24,12 +25,25 @@ class RTOSIntrospector(ABC):
 
     def register_prologue_hook(self, sym_name):
         hook_sym = self.symbols.get(sym_name)
+        found_sym_with_elf = False
+        hook_sym_addr = None
         if hook_sym is None:
-            print(f"[hook] Symbol '{sym_name}' not found")
-            return False
-        hook_sym_addr = hook_sym.address
+            with open(self.binary, "rb") as f:
+                elf = ELFFile(f)
+                symtab = elf.get_section_by_name(".symtab")
+                if not symtab:
+                    print("No symbol table")
+                    return False
+                for sym in symtab.iter_symbols():
+                    if sym.name == sym_name:
+                        hook_sym_addr = sym.entry.st_value
+                        found_sym_with_elf = True
+            if not found_sym_with_elf:
+                print(f"[hook] Symbol '{sym_name}' not found")
+                return False
+        hook_sym_addr = hook_sym.address if hook_sym else hook_sym_addr
         cb = VirtualInstruction(
-                    at=hook_sym.address,
+                    at=hook_sym_addr,
                     instruction=f"{sym_name}_Hook",
                     args=[]
                 )

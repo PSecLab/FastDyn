@@ -2,7 +2,7 @@ from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 from fastdyn import fastdyn_log as fastdyn_log_conf
 from fastdyn.introspect.introspector_base import RTOSIntrospector
-import os, importlib 
+import os, importlib
 
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
@@ -19,25 +19,25 @@ def identify_rtos(symbols):
         "MicroC/OS-II": {"OSTCBCur", "OSTaskCreate"},
         "NuttX": {"g_readytorun", "nx_start"},
         "VxWorks": {"taskSpawn", "windLoadContext"},
-        "ChibiOS": {"chSchReadyI"} 
+        "ChibiOS": {"chSchReadyI"}
     }
-    
+
     symbol_set = set(symbols.keys())
-    
+
     for rtos, sig_symbols in signatures.items():
         # Using issubset ensures we match even if LTO stripped some other symbols,
         # as long as our core signatures survived.
         if sig_symbols.issubset(symbol_set):
             fastdyn_log.info("Detected RTOS:" + rtos)
             return rtos
-    fastdyn_log.info("Likely Unknown/Custom Baremetal")    
+    fastdyn_log.info("Likely Unknown/Custom Baremetal")
     return "Unknown/Custom Baremetal"
 
 def _load_local_introspectors():
     """Scans the current directory for anything ending in _introspector.py"""
     # Get the directory where this script is running
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    
+
     for filename in os.listdir(current_dir):
         # Only load files that match our strict naming convention
         if filename.endswith('_introspector.py') and filename != 'base_introspector.py':
@@ -53,8 +53,8 @@ def introspect_rtos(cpu_obj, binary):
     resolver = SymbolResolver([DwarfProvider()])
     syms = resolver.resolve(binary)
     for key, value in syms.items():
-        if "port" in key:
-            print(f"key: {key}, value: {value}")
+        if key in ["ch_system", "ch_debug"]:
+            fastdyn_log.info(f"Found {key}: {value}")
     rtos_name = identify_rtos(syms)
 
     _load_local_introspectors()

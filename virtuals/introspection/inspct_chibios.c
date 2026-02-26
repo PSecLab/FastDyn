@@ -10,6 +10,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include "inspct.h"
 
 #define CHIBIOS_TASK_NAME_MAX 32
@@ -25,6 +26,10 @@ typedef struct {
 /* Try both possible DWARF struct names for the thread descriptor */
 static const char *const thread_struct_names[] = { "ch_thread", "thread_t", NULL };
 
+void inspct_chibios_dump_ready_list(uint32_t ch_system_addr);
+
+void inspct_chibios_trace_switch(unsigned int cpu_idx, void *arg);
+
 static bool chibios_extract_thread_info(uint32_t thread_addr, ChibiOSThreadState *out) {
     if (thread_addr == 0 || out == NULL) return false;
 
@@ -35,6 +40,12 @@ static bool chibios_extract_thread_info(uint32_t thread_addr, ChibiOSThreadState
         const char *sname = thread_struct_names[i];
         if (inspct_get_field(sname, thread_addr, "hdr.pqueue.prio", &out->priority))
             break;
+    }
+    /* Schema often has union "hdr" only (not flattened to hdr.pqueue.prio). Prio is at offset 8 in ch_priority_queue. */
+    if (out->priority == 0) {
+        uint8_t prio_byte = 0;
+        qemu_plugin_read_memory(thread_addr + 8, (uint8_t *)&prio_byte, sizeof(prio_byte));
+        out->priority = prio_byte;
     }
     for (int i = 0; thread_struct_names[i] != NULL; i++) {
         if (inspct_get_field(thread_struct_names[i], thread_addr, "name", out->name))
@@ -100,12 +111,9 @@ void inspct_chibios_thd_object_init(unsigned int cpu_idx, void *arg) {
  * thread_t.hdr.pqueue; list header is rlist.pqueue. */
 static void chibios_walk_ready_pqueue(uint32_t pqueue_header_addr, uint32_t current_tp,
                                       const char *inst_label) {
-    uint32_t off_pqueue = 0;
-    for (int i = 0; thread_struct_names[i] != NULL; i++) {
-        off_pqueue = inspct_get_field_offset(thread_struct_names[i], "hdr.pqueue");
-        if (off_pqueue != 0) break;
-    }
-    if (off_pqueue == 0) return;
+    /* thread_t.hdr.pqueue offset. Schema often has only "hdr" (union); then hdr.pqueue is missing and we use 0. */
+    uint32_t off_pqueue = inspct_get_field_offset("ch_thread", "hdr.pqueue");
+    /* 0 is valid: pqueue is at start of thread_t */
 
     /* ch_priority_queue_t: first field is next (list head) */
     uint32_t next_ptr = 0;
@@ -145,10 +153,12 @@ void inspct_chibios_dump_ready_list(uint32_t ch_system_addr) {
     if (inst0 == 0) return;
 
     uint32_t rlist_current_offset = inspct_get_field_offset("ch_os_instance", "rlist.current");
-    uint32_t rlist_pqueue_offset  = inspct_get_field_offset("ch_os_instance", "rlist.pqueue");
+    /* Schema flattens to rlist.pqueue.next (at 0); pqueue header is at same address as rlist. */
+    uint32_t rlist_pqueue_offset  = inspct_get_field_offset("ch_os_instance", "rlist.pqueue.next");
+    if (rlist_pqueue_offset == 0)
+        rlist_pqueue_offset = inspct_get_field_offset("ch_os_instance", "rlist.pqueue");
     if (rlist_pqueue_offset == 0)
         rlist_pqueue_offset = inspct_get_field_offset("ch_os_instance", "rlist");
-    if (rlist_pqueue_offset == 0) return;
 
     uint32_t current_tp = 0;
     if (rlist_current_offset != 0)

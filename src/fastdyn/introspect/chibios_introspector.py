@@ -4,6 +4,7 @@ from fastdyn.fastdyn import *
 import struct
 import logging
 import pathlib
+from elftools.elf.elffile import ELFFile
 
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
@@ -13,15 +14,6 @@ class ChibiOSIntrospector(RTOSIntrospector, rtos_name="ChibiOS"):
     def setup_hooks(self):
         """Wire up ChibiOS-specific execution hooks and emit schema."""
 
-        # Register the kernel hooks that our QEMU plugin exposes:
-        #
-        #   - __trace_switch(thread_t *ntp, thread_t *otp)
-        #       → handled by inspct_chibios_trace_switch()
-        #   - __thd_object_init(os_instance_t *oip, thread_t *tp, const char *name, tprio_t prio)
-        #       → handled by inspct_chibios_thd_object_init()
-        #
-        # The C side (inspct_chibios.c) expects these hook names with the
-        # \"_Hook\" suffix, so we register the plain function names here.
         self.register_prologue_hook("__port_switch")
         self.register_prologue_hook("__thd_object_init")
 
@@ -42,16 +34,25 @@ class ChibiOSIntrospector(RTOSIntrospector, rtos_name="ChibiOS"):
             "ch_priority_queue",
         ]
 
-        # Export the symbols the C introspector uses directly.
+        # Get symbol address from elf 
         symbols_to_export = {}
         for sym_name in ["ch_system", "ch_debug"]:
             sym = self.symbols.get(sym_name)
             if sym is None:
+                elf = ELFFile(open(self.binary, 'rb'))
+                for section in elf.iter_sections():
+                    if section.name == ".symtab":
+                        for symbol in section.iter_symbols():
+                            if symbol.name == sym_name:
+                                symbols_to_export[sym_name] = symbol.entry.st_value
+                                break
+            else:
+                symbols_to_export[sym_name] = sym.address
+
+            if symbols_to_export[sym_name] is None:
                 log.warning("[ChibiOSIntrospector] Missing symbol '%s' in binary", sym_name)
                 continue
-            symbols_to_export[sym_name] = sym.address
 
         # Write the schema for fastdyn
         schema_content = generator.generate_schema(target_structs, symbols_to_export)
-
         return schema_content

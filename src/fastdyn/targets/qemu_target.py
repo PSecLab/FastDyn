@@ -182,7 +182,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     all_modifiers = []
 
     # TODO: Dynamically allow for the user to pass in the existing config path
-    # This is useful for a user that was using fastdyn for one project and 
+    # This is useful for a user that was using fastdyn for one project and
     # wants a more readable TOML file for the next project.
     if FASTDYN_EXISTING_CONFIG_PATH is not None:
         existing_config_path = os.path.join(FASTDYN_EXISTING_CONFIG_PATH, "virtuals.txt")
@@ -264,8 +264,8 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
 
     # ------------------------ Introspection ------------------------
     introspection = cpu0.introspect
-    introspection_schema = cpu0.introspect_schema
     if introspection:
+        introspection_schema = cpu0.introspect_schema
         schema_path = os.path.join(out_path, "schema.txt")
         with open(schema_path, "w") as f:
             f.write(introspection_schema)
