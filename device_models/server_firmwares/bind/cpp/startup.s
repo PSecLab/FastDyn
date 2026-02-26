@@ -28,6 +28,13 @@
 Reset_Handler: 
   ldr   sp, =_estack       
 
+  /* Enable FPU: set CP10 and CP11 full access in CPACR */
+  ldr   r0, =0xE000ED88
+  ldr   r1, =0x00F00000
+  str   r1, [r0]
+  dsb
+  isb
+
 
   ldr r0, =_sdata
   ldr r1, =_edata

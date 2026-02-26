@@ -13,7 +13,7 @@ LLVM_LINK := llvm-link
 LLVM_DIS  := llvm-dis
 LLC       := llc
 
-BIN       := RTOSDemo.axf
+BIN       := real_world.axf
 BUILD_DIR := build
 
 # Adjust these if needed:
