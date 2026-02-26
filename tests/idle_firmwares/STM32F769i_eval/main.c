@@ -1,0 +1,38 @@
+__attribute__((naked)) void init_regs(void) {
+    __asm volatile (
+        "mov r0,  #1\n\t"
+        "mov r1,  #2\n\t"
+        "mov r2,  #3\n\t"
+        "mov r3,  #4\n\t"
+        "mov r4,  #5\n\t"
+        "mov r5,  #6\n\t"
+        "mov r6,  #7\n\t"
+        "mov r7,  #8\n\t"
+        "mov r8,  #9\n\t"
+        "mov r9,  #10\n\t"
+        "mov r10, #11\n\t"
+        "mov r11, #12\n\t"
+        "mov r12, #13\n\t"
+        "mov lr,  #14\n\t"
+
+        // Infinite loop
+		"bkpt #0\n\t"
+        "b .\n\t"
+    );
+}
+int main() {
+    #ifdef TRAIN_TIMER
+		timer_test();
+#endif
+#ifdef TRAIN_GPIO
+		gpio_test();
+#endif
+#ifdef TRAIN_USART
+		usart_test();
+#endif
+		// unsigned int * ram_baddr = 0x20020000;
+		// for (int i =0; i< 0x100; i++) {
+		// 		ram_baddr[i] = i;
+		// }
+		while(1);
+}
