@@ -1,4 +1,4 @@
-export LD_LIBRARY_PATH=../../FastDyn/fuzzer/fastdyn_fuzz_lib/target/release/:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=../../FastDyn/virtuals/fuzzer/fastdyn_fuzz_lib/target/release/:$LD_LIBRARY_PATH
 
 ./qemu-system-arm --plugin ../../FastDyn/build/libfastdyn.so,dev=classic:0x40000000-0x5FFFFFFF,virtual=../../FastDyn/courbet/rover_fuzz462/unlabeled_conf/virtuals.txt,modifier=../../FastDyn/courbet/rover_fuzz462/unlabeled_conf/modifiers.txt,symbols=../../FastDyn/courbet/bin/ardurover_v462,coverage=1,bbl=1 \
     -d op,in_asm -D qemu.log -machine cortexm,memory-backend=ram0 \

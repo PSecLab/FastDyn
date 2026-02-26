@@ -60,7 +60,6 @@ class QemuTargetOpts:
         self.finline: Optional[str] = None
         self.coverage: bool = False
         self.enable_gdb: bool = False
-        self.bbl_coverage: bool = False
         self.stop_on_start: bool = False
         self.launch_gdb: bool = False
         self.semihosting: bool = True

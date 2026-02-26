@@ -8,7 +8,7 @@
 #define DEBUG_FILE
 
 
-#if defined(DEBUG_PRINT)
+#if DEBUG_PRINT
   #define DEBUG_LOG(fmt, ...) \
     printf(fmt "\n", ##__VA_ARGS__)
 #elif defined(DEBUG_FILE)

@@ -37,6 +37,7 @@ int isdigit(int c);
 #include <ctype.h>
 #include "core.h"
 #include "common.h"
+#include "fuzz.h"
 #include <utils.h>
 #include <device.h>
 #include <config.h>
@@ -67,15 +68,6 @@ twintrace_mode_t twintrace_mode = TT_OFF;
 const char *twintrace_bin_path = NULL;
 int introspection_enabled = 0;
 const char *introspection_schema_path = NULL;
-
-// Dumping to fastdyn_work will cause this to be erased after each run, bad if fuzzing restarts
-#define DEFAULT_BBL_DUMP_PATH "fuzz_out/bbl.txt"
-
-static int bbl_enable = 0;
-static const char *bbl_dump_path = DEFAULT_BBL_DUMP_PATH;
-
-// Unique set of TBs
-static GHashTable *bbl_set;
 
 /**
  * @brief Parses a token string into a logger entry.
@@ -428,8 +420,50 @@ void qemu_set_register(uint32_t value, int reg) {
 #include <stdio.h>
 #include <stdlib.h>
 
+#define MAX_IRQ_HOOKS 32
 
+typedef void (*irq_cb_t)(int);
 
+static irq_cb_t g_irq_entry_hooks[MAX_IRQ_HOOKS];
+static irq_cb_t g_irq_exit_hooks[MAX_IRQ_HOOKS];
+static size_t g_irq_hook_count = 0;
+
+static void core_irq_entry_dispatch(int irq)
+{
+    for (size_t i = 0; i < g_irq_hook_count; i++) {
+        if (g_irq_entry_hooks[i]) {
+            g_irq_entry_hooks[i](irq);
+        }
+    }
+}
+
+static void core_irq_exit_dispatch(int irq)
+{
+    for (size_t i = 0; i < g_irq_hook_count; i++) {
+        if (g_irq_exit_hooks[i]) {
+            g_irq_exit_hooks[i](irq);
+        }
+    }
+}
+
+/* Public registration API */
+void core_register_irq_hook(void (*cb)(int), void (*cb_end)(int))
+{
+    if (g_irq_hook_count >= MAX_IRQ_HOOKS)
+        return;  // Or assert if you prefer
+
+    g_irq_entry_hooks[g_irq_hook_count] = (irq_cb_t)cb;
+    g_irq_exit_hooks[g_irq_hook_count]  = (irq_cb_t)cb_end;
+    g_irq_hook_count++;
+
+    /* Ensure QEMU only ever sees our dispatcher */
+    static int registered = 0;
+    if (!registered) {
+        qemu_plugin_register_irq_hook(core_irq_entry_dispatch,
+                                      core_irq_exit_dispatch);
+        registered = 1;
+    }
+}
 
 
 // Finds all update entries targeting the given memory address.
@@ -807,180 +841,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 // ---------------------------
 // Globals
 // ---------------------------
-static uint32_t *g_observed_values = NULL; // Buffer for new values
-static size_t g_observed_count = 0;        // Number of values currently buffered
-uint32_t g_prev_pc = 0;
-
-#if ENABLE_LIBFUZZ
-
-#define MAP_SIZE 65536 // should always match the rust definition
-extern uint8_t CVG[MAP_SIZE];
-extern GArray *current_run;
-
-// If using fuzzing library, internally modify coverage map
-void add_observed_value(uint32_t val) {
-    // we don't want stale value from before trace
-    if (g_prev_pc != 0) {
-        uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
-        CVG[idx] = CVG[idx] + 1;
-    }
-
-    //printf("[trace] %x\n", val);
-
-    if (current_run) g_array_append_val(current_run, val);
-    g_prev_pc = val;
-}
-
-#else
-
-static size_t g_observed_capacity = 0;     // Allocated capacity of the buffer
-
-// If not using fuzzing library, keep buffer of blocks
-void add_observed_value(uint32_t val) {
-    if (g_observed_count >= g_observed_capacity) {
-        // Grow the buffer (double the capacity, or start with initial size)
-        size_t new_capacity = (g_observed_capacity == 0) ? INITIAL_CAPACITY : g_observed_capacity * 2;
-        uint32_t *new_buf = realloc(g_observed_values, new_capacity * sizeof(uint32_t));
-        if (!new_buf) {
-            perror("[-] Failed to reallocate memory for observed values");
-            return; // Continue without adding, or could choose to exit
-        }
-        g_observed_values = new_buf;
-        g_observed_capacity = new_capacity;
-    }
-    g_observed_values[g_observed_count++] = val;
-}
-#endif
-
-// The following two functions are useful if fuzzing with an external fuzzer rather than as a library
-/**
- * @brief Writes the buffered values to a binary file.
- * @param filename The path to the output file.
- */
-void dump_values(const char *filename) {
-    if (!filename) {
-        filename = DEFAULT_DUMP_PATH;
-    }
-    if (g_observed_count == 0) {
-        printf("[+] No new values were observed. Nothing to dump.\n");
-        return;
-    }
-
-    FILE *f = fopen(filename, "wb");
-    if (!f) {
-        perror("[-] Failed to open dump file for writing");
-        return;
-    }
-
-    size_t written = fwrite(g_observed_values, WORD_SIZE, g_observed_count, f);
-    if (written != g_observed_count) {
-        fprintf(stderr, "[-] Error dumping values: tried to write %zu, but only wrote %zu\n", g_observed_count, written);
-    } else {
-        printf("[+] Dumped %zu entries to %s\n", g_observed_count, filename);
-    }
-
-    fclose(f);
-}
-
-void reset_and_dump_values(const char *filename) {
-    g_observed_count = 0; // Reset count after dumpin
-    dump_values(filename);
-}
-
-// Track when irqs are called and returned
-// Unfortunately, need another check for coverage since dev.c may overwrite our registered callback, so we need to call these from its callbacks too, which can't check if coverage is enabled
-void cov_irq_entry(int irq) {
-    if (coverage) {
-        cc_list.log_buf.buffer[(uint16_t)cc_list.log_buf.index / 4] = 0xFFFFFFFF;
-        cc_list.log_buf.index = (uint16_t)(cc_list.log_buf.index + 4);
-    }
-}
-void cov_irq_exit(int irq) {
-    if (coverage) {
-        cc_list.log_buf.buffer[(uint16_t)cc_list.log_buf.index / 4] = 0xFFFFFFFD;
-        cc_list.log_buf.index = (uint16_t)(cc_list.log_buf.index + 4);
-    }
-}
-
-void bbl_add(uint32_t pc) {
-    guint bbl_pc = pc & (~1ULL);
-    if (!g_hash_table_lookup(bbl_set, GUINT_TO_POINTER(bbl_pc))) {
-        guint timestamp = (guint)(g_get_monotonic_time() / 1000);
-
-        g_hash_table_insert(
-            bbl_set,
-            GUINT_TO_POINTER(bbl_pc),
-            GUINT_TO_POINTER(timestamp)
-        );
-    }
-}
-
-void dump_bbl(void)
-{
-    if (!bbl_set) {
-        utils_die("bbl_set is not initialized");
-    }
-
-    FILE *f = fopen(bbl_dump_path, "w");
-    if (!f) {
-        utils_die("Failed to open dump file for writing");
-    }
-
-    GHashTableIter iter;
-    gpointer key, value;
-    int total = 0;
-
-    g_hash_table_iter_init(&iter, bbl_set);
-
-    while (g_hash_table_iter_next(&iter, &key, &value)) {
-        guint pc = GPOINTER_TO_UINT(key);
-        guint timestamp = GPOINTER_TO_UINT(value);
-
-        /* Write as: hex_pc<TAB>timestamp */
-        fprintf(f, "%08x\t%u\n", pc, timestamp);
-
-        total++;
-    }
-
-    fclose(f);
-
-    printf("Dumped %d blocks\n", total);
-}
-
-
-void bbl_init(void)
-{
-    int total = 0;
-
-    bbl_set = g_hash_table_new(g_direct_hash, g_direct_equal);
-    if (!bbl_set) {
-        utils_die("Failed to allocate bbl_set");
-    }
-
-    FILE *f = fopen(bbl_dump_path, "r");
-    if (!f) {
-        printf("Allocating new bbl_set\n");
-        return;
-    }
-
-    guint pc;
-    guint timestamp;
-
-    /* Read lines like: 08001234<TAB>1573 */
-    while (fscanf(f, "%x\t%u", &pc, &timestamp) == 2) {
-        total++;
-
-        g_hash_table_insert(
-            bbl_set,
-            GUINT_TO_POINTER(pc),
-            GUINT_TO_POINTER(timestamp)
-        );
-    }
-
-    fclose(f);
-
-    printf("Loaded %d blocks\n", total);
-}
 
 void* tracer(void* arg) {
 	cc_list.count =1;
@@ -989,28 +849,14 @@ void* tracer(void* arg) {
 	cc_ret.entry->reg = 15;
 	cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
 	uint16_t tracer_index =0;
-    int irq_depth = 0;
 
 	tracer_ready=1;
 
 	//Maybe make read atomic
 	while(true) {
 		while((uint16_t) (cc_list.log_buf.index - tracer_index)) {
-            bool special_val = false;
             uint32_t value = cc_list.log_buf.buffer[tracer_index/4];
-            if (value == 0xFFFFFFFF) {
-                irq_depth++;
-                special_val = true;
-            }
-            if (value == 0xFFFFFFFD) {
-                irq_depth--;
-                special_val = true;
-            }
-
-            if (special_val == false) {
-                if (irq_depth == 0) add_observed_value(value);
-                if (bbl_enable) bbl_add(value);
-            }
+            fuzz_add_observed_value(value);
 
 			tracer_index +=4;//32bit PC
 		}
@@ -1021,12 +867,8 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
 	printf("FastDyn Exit.\n");
 	if (coverage) {
-		dump_values(DEFAULT_DUMP_PATH);
+        fuzz_dump_bbl();
 	}
-
-    if (bbl_enable) {
-        dump_bbl();
-    }
 }
 
 // lookup_callback function moved to virtuals.c
@@ -1121,7 +963,6 @@ void parse_introspect_args(int argc, char **argv) {
     
 }
 
-void initialize_anchor(char* args);
 void parse_rules_file(const char *filename);
 void parse_rules_file(const char *filename) {
     FILE *f = fopen(filename, "r");
@@ -1155,11 +996,7 @@ void parse_rules_file(const char *filename) {
             fprintf(stderr, "Max rules limit reached (%d), skipping rest\n", MAX_RULES);
             break;
         }
-#if ENABLE_LIBFUZZ
-        if (!strcmp("anchor", cb_name)) {
-            initialize_anchor(args);
-        }
-#endif
+        
         rules[rules_count].address = strtoull(addr_str, NULL, 0);
         rules[rules_count].func = cb;
 
@@ -1216,7 +1053,7 @@ static int core_parse_arguments(int argc, char ** argv) {
             perror("Failed to create thread");
             exit(1);
         }
-        qemu_plugin_register_irq_hook(cov_irq_entry, cov_irq_exit);
+        fuzz_bbl_init();
     } else {
         coverage = 0;
     }
@@ -1226,14 +1063,6 @@ static int core_parse_arguments(int argc, char ** argv) {
 
     //parse args for introspection
     parse_introspect_args(argc, argv);
-    //basic block coverage calculator
-    const char *arg = utils_get_arg("bbl", argc, argv);
-    if (!arg_is_disabled(arg) && arg) {
-        bbl_enable = 1;
-        if (strcmp(arg, "1") != 0 && strcasecmp(arg, "true") != 0) {
-            //bbl_dump_path = arg; // treat as path
-        }
-    }
 
     filename = utils_get_arg("logger", argc, argv);
     if (filename) {
@@ -1265,10 +1094,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 			utils_die("Device Init Failed");
 	}
     #endif
-
-    if (bbl_enable) {
-        bbl_init();
-    }
 
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);

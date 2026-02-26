@@ -39,7 +39,6 @@ def parser(out_dir, machine_name, toml_config, svd_path):
 
     q.coverage           = toml_parser.machine_info.get("coverage", False)
     q.finline            = toml_parser.machine_info.get("finline", None)
-    q.bbl_coverage       = toml_parser.machine_info.get("bbl_coverage", None)
     q.print_command       = toml_parser.machine_info.get("print_command", False)
 
     #add cmsis svd if Platform name provided by the user

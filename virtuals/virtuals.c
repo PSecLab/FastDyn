@@ -28,6 +28,8 @@
     #include "ardurover_virtuals.c"
 #endif
 
+#include "fuzz.h"
+
 #include "introspection/inspct_freertos.c"
 #include "introspection/inspct_chibios.c"
 #include "introspection/inspct.c"
@@ -42,9 +44,6 @@ extern void qemu_set_register(uint32_t value, int reg);
 #include <Python.h>
 #include "../python/python.c"
 #endif
-
-extern void anchor(unsigned int cpu_index, void *udata);
-extern void virt_assert(unsigned int cpu_index, void *udata);
 
 //TODO: temporary
 #if ENABLE_SUNDIALS

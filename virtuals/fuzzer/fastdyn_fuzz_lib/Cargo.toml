@@ -1,0 +1,37 @@
+[package]
+name = "fastdyn_fuzzer"
+version = "0.15.4"
+authors = [
+  "Arslan Khan <arslankhan52@gmail.com>",
+]
+edition = "2021"
+
+[lib]
+name = "fastdyn_fuzzer"
+crate-type = ["cdylib"]
+
+[features]
+default = ["std", "bloom_input_filter"]
+tui = ["libafl/tui_monitor"]
+bloom_input_filter = ["std"]
+std = []
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = 3
+debug = true
+
+[dependencies]
+bincode = "1"
+libafl = { path = "../../../crates/libafl/" }
+libafl_bolts = { path = "../../../crates/libafl_bolts/" }
+memmap2 = "0.9"
+once_cell = "1.21.3"
+lazy_static = "1.4"
+nix = "0.23"
+serde = { version = "1", features = ["derive"] }

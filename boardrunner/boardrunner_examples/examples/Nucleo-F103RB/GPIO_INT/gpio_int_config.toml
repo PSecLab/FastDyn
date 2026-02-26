@@ -42,7 +42,6 @@ semihosting = true
 semihosting_config = "enable=on,target=native"
 coverage=false
 finline='None'
-bbl_coverage=true             #set to true or false to calculate bbl coverage
 
 [CPU]
 [[CPU.cpu0]]

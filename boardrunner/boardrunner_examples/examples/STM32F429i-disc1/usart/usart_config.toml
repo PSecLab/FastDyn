@@ -19,8 +19,6 @@ semihosting_config = "enable=on,target=native"
 coverage = true
 finline  = ""
 
-bbl_coverage = true
-
 
 
 # ==============================================================================
@@ -101,6 +99,11 @@ bbl_coverage = true
   # level  = DEBUG
   # output = stderr
   """
+
+  [[CPU.cpu0.virtuals]]
+  at = "0x080006D6"
+  instruction = "anchor"
+  args = ""
 
 # ==============================================================================
 # Device model defaults (global settings per model type)

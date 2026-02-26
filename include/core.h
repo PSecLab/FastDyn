@@ -31,22 +31,7 @@ int core_read_ram(uintptr_t address, size_t size, void* buffer);
  */
 int core_write_ram(uintptr_t address, size_t size, const void* buffer);
 
-void cov_irq_entry(int irq);
-void cov_irq_exit(int irq);
-
-// fuzz buffer read
-int fuzz_buffer_read(char *buf, size_t buf_size);
-
-// fuzz finish
-void fuzz_finish();
-
-// fuzz report assert
-void fuzz_report_assert(bool fatal);
-
-void add_observed_value(uint32_t val);
-uint32_t dump_trace_info(void *hFuzz);
-void reset_and_dump_values(const char *filename);
-void print_unique_bbl();
-void dump_bbl();
+// Wrapper for qemu's irq registration, allows multiple hooks
+void core_register_irq_hook(void (*cb)(int), void (*cb_end)(int));
 #endif /* CORE_H */
 

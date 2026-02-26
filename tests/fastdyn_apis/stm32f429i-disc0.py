@@ -19,7 +19,7 @@ cpu0 = machine0.add_cpu(
     introspect=False,
     )
 
-machine0.add_cmsis_svd(cmsis_svd="third_party/cmsis-svd-data")
+machine0.add_cmsis_svd(cmsis_svd="third_party/common/cmsis-svd-data")
 
 cpu0.add_map_file("/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt")
 

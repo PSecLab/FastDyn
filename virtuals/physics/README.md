@@ -146,7 +146,7 @@ bash ../roverv462.sh
 
 ## Running OPTIFUZZ
 
-To run OPTIFUZZ, assuming youhave completed all of the steps above, you will need to build the Rust fuzzer located in the `fuzzer/libafl_phi` directory of the COURBET repository.
+To run OPTIFUZZ, assuming youhave completed all of the steps above, you will need to build the Rust fuzzer located in the `virtuals/fuzzer/libafl_phi` directory of the COURBET repository.
 
 Install Rust if you haven't already and then build the fuzzer:
 

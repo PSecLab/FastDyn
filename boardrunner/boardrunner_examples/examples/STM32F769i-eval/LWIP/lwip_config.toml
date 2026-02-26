@@ -17,7 +17,6 @@ semihosting        = true
 semihosting_config = "enable=on,target=native"
 
 coverage = true
-bbl_coverage = false # Adds onto coverage, so coverage must be enabled
 finline  = ""
 
 # ==============================================================================

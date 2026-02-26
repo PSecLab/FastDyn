@@ -220,7 +220,6 @@ DeviceModel* find_device_model(const char *name) {
 void dev_notify_irq(int number) {
 	time_t sec;
     long usec;
-    cov_irq_entry(number);
     dev_get_timestamp(&sec, &usec);
 	DeviceModel* dev = irq_lut[number];
 #ifdef DEV_LOGGER
@@ -250,7 +249,6 @@ void dev_notify_irq(int number) {
 void dev_irqret_hook(int number) {
     time_t sec;
     long usec;
-    cov_irq_exit(number);
     dev_get_timestamp(&sec, &usec);
 #ifdef DEV_LOGGER
         if (twintrace_mode != TT_OFF) {
@@ -726,7 +724,7 @@ int dev_init(int argc, char ** argv) {
 
 	if (dev_model_info) {
 		// Regisgter IRQ listener for logging
-	    qemu_plugin_register_irq_hook(dev_notify_irq, dev_irqret_hook);
+	    core_register_irq_hook(dev_notify_irq, dev_irqret_hook);
 		qemu_plugin_unimp_export_device((void *)&importer);
 		io_logger = fopen("io.log", "w");
 

@@ -65,7 +65,7 @@ def run(config, map_file, work_dir, svd):
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
 
-    svd_path = svd if svd is not None else "third_party/cmsis-svd-data"
+    svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
 
     #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
     fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
@@ -204,7 +204,7 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
         os.makedirs(work_dir)
 
         #discover svd
-        svd_input = svd if svd is not None else "third_party/cmsis-svd-data"
+        svd_input = svd if svd is not None else "third_party/common/cmsis-svd-data"
         platform = (board or "").strip()
         if not platform and (svd is None):
             raise click.UsageError(
@@ -376,7 +376,7 @@ def verifier(hardware_log, emulation_log, dev_model, model_name, board, peripher
 
 
     #discover svd
-    svd_input = svd if svd is not None else "third_party/cmsis-svd-data"
+    svd_input = svd if svd is not None else "third_party/common/cmsis-svd-data"
     platform = (board or "").strip()
     if not platform and (svd is None):
         raise click.UsageError(

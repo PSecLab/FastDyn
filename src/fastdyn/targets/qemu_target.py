@@ -84,7 +84,7 @@ def _build_qemu_env(qemu_cmd):
         # Add known sibling runtime-lib directories automatically.
         if os.path.basename(plugin_dir) == "build":
             repo_root = os.path.dirname(plugin_dir)
-            extra_paths.append(os.path.join(repo_root, "fuzzer/fastdyn_fuzz_lib/target/release"))
+            extra_paths.append(os.path.join(repo_root, "virtuals/fuzzer/fastdyn_fuzz_lib/target/release"))
             extra_paths.append(os.path.join(repo_root, "device_models/postmartem/verifier"))
 
     extra_paths = [p for p in extra_paths if os.path.isdir(p)]
@@ -252,7 +252,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     elif twintrace_opt == "None":
         twintrace_opt= "off"
 
-    # ------------- generate writable regions for fuzzer ---------------
+    # ------------------------ Fuzzer ------------------------
     if (opts.coverage):
         binary_wrange.run(f"{out_path}/bin-writable-ranges", cpu0.binary)
 
@@ -287,9 +287,6 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
 
     if (introspection):
         plugin_kv.extend(introspect_plugin)
-
-    if (opts.bbl_coverage):
-        plugin_kv.append(f"bbl={out_path}/bbl.txt")
 
     if opts.finline is not None:
         plugin_kv.append(f"finline={opts.finline}")

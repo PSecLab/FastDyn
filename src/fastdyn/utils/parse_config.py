@@ -330,7 +330,7 @@ def discover_svd_files(svd_path: str):
 def resolve_svd(
     platform_or_board: str,
     svd: str | None = None,
-    default_dir: str | None = "third_party/cmsis-svd-data",
+    default_dir: str | None = "third_party/common/cmsis-svd-data",
     auto_discover: bool = True,
     search_root: str | None = None,
 ):
