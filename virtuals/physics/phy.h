@@ -77,12 +77,29 @@ typedef struct phy_backend {
 
 } phy_backend_t;
 
+typedef struct phy_backend_entry {
+    const char *name;
+    phy_backend_t *backend;
+} phy_backend_entry_t;
 
-/* Registration */
-int phy_register_backend(phy_backend_t *backend);
+/**
+ * @brief Select the active physics backend by name.
+ *
+ * Known names include "gazebo" (and future engines like "casadi").
+ * Returns 1 on success, 0 if the name is undefined.
+ */
+int phy_select_backend(const char *name);
 
-/* Generic API */
+/**
+ * @brief Generic API for physics backends
+ *
+ * All functions return 1 on success and 0 on failure.
+ * Failure can occur when there is no backend registered
+ * or if the backend does not implement the function.
+ */
 int phy_init(void);
+// TODO: Allow user to specify the size of the IMU batch and implement buffering in the backend
+// Could be a pointer to an array of imu_batch_t structs, along with a size parameter
 int phy_get_imu_batch(imu_batch_t *batch);
 int phy_get_mag_reading(vector3d_t *mag);
 int phy_get_navsat_reading(gps_data_t *gps_data);

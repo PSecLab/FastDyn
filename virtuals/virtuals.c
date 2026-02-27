@@ -26,8 +26,7 @@
 #if ENABLE_LIBGZ
     #include "phy.h"
     #include "phy.c"
-    #include "gazebo.h"
-    #include "ardurover_virtuals.c"
+    #include "physics/flight_controllers/ardupilot/ardupilot.c"
 #endif
 
 #include "fuzz.h"
@@ -265,19 +264,14 @@ void kick_irq(void *opaque) {
 #if ENABLE_LIBGZ
     // update the sim time global in ardurover_virtuals.c
     atomic_store(&last_sim_time_ns, (int64_t)qemu_plugin_get_virtual_timer());
-    // initialize physics backend
+    // TODO:
     static bool physics_initialized = false;
-    // TODO: Add dynamic registration of different physics backends
     if (!physics_initialized) {
-        if (!phy_register_backend(&gazebo_backend)) {
-            fprintf(stderr, "Failed to register physics backend\n");
-        } else {
-            if (phy_init() != 1) {
-                fprintf(stderr, "Failed to initialize physics backend\n");
-            } else {
-                physics_initialized = true;
-            }
+        if (!phy_select_backend("gazebo") || !phy_init()) {
+            fprintf(stderr, "Failed to initialize physics backend\n");
+            exit(EXIT_FAILURE);
         }
+        physics_initialized = true;
     }
 #endif
 
