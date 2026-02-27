@@ -1,0 +1,379 @@
+#include <gz/transport/Node.hh>
+#include <gz/msgs/pose.pb.h>
+#include <gz/msgs/vector3d.pb.h>
+#include <gz/msgs/quaternion.pb.h>
+#include <gz/msgs/boolean.pb.h>
+#include <gz/msgs/model.pb.h>
+#include <gz/msgs/magnetometer.pb.h>
+#include <gz/msgs/uint32.pb.h>
+#include <gz/msgs/navsat.pb.h>
+#include <gz/msgs/uint32.pb.h>
+#include <cmath>
+#include <cstdio>
+#include "gazebo.h"
+#include <string>
+#include <vector>
+#include <sstream>
+#include <iostream>
+#include <cctype>
+#include <cstdlib>
+#include <mutex>
+#include <charconv>
+
+template <typename ResponseT>
+bool request_service(const std::string &service_name, ResponseT &response,
+                     unsigned int timeout_ms = 5000)
+{
+    gz::transport::Node node;
+    gz::msgs::Empty request;
+
+    bool result;
+    bool executed = node.Request(service_name, request, timeout_ms, response, result);
+
+    return executed && result;
+}
+
+bool request_run_until_time(double run_until_time_s) {
+    gz::transport::Node node;
+    gz::msgs::Time request;
+    request.set_sec(static_cast<uint32_t>(std::floor(run_until_time_s)));
+    request.set_nsec(static_cast<uint32_t>((run_until_time_s - std::floor(run_until_time_s)) * 1e9));
+
+    gz::msgs::Boolean response;
+    bool result;
+    bool executed = node.Request("/set_run_until_time", request, 5000, response, result);
+
+    return executed && result && response.data();
+}
+
+// Helper: parse a JSON array of numbers into a vector of doubles
+std::vector<double> parse_array(const std::string &s) {
+    std::vector<double> result;
+    std::string num;
+    bool in_number = false;
+    for (char c : s) {
+        if ((c == '-') || (c == '+') || (isdigit(c)) || (c == '.') || (c == 'e') || (c == 'E')) {
+            num += c;
+            in_number = true;
+        } else if (in_number) {
+            result.push_back(std::stod(num));
+            num.clear();
+            in_number = false;
+        }
+    }
+    if (!num.empty()) result.push_back(std::stod(num));
+    return result;
+}
+
+extern "C" {
+
+/**
+ * @brief Sets the rover's position as a demo
+ *
+ * This function sets the rover's position in the Gazebo simulation
+ * to a fixed point with a specified yaw angle. Basically just making
+ * it turn in place.
+ *
+ * @param yaw_deg Yaw angle in degrees
+ * @return 1 on success, 0 on failure
+ */
+static int set_pose(double yaw_deg);
+
+/**
+ * @brief Gets the current joint states of the rover's motors
+ *
+ * This function retrieves the current positions of the rover's motors
+ * from the Gazebo simulation.
+ *
+ * @param motor_0_pos Pointer to store the position of motor 0
+ * @param motor_2_pos Pointer to store the position of motor 2
+ * @return 1 on success, 0 on failure
+ */
+static int get_joint_state(double *motor_0_pos, double *motor_2_pos);
+
+/**
+ * @brief Gets the latest magnetometer reading
+ *
+ * This function retrieves the latest magnetometer reading from the
+ * Gazebo simulation.
+ *
+ * @param mag_x Pointer to store the X component of the magnetic field
+ * @param mag_y Pointer to store the Y component of the magnetic field
+ * @param mag_z Pointer to store the Z component of the magnetic field
+ * @return 1 on success, 0 on failure
+ */
+static int get_mag_reading(vector3d_t *mag);
+
+/**
+ * @brief Gets the latest GPS reading
+ *
+ * This function retrieves the latest GPS reading from the Gazebo
+ * simulation.
+ *
+ * @param gps_data Pointer to a gps_data_t struct to store the GPS data
+ * @return 1 on success, 0 on failure
+ */
+static int get_navsat_reading(gps_data_t *gps_data);
+
+/**
+ * @brief Sets the PWM value for a specific servo channel
+ *
+ * This function sets the PWM value for a specified servo channel
+ * in the Gazebo simulation.
+ *
+ * @param channel The servo channel (0-15)
+ * @param pwm The PWM value to set (0-2000)
+ * @return 1 on success, 0 on failure
+ */
+static int set_servo_pwm(int channel, int pwm);
+
+/**
+ * @brief Advances the simulation by a specified number of steps
+ *        and retrieves the current SITL state data.
+ *
+ * This function calls the /step_simulation service in Gazebo to
+ * advance the simulation by the given number of steps. It then
+ * retrieves the current SITL state data including IMU, position,
+ * attitude, velocity, rangefinder readings, wind vane, and airspeed.
+ *
+ * @param run_until_time The simulation time to run until
+ * @return 1 on success, 0 on failure
+ */
+static int advance_simulation(double run_until_time);
+
+/**
+ * @brief Gets a batch of IMU readings
+ *
+ * This function retrieves a batch of IMU readings from the Gazebo
+ * simulation. After profiling, it was determined the IMU driver function is hit ~60
+ * times per second, so we use a circular buffer to store the last 17 readings to reach
+ * approximately 1000 Hz.
+ *
+ * @param imu_batch Pointer to an imu_batch_t struct to store the IMU data
+ * @return 1 on success, 0 on failure
+ */
+static int get_imu_batch(imu_batch_t *imu_batch);
+
+/**
+ * @brief Sets the program counter for hardfault simulation
+ *
+ * This function sets the program counter (PC) value to simulate
+ * a hardfault occurring at that address in the Gazebo simulation.
+ *
+ * @param pc The program counter address to set
+ * @return 1 on success, 0 on failure
+ */
+static int set_hardfault_pc(uint32_t pc);
+
+// Helper: create quaternion from yaw (Z axis rotation)
+static void quaternion_from_yaw(double yaw, gz::msgs::Quaternion *quat)
+{
+    double half_yaw = yaw * 0.5;
+    quat->set_x(0);
+    quat->set_y(0);
+    quat->set_z(std::sin(half_yaw));
+    quat->set_w(std::cos(half_yaw));
+}
+
+// Set pose service call, returns 0 on success, -1 on failure
+static int set_pose(double yaw_deg)
+{
+    gz::transport::Node node;
+
+    gz::msgs::Pose pose_msg;
+    pose_msg.set_name("r1_rover");
+
+    // Position
+    auto *pos = pose_msg.mutable_position();
+    pos->set_x(0.0);
+    pos->set_y(0.0);
+    pos->set_z(0.1);
+
+    // Orientation quaternion
+    auto *quat = pose_msg.mutable_orientation();
+    double yaw_rad = yaw_deg * M_PI / 180.0;
+    quaternion_from_yaw(yaw_rad, quat);
+
+    // Boolean response
+    gz::msgs::Boolean rep;
+    bool result;
+    bool executed = node.Request("/world/runway/set_pose", pose_msg, 5000, rep, result);
+
+    if (!executed || !result)
+        return 0;
+
+    return 1;
+}
+
+static int get_joint_state(double *motor_0_pos, double *motor_2_pos) {
+    gz::msgs::Model response;
+    if (!request_service("/get_joint_state", response)) {
+        return 0;
+    }
+    *motor_0_pos = response.joint(0).axis1().position();
+    *motor_2_pos = response.joint(1).axis1().position();
+    return 1;
+}
+
+static int get_mag_reading(vector3d_t *mag) {
+    gz::msgs::Magnetometer response;
+    if (!request_service("/get_corrected_mag_reading", response)) {         // replace with /get_corrected_mag_reading not to use wrong gazebo data
+        return 0;
+    }
+    mag->x = response.field_tesla().x();
+    mag->y = response.field_tesla().y();
+    mag->z = response.field_tesla().z();
+    return 1;
+}
+
+static int get_navsat_reading(gps_data_t *gps_data) {
+    gz::msgs::NavSat response;
+    if (!request_service("/get_navsat_reading", response)) {
+        return 0;
+    }
+
+    // gz::msgs::Float yaw_rads;
+    // if (!request_service("/get_yaw_reading", yaw_rads)) {
+    //     return 0;
+    // }
+
+    // convert radians to degrees
+    // TODO: fully remove but for now keep yaw as 0.0f
+    float yaw_deg = 0.0f;
+
+    gps_data_t data;
+    data.lat = response.latitude_deg();
+    data.lon = response.longitude_deg();
+    data.alt = response.altitude();
+    data.vel_n = response.velocity_north();
+    data.vel_e = response.velocity_east();
+    data.vel_d = -1 * response.velocity_up();
+    data.sec = (uint64_t)response.header().stamp().sec();
+    data.nsec = (uint32_t)response.header().stamp().nsec();
+    data.yaw_deg = yaw_deg;
+
+    *gps_data = data;
+
+    return 1;
+}
+
+static int advance_simulation(double run_until_time) {
+    // printf("Advancing simulation to time: %.6f s\n", run_until_time);
+    if (!request_run_until_time(run_until_time)) {
+        return 0;
+    }
+    return 1;
+}
+
+static int set_servo_pwm(int channel, int pwm) {
+    if (channel < 0 || channel >= 16 || pwm < 0 || pwm > 2000) {
+        return 0;
+    }
+
+    gz::transport::Node node;
+    gz::msgs::StringMsg request;
+    request.set_data(std::to_string(channel) + "," + std::to_string(pwm));
+
+    gz::msgs::Boolean response;
+    bool result;
+    bool executed = node.Request("/set_servo", request, 5000, response, result);
+
+    if (!executed || !result || !response.data()) {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int get_imu_batch(imu_batch_t *imu_batch) {
+    // printf("Getting IMU batch\n");
+    gz::msgs::StringMsg response;
+    bool success = request_service("/get_imu_batch", response);
+    if (!success) {
+        return 0;
+    }
+
+    // data is CSV: first line is count, then each line is accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z
+    std::istringstream ss(response.data());
+    std::string line;
+    // Read count
+    if (!std::getline(ss, line)) {
+        return 0;
+    }
+    int count = std::stoi(line);
+    if (count <= 0 || count > 100) { // arbitrary max limit
+        return 0;
+    }
+    // if (count != 17) {
+    //     return 0;
+    // }
+    // imu_batch->count = count; non existing field
+    for (int i = 0; i < count; i++) {
+        if (!std::getline(ss, line)) {
+            return 0;
+        }
+        std::istringstream line_ss(line);
+        std::string value;
+        // accel_x
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [accel_x, ec] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].accel_body.x);
+        if (ec != std::errc()) return 0;
+        // accel_y
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [accel_y, ec2] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].accel_body.y);
+        if (ec2 != std::errc()) return 0;
+        // accel_z
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [accel_z, ec3] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].accel_body.z);
+        if (ec3 != std::errc()) return 0;
+        // gyro_x
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [gyro_x, ec4] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.x);
+        if (ec4 != std::errc()) return 0;
+        // gyro_y
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [gyro_y, ec5] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.y);
+        if (ec5 != std::errc()) return 0;
+        // gyro_z
+        if (!std::getline(line_ss, value, ',')) return 0;
+        auto [gyro_z, ec6] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.z);
+        if (ec6 != std::errc()) return 0;
+    }
+
+    // debug print out the first
+
+    return 1;
+
+}
+
+static int set_hardfault_pc(uint32_t pc) {
+    gz::transport::Node node;
+    gz::msgs::UInt32 request;
+    request.set_data(pc);
+
+    gz::msgs::Empty response;
+    bool result;
+    bool executed = node.Request("/set_hardfault_pc", request, 5000, response, result);
+    return 1;
+}
+
+static int gz_init(void)
+{
+    // Set initial pose as a demo
+    printf("Gazebo physics engine initialized\n");
+    return 1;
+}
+
+phy_backend_t gazebo_backend = {
+    .name = "gazebo",
+    .init = gz_init,
+    .shutdown = NULL,
+    .get_imu_batch = get_imu_batch,
+    .get_mag_reading = get_mag_reading,
+    .get_navsat_reading = get_navsat_reading,
+    .set_servo_pwm = set_servo_pwm,
+    .advance_simulation = advance_simulation,
+    .get_joint_state = get_joint_state
+};
+
+} // extern "C"

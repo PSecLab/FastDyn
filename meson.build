@@ -71,11 +71,23 @@ endif
 
 # USER FLAGS. USER CAN ADD CUSTOM LIBS
 ENABLE_LIBGZ = get_option('enable_libgz')
+
 if ENABLE_LIBGZ
+  phy_inc = include_directories('virtuals/physics')
+  gz_dir = meson.current_source_dir() + '/virtuals/physics/physics_engines/gazebo/build/lib'
+
   libgz_wrapper_dep = declare_dependency(
-    include_directories: include_directories('./courbet/gazebo'),
-    link_args: ['-L' + meson.current_source_dir() + '/courbet/gazebo/build/lib', '-lgz_wrapper'],
+    include_directories: [
+      include_directories('virtuals/physics/physics_engines/gazebo'),
+      phy_inc,
+    ],
+    link_args: [
+      '-L' + gz_dir,
+      '-lgz_wrapper',
+      '-Wl,-rpath,' + gz_dir
+    ],
   )
+
   deps += libgz_wrapper_dep
 endif
 
