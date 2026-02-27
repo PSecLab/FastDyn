@@ -1,18 +1,31 @@
 #include "phy.h"
 #include <stdio.h>
+#include <string.h>
+#include "physics_engines/gazebo/gazebo.h"
 
 static phy_backend_t *active_backend = NULL;
 
-int phy_register_backend(phy_backend_t *backend)
+static phy_backend_entry_t backends[] = {
+    { "gazebo", &gazebo_backend},
+    // Future engines can be added here, e.g.:
+    // { "casadi", &casadi_backend},
+};
+
+int phy_select_backend(const char *name)
 {
-    if (!backend) {
+    if (!name) {
         return 0;
     }
 
-    active_backend = backend;
+    for (size_t i = 0; i < sizeof(backends) / sizeof(backends[0]); i++) {
+        if (strcmp(name, backends[i].name) == 0) {
+            active_backend = backends[i].backend;
+            return 1;
+        }
+    }
 
-    // printf("Physics backend registered: %s\n", backend->name);
-    return 1;
+    fprintf(stderr, "phy_select_backend: undefined backend '%s'\n", name);
+    return 0;
 }
 
 int phy_init(void)
