@@ -251,7 +251,7 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     ## Required Output Format
 
     ### 1. High-Level Summary
-    A concise, one-paragraph summary of this peripheral's likely purpose and overall behavior, considering the platform context.
+    A concise, one-paragraph summary explaining the most likely reason for the mismatches.
 
     ### 2. Register Analysis
     A bulleted list of the important registers mentioned in the traces and their inferred functions.
@@ -409,7 +409,7 @@ def iteration_prompt_gen_multiple_periph(
     Based **only** on the data provided above, output:
 
     ### 1. Previous Model Failure Analysis
-    One paragraph explaining the most likely reason for the mismatches.
+    A concise, one-paragraph summary explaining the most likely reason for the mismatches.
 
     ### 2. Register Analysis
     Bullet list of important registers and inferred roles.

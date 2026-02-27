@@ -143,8 +143,7 @@ class MMIOAccess:
 class MMIOAnalyzer:
     def __init__(self, svd_device):
         try:
-            parser = svd_device
-            self.device = parser.get_device()
+            self.device = svd_device
             self._build_peripheral_map()
         except FileNotFoundError:
             fastdyn_log.error(f"SVD Device not correctly passed to context minimizer"); sys.exit(1)

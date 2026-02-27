@@ -1,0 +1,1 @@
+This firmware by default blinks led on GPIOB but can be used to blink other two leds as well by pressing the push button. But, for this test, we will use the GPIOB by default for modeling. Please refer to model.c
