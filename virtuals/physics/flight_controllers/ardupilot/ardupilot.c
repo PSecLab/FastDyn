@@ -46,7 +46,7 @@ static void catch_up(void *opaque)
         if (sim_ns != last_seen)
         {
             double target_time_s = (double)sim_ns / 1e9;
-            if (!phy_advance_simulation(target_time_s))
+            if (!advance_simulation(target_time_s))
             {
                 fprintf(stderr, "Failed to advance simulation to %.6f s\n", target_time_s);
             }
@@ -313,7 +313,7 @@ void write_channel(unsigned int cpu_index, void *udata)
 {
     uint8_t chan = (uint8_t)qemu_get_register(ARM_V7M_R1);
     uint16_t pwm = (uint16_t)qemu_get_register(ARM_V7M_R2);
-    if (!phy_set_servo_pwm(chan, pwm))
+    if (!set_servo_pwm(chan, pwm))
     {
         fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
     }
@@ -408,7 +408,7 @@ void copy_wheel_encoder_state_to_frontend(unsigned int cpu_index, void *udata)
 
     double motor0_pos = 0.0;
     double motor2_pos = 0.0;
-    if (!phy_get_joint_state(&motor0_pos, &motor2_pos))
+    if (!get_joint_state(&motor0_pos, &motor2_pos))
     {
         fprintf(stderr, "Failed to get joint state from Gazebo\n");
         return;
@@ -465,7 +465,7 @@ static void send_gps_mavlink_message(void *opaque)
     (void)opaque;
 
     gps_data_t gps_data;
-    if (!phy_get_navsat_reading(&gps_data))
+    if (!get_navsat_reading(&gps_data))
     {
         fprintf(stderr, "Failed to get GPS reading from Gazebo\n");
         return;
@@ -678,7 +678,7 @@ void ins_block_read(unsigned int cpu_index, void *udata)
         }
 
         imu_batch_t imu_batch;
-        int success = phy_get_imu_batch(&imu_batch);
+        int success = get_imu_batch(&imu_batch);
         if (!success)
         {
             fprintf(stderr, "Failed to get IMU batch for INS block read\n");
@@ -907,9 +907,9 @@ void compass_calibrate(unsigned int cpu_index, void *udata)
 
 // variable for profiling compass reads
 // #if PROFILE_COMPASS_READS == 1
-// static volatile double compass_total_elapsed_time_s = 0.0;
-// static volatile double compass_last_time_s = 0.0;
-// static volatile int compass_read_count = 0;
+static volatile double compass_total_elapsed_time_s = 0.0;
+static volatile double compass_last_time_s = 0.0;
+static volatile int compass_read_count = 0;
 // #endif // PROFILE_COMPASS_READS
 
 /**
@@ -932,8 +932,10 @@ void compass_read_block(unsigned int cpu_index, void *udata)
         return;
     }
 
-    vector3d_t mag;
-    if (!phy_get_mag_reading(&mag))
+    double mag_x = 0.0;
+    double mag_y = 0.0;
+    double mag_z = 0.0;
+    if (!get_mag_reading(&mag_x, &mag_y, &mag_z))
     {
         fprintf(stderr, "Failed to get magnetometer reading from Gazebo\n");
         qemu_set_register(0, ARM_V7M_R0);                             // failure
@@ -942,25 +944,25 @@ void compass_read_block(unsigned int cpu_index, void *udata)
     }
 
     // #if PROFILE_COMPASS_READS == 1
-    // if (compass_read_count == 0)
-    // {
-    //     compass_last_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
-    // }
-    // else
-    // {
-    //     double current_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
-    //     double elapsed_s = current_time_s - compass_last_time_s;
-    //     compass_total_elapsed_time_s += elapsed_s;
-    //     compass_last_time_s = current_time_s;
-    //     if (compass_read_count % 10 == 0)
-    //     {
-    //         double average_interval_ms = (compass_total_elapsed_time_s / compass_read_count) * 1000.0;
-    //         double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
-    //         // printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
-    //         //    average_interval_ms, frequency_hz, compass_read_count);
-    //     }
-    // }
-    // compass_read_count++;
+    if (compass_read_count == 0)
+    {
+        compass_last_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+    }
+    else
+    {
+        double current_time_s = (double)qemu_plugin_get_virtual_timer() / 1e9;
+        double elapsed_s = current_time_s - compass_last_time_s;
+        compass_total_elapsed_time_s += elapsed_s;
+        compass_last_time_s = current_time_s;
+        if (compass_read_count % 10 == 0)
+        {
+            double average_interval_ms = (compass_total_elapsed_time_s / compass_read_count) * 1000.0;
+            double frequency_hz = 1.0 / (average_interval_ms / 1000.0);
+            // printf("Compass read average interval: %.3f ms (%.2f Hz) over %d reads\n",
+            //    average_interval_ms, frequency_hz, compass_read_count);
+        }
+    }
+    compass_read_count++;
     // #endif // PROFILE_COMPASS_READS
 
     // Raw magnetometer values from Gazebo
@@ -970,9 +972,9 @@ void compass_read_block(unsigned int cpu_index, void *udata)
 
     // transformation of this data to HMC5843 format occurs in `convert_to_hmc5843`
     SimulatorMagnetometer sim_data = {
-        .mag_x_gauss = (float)mag.x,
-        .mag_y_gauss = (float)mag.y,
-        .mag_z_gauss = (float)mag.z};
+        .mag_x_gauss = (float)mag_x,
+        .mag_y_gauss = (float)mag_y,
+        .mag_z_gauss = (float)mag_z};
 
     // convert to raw format
     HMC5843RawData raw_data = convert_to_hmc5843(sim_data);
@@ -1708,7 +1710,7 @@ void set_hardfault_status(unsigned int cpu_index, void *udata)
     uint32_t faulting_pc = 0;
     qemu_plugin_read_memory(sp + 24, (uint8_t *)&faulting_pc, sizeof(uint32_t));
     fprintf(stderr, "Hardfault at PC: 0x%08X\n", faulting_pc);
-    // set_hardfault_pc(faulting_pc);
+    set_hardfault_pc(faulting_pc);
 }
 
 // static char g_fuzzing_buf[1024];
