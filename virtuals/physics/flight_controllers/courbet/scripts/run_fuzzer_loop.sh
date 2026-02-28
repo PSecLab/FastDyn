@@ -1,0 +1,1 @@
+while true; do bash ../roverv462_fuzz.sh; echo "*********** Crash detected ***********"; sleep 10; done

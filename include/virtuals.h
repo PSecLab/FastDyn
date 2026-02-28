@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "common.h"
 #include "config.h"
-#include "ardupilot_virtuals.h"
 
 /**
  * @brief Print the value of a CPU register.

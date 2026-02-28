@@ -1,0 +1,61 @@
+{
+  "scenario_name": "name",
+  "description": "Rover test on _ terrain with variable _ and sensor noise",
+
+  "environment": {
+    "temperature_c": 20.0,
+    "pressure_pa": 101325,
+    "wind": {
+      "x": 3.0,
+      "y": 0.0,
+      "z": 0.0
+    }
+  },
+
+  "terrain": {
+    "type": ["rocky", "sandy", "grassy", "icy"]
+  },
+
+  "sensor_noise": {
+    "imu": {
+      "noise_type": ["white", "pink", "brown"],
+      "mean": [-0.05, 0.05],
+      "std": [0.001, 0.05]
+    },
+    "gps": {
+      "noise_type": ["uniform", "poisson"],
+      "low": [-2.0, -0.5],
+      "high": [0.5, 2.0],
+      "lam": [1.0, 5.0]
+    },
+    "magnetometer": {
+      "noise_type": ["white"],
+      "mean": [0.0],
+      "std": [0.001, 0.01]
+    },
+    "barometer": {
+      "noise_type": ["white"],
+      "mean": [0.0],
+      "std": [0.5, 2.0]
+    }
+  },
+
+  "flight_control": {
+    "vehicle": "Rover",
+    "parameters": {
+      "ATC_STR_RAT_P": [0.2, 0.4],
+      "ATC_STR_RAT_I": [0.05, 0.15],
+      "ATC_STR_RAT_D": [0.005, 0.02],
+      "CRUISE_SPEED": [1.0, 3.0],
+      "GND_SPEED_MAX": [3.0, 6.0]
+    }
+  },
+
+  "mission": {
+    "mode": ["AUTO", "GUIDED"],
+    "waypoints": [
+      {"lat": [39.7947, 39.7955], "lon": [-84.087, -84.085], "alt": [265.0, 266.0]},
+      {"lat": [39.7955, 39.7960], "lon": [-84.086, -84.084], "alt": [265.0, 266.0]}
+    ]
+  }
+}

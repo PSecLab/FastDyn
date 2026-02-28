@@ -1,0 +1,58 @@
+[
+  {
+    "seq": 0,
+    "frame": 3,
+    "command": 16,
+    "current": 1,
+    "autocontinue": 1,
+    "param1": 0,
+    "param2": 0,
+    "param3": 0,
+    "param4": 0,
+    "x": 39.794901,
+    "y": -84.086317,
+    "z": 0
+  },
+  {
+    "seq": 1,
+    "frame": 3,
+    "command": 16,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 0,
+    "param2": 0,
+    "param3": 0,
+    "param4": 0,
+    "x": 39.794851,
+    "y": -84.086417,
+    "z": 0
+  },
+  {
+    "seq": 2,
+    "frame": 3,
+    "command": 16,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 0,
+    "param2": 0,
+    "param3": 0,
+    "param4": 0,
+    "x": 39.794751,
+    "y": -84.086317,
+    "z": 0
+  },
+  {
+    "seq": 3,
+    "frame": 3,
+    "command": 16,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 0,
+    "param2": 0,
+    "param3": 0,
+    "param4": 0,
+    "x": 39.79480109851339,
+    "y": -84.08631702793322,
+    "z": 0
+  }
+]

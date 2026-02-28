@@ -1,0 +1,75 @@
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 16, 'system_status': 2, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[SEND][GCS → Drone] PARAM_REQUEST_LIST
+[SEND][GCS → Drone] REQUEST_DATA_STREAM 6
+[SEND][GCS → Drone] REQUEST_DATA_STREAM 10
+[SEND][GCS → Drone] REQUEST_DATA_STREAM 11
+[SEND][GCS → Drone] REQUEST_DATA_STREAM 2
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'Initialising ArduPilot', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'Beginning INS calibration. Do not move vehicle', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'CAM1_TYPE', 'param_value': 0.0, 'param_type': 2, 'param_count': 914, 'param_index': 65535}
+[INFO] Received PARAM_VALUE. Stopping PARAM_REQUEST_LIST.
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'CAM2_TYPE', 'param_value': 0.0, 'param_type': 2, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'ArduRover V4.7.0-dev (60955121)', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'ChibiOS: 88b84600', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'CubeBlack 00000000 00000000 00000000', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'IOMCU: 0 0 0', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'RCOut: Initialising', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'FORMAT_VERSION', 'param_value': 16.0, 'param_type': 4, 'param_count': 914, 'param_index': 0}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'LOG_BITMASK', 'param_value': 65535.0, 'param_type': 6, 'param_count': 914, 'param_index': 1}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'RST_SWITCH_CH', 'param_value': 0.0, 'param_type': 2, 'param_count': 914, 'param_index': 2}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INITIAL_MODE', 'param_value': 0.0, 'param_type': 2, 'param_count': 914, 'param_index': 3}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'SYSID_THISMAV', 'param_value': 1.0, 'param_type': 4, 'param_count': 914, 'param_index': 4}
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 16, 'system_status': 2, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[RECV][Drone → GCS] TIMESYNC {'mavpackettype': 'TIMESYNC', 'tc1': 0, 'ts1': 10534268001}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'SYSID_MYGCS', 'param_value': 255.0, 'param_type': 4, 'param_count': 914, 'param_index': 5}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'TELEM_DELAY', 'param_value': 0.0, 'param_type': 2, 'param_count': 914, 'param_index': 6}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'GCS_PID_MASK', 'param_value': 0.0, 'param_type': 4, 'param_count': 914, 'param_index': 7}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'AUTO_TRIGGER_PIN', 'param_value': -1.0, 'param_type': 2, 'param_count': 914, 'param_index': 8}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'AUTO_KICKSTART', 'param_value': 0.0, 'param_type': 9, 'param_count': 914, 'param_index': 9}
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 16, 'system_status': 2, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 16, 'system_status': 2, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 16, 'system_status': 2, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'Initialising ArduPilot', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYROFFS_X', 'param_value': nan, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYROFFS_Y', 'param_value': nan, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYROFFS_Z', 'param_value': nan, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR_ID', 'param_value': 2162978.0, 'param_type': 6, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR1_CALTEMP', 'param_value': -300.0, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR2OFFS_X', 'param_value': 0.0, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR2OFFS_Y', 'param_value': 0.0, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR2OFFS_Z', 'param_value': 0.0, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR2_ID', 'param_value': 0.0, 'param_type': 6, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR3OFFS_X', 'param_value': 0.0, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR3OFFS_Y', 'param_value': 0.0, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR3OFFS_Z', 'param_value': 0.0, 'param_type': 9, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] PARAM_VALUE {'mavpackettype': 'PARAM_VALUE', 'param_id': 'INS_GYR3_ID', 'param_value': 0.0, 'param_type': 6, 'param_count': 914, 'param_index': 65535}
+[RECV][Drone → GCS] TIMESYNC {'mavpackettype': 'TIMESYNC', 'tc1': 0, 'ts1': 21074936001}
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 0, 'system_status': 4, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'ArduPilot Ready', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'RCOut: None', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'GPS 1: specified as MAV', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'AHRS: DCM active', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 6, 'text': 'GPS 1: detected MAV', 'id': 0, 'chunk_seq': 0}
+[SEND][GCS → Drone] COMMAND_LONG: ARM
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 0, 'system_status': 4, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[RECV][Drone → GCS] COMMAND_ACK {'mavpackettype': 'COMMAND_ACK', 'command': 400, 'result': 4, 'progress': 0, 'result_param2': 0, 'target_system': 255, 'target_component': 0}
+[RECV][Drone → GCS] HEARTBEAT {'mavpackettype': 'HEARTBEAT', 'type': 10, 'autopilot': 3, 'base_mode': 65, 'custom_mode': 0, 'system_status': 4, 'mavlink_version': 3}
+Connected to system 1, component 1
+[SEND][GCS → Drone] HEARTBEAT
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 2, 'text': 'Arm: Gyros not healthy', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 2, 'text': 'Arm: Compass not calibrated', 'id': 0, 'chunk_seq': 0}
+[RECV][Drone → GCS] STATUSTEXT {'mavpackettype': 'STATUSTEXT', 'severity': 2, 'text': 'Arm: Board (0.0v) out of range 4.3-5.8v', 'id': 0, 'chunk_seq': 0}

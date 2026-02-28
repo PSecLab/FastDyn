@@ -1,1 +1,0 @@
-"""Courbet Gdb python tools."""

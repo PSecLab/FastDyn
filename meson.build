@@ -160,9 +160,9 @@ srcs += files(
 
 if ENABLE_LIBGZ
 srcs += files(
-  'libs/gcs_receiver.c',
+  'virtuals/physics/flight_controllers/ardupilot/gcs_receiver.c',
   'libs/ring_buffer.c',
-  'libs/mavlink_lib.c',
+  'virtuals/physics/flight_controllers/ardupilot/mavlink_lib.c',
 )
 endif
 
