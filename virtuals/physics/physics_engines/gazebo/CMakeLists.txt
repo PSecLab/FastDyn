@@ -36,10 +36,10 @@ set_target_properties(gz_wrapper PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
-add_executable(services services.cpp)
+# add_executable(services services.cpp)
 
-target_link_libraries(services
-    ${GZ_TRANSPORT_LIBRARIES}
-    ${GZ_MSGS_LIBRARIES}
-    ${PROTOBUF_LIBRARIES}
-)
+# target_link_libraries(services
+#     ${GZ_TRANSPORT_LIBRARIES}
+#     ${GZ_MSGS_LIBRARIES}
+#     ${PROTOBUF_LIBRARIES}
+# )
