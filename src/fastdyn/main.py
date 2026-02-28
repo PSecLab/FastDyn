@@ -19,7 +19,7 @@ from .fuzzer import fuzzer
 from .utils import parse_config as parse_helper
 from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
-
+import fastdyn.targets.qemu_target as qemu_target
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
 
@@ -51,7 +51,15 @@ def cli():
     metavar='PATH',
     help='Optional path to an SVD file or directory.'
 )
-def run(config, map_file, work_dir, svd):
+# add option to pass existing config path
+@click.option(
+    '-ecp', '--existing-conf-path',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    metavar='PATH',
+    help='Optional path to an existing config file.'
+)
+def run(config, map_file, work_dir, svd, existing_conf_path):
     if work_dir is not None:
         if not os.path.isdir(work_dir):
             log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
@@ -66,6 +74,10 @@ def run(config, map_file, work_dir, svd):
     os.makedirs(work_dir)
 
     svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
+
+    if existing_conf_path is not None:
+        log.info(f"Using existing config path: {existing_conf_path}")
+        qemu_target.FASTDYN_EXISTING_CONFIG_PATH = existing_conf_path
 
     #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
     fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
