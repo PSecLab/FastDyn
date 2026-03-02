@@ -18,6 +18,9 @@ qemu_include = include_directories(
 # --- Project include dir
 include_dirs = [include_directories('include'), qemu_include, include_directories('build')]
 
+# --- Project include dir
+local_include = include_directories('include')
+
 #glib support
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
 cjson_dep = dependency('libcjson', required: true)
@@ -133,9 +136,6 @@ qemu_include = include_directories(
   join_paths(QEMU_DIR, 'include')
 )
 
-# --- Project include dir
-local_include = include_directories('include')
-
 # Find BFD and libiberty
 # bfd_dep = cc.find_library('bfd', required: true)
 
@@ -147,7 +147,6 @@ srcs += files(
   'core/core.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
-  'virtuals/introspection/schema_loader.c'
 )
 
 if ENABLE_LIBPY
@@ -158,9 +157,7 @@ endif
 
 if ENABLE_LIBGZ
 srcs += files(
-  'virtuals/physics/flight_controllers/ardupilot/gcs_receiver.c',
   'libs/ring_buffer.c',
-  'virtuals/physics/flight_controllers/ardupilot/mavlink_lib.c',
 )
 endif
 
