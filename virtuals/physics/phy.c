@@ -3,13 +3,14 @@
 #include <string.h>
 #include "physics_engines/gazebo/gazebo.h"
 #include "physics_engines/fmu/fmu.h"
+#include "flight_controllers/fc.h"
 
 static phy_backend_t *active_backend = NULL;
 
 static phy_backend_entry_t backends[] = {
 #if ENABLE_LIBGZ
     { "gazebo", &gazebo_backend},
-#endif 
+#endif
     // Future engines can be added here, e.g.:
     // { "casadi", &casadi_backend},
 };
@@ -86,9 +87,13 @@ int phy_get_joint_state(double *motor_0_pos, double *motor_2_pos)
 }
 
 int phy_init(int argc, char **argv) {
-		fmu_init(argc, argv);
+    // FIX: Hacky
+#if FMU
+    fmu_init(argc, argv);
+#endif
+    fc_init(argc, argv);
 
-		 if (!active_backend || !active_backend->init) {
+    if (!active_backend || !active_backend->init) {
         return 0;
     }
 

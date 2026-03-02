@@ -6,6 +6,8 @@
 #include "common.h"
 #include "config.h"
 
+extern _Atomic int64_t last_sim_time_ns;
+
 /**
  * @brief Print the value of a CPU register.
  *

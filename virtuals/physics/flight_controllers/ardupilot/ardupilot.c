@@ -9,6 +9,7 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdio.h>
 #include "virtuals.h"
 #include "phy.h"
 #include <math.h>
@@ -24,7 +25,7 @@
 #define PROFILE_COMPASS_READS 1
 
 // Global to track last sim time from QEMU
-_Atomic int64_t last_sim_time_ns = 0;
+// _Atomic int64_t last_sim_time_ns = 0;
 
 int fuzz_is_running();
 
@@ -1772,3 +1773,81 @@ void set_hardfault_status(unsigned int cpu_index, void *udata)
 //     fprintf(stderr, "Hardfault at PC: 0x%08X\n", faulting_pc);
 //     set_hardfault_pc(faulting_pc);
 // }
+
+int ardupilot_init_virtuals(int argc, char **argv)
+{
+    int status = 0;
+
+    // advancing sim
+    virtual_register("start_advancing_sim", start_advancing_sim);
+
+    // chibios debugging
+    virtual_register("chDbgContextSwitching", chDbgContextSwitching);
+    virtual_register("print_r1", print_r1);
+    virtual_register("ignore_cpu_failsafe_disarm", ignore_cpu_failsafe_disarm);
+
+    // storage
+    virtual_register("storage_read_block", storage_read_block);
+    virtual_register("storage_write_block", storage_write_block);
+
+    // voltage
+    virtual_register("adc_voltage", adc_voltage);
+
+    // ins
+    virtual_register("ins_block_read", ins_block_read);
+
+    // compass
+    virtual_register("compass_calibrate", compass_calibrate);
+    virtual_register("compass_configure", compass_configure);
+    virtual_register("compass_read_block", compass_read_block);
+
+    // Timer
+    virtual_register("hrt_micros64", hrt_micros64);
+    virtual_register("micros32", micros32);
+    virtual_register("chibiOS_tick_handler", chibiOS_tick_handler);
+
+    // wheel encoder
+    virtual_register("init_wheel_encoder", init_wheel_encoder);
+    virtual_register("copy_wheel_encoder_state_to_frontend", copy_wheel_encoder_state_to_frontend);
+
+    // RC Channel
+    virtual_register("write_channel", write_channel);
+
+    // GCS
+    virtual_register("create_gcs_mavlink_backend", create_gcs_mavlink_backend);
+    virtual_register("gcs_send_mavlink_message", gcs_send_mavlink_message);
+    virtual_register("gcs_send_text", gcs_send_text);
+    virtual_register("gcs_send_banner_once", gcs_send_banner_once);
+    virtual_register("gcs_read", gcs_read);
+    virtual_register("gcs_bytes_available", gcs_bytes_available);
+
+    // GPS
+    virtual_register("gps_get_type_mavlink", gps_get_type_mavlink);
+
+    // File System (flight logs)
+    virtual_register("ap_fs_open", ap_fs_open);
+    virtual_register("ap_fs_close", ap_fs_close);
+    virtual_register("ap_fs_read", ap_fs_read);
+    virtual_register("ap_fs_write", ap_fs_write);
+    virtual_register("ap_fs_fsync", ap_fs_fsync);
+
+    // copter allocate motors
+    virtual_register("copter_allocate_motors", copter_allocate_motors);
+
+    // arming
+    virtual_register("arming_check_enabled", arming_check_enabled);
+
+    // scheduler debug
+    virtual_register("scheduler_trace", scheduler_trace);
+
+    // debug sensors
+    virtual_register("read_mag_when_published", read_mag_when_published);
+    virtual_register("read_imu_when_published", read_imu_when_published);
+    virtual_register("read_gyro_when_published", read_gyro_when_published);
+
+    // hardfault status
+    virtual_register("set_hardfault_status", set_hardfault_status);
+
+    return status;
+}
+

@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <glib.h>
+#include <stdatomic.h>
 
 #include <qemu/qemu-plugin.h>
 #include <sys/time.h>
@@ -26,11 +27,10 @@
 // #include "ardupilot_virtuals.c"
 #if ENABLE_LIBGZ
     #include "phy.h"
-    #include "phy.c"
-    #include "physics/flight_controllers/ardupilot/ardupilot.c"
 #endif
 
 #include "fuzz.h"
+#include "introspection/inspct.h"
 
 // External dependencies from core.c
 extern AddressList addressLists[];
@@ -38,11 +38,15 @@ extern size_t listCount;
 extern uint32_t qemu_get_register(int reg);
 extern void qemu_set_register(uint32_t value, int reg);
 
+// Global to track last sim time from QEMU
+_Atomic int64_t last_sim_time_ns = 0;
+
 //TODO: remove this.
 #if ENABLE_LIBPY
 #include <Python.h>
 #include "../python/python.c"
 #endif
+
 #include <virtuals/inspct.h>
 #include <virtuals/fuzz.h>
 #include <virtuals/phy.h>
@@ -109,7 +113,7 @@ void kick_irq(void *opaque) {
     // TODO:
     static bool physics_initialized = false;
     if (!physics_initialized) {
-        if (!phy_select_backend("gazebo") || !phy_init()) {
+        if (!phy_select_backend("gazebo")) {
             fprintf(stderr, "Failed to initialize physics backend\n");
             exit(EXIT_FAILURE);
         }
@@ -562,12 +566,12 @@ int virtuals_init(int argc, char **argv, const char *schema_path) {
 		// Initialize subcomponents, each compnoent can fail independently so no reason to stop initiliaztion if one fails
 		if ((status = inspct_init(argc, argv, schema_path)) < 0)
 				utils_warn("Introspection failed");
-		if ((status = phy_init(argc, argv)) < 0) 
+		if ((status = phy_init(argc, argv)) < 0)
 				utils_warn("Physics Engine failed");
 #if ENABLE_LIBFUZZ
 		if ((status = fuzz_init(argc, argv)) < 0)
 				utils_warn("Fuzzer Failed");
-#endif 
+#endif
 	}
 
     return 0;
