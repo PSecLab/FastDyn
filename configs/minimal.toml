@@ -31,8 +31,8 @@ prealloc     = false
 platform = "STM32F429"
 # --- Debugging, Control, and Logging ---
 qemu_path = "qemu/build/qemu-system-arm"
-enable_gdb = false
-stop_on_start = false
+enable_gdb = true
+stop_on_start = true
 launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
@@ -52,11 +52,17 @@ machine = "cortexm"
 cpu = "cortex-m3"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "tests/RTOSDemo.axf"
+binary = "tests/sample_binaries/RTOS/RTOSDemo.axf"
 init_nsvtor = "0x08000000"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 introspect = true
+
+[[CPU.cpu0.virtuals]]
+at = "0x800397e"
+instruction = "altimeter_setup"
+args = [""]
+
 
 
 # --- Embedded CPU Behavior Configurations ---

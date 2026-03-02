@@ -97,7 +97,7 @@ int phy_select_backend(const char *name);
  * Failure can occur when there is no backend registered
  * or if the backend does not implement the function.
  */
-int phy_init(void);
+int phy_init(int argc, char ** argv);
 // TODO: Allow user to specify the size of the IMU batch and implement buffering in the backend
 // Could be a pointer to an array of imu_batch_t structs, along with a size parameter
 int phy_get_imu_batch(imu_batch_t *batch);

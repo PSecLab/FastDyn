@@ -28,6 +28,9 @@ typedef struct {
 // Print error message and exit
 void utils_die(const char *msg);
 
+// Log warning, this wont kill fastdyn
+void utils_warn(const char *msg); 
+
 // Get the value of a command-line argument: --key=value
 // Returns NULL if not found or malformed
 char *utils_get_arg(const char *key, int argc, char **argv);

@@ -37,7 +37,6 @@ int isdigit(int c);
 #include <ctype.h>
 #include "core.h"
 #include "common.h"
-#include "fuzz.h"
 #include <utils.h>
 #include <device.h>
 #include <config.h>
@@ -46,7 +45,7 @@ int isdigit(int c);
 #endif
 
 #include <virtuals.h>  // For lookup_callback function
-
+#include <virtuals/fuzz.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -1023,6 +1022,10 @@ static void print_rules(void) {
 #endif
 static pthread_t thread;
 static int core_parse_arguments(int argc, char ** argv) {
+
+	//parse args for introspection
+	//TODO: Fix this dubmass design
+    parse_introspect_args(argc, argv);
 	const char *filename= utils_get_arg("detour", argc, argv);
     if (filename) {
             num_tuples = read_tuples_from_file(filename, address_tuples, MAX_TUPLES);
@@ -1061,8 +1064,6 @@ static int core_parse_arguments(int argc, char ** argv) {
     //parse args for twintrace
     parse_twintrace_args(argc, argv);
 
-    //parse args for introspection
-    parse_introspect_args(argc, argv);
 
     filename = utils_get_arg("logger", argc, argv);
     if (filename) {

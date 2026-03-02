@@ -5,7 +5,6 @@ option('libhw_path', type: 'string', value: '../../../libhw', description: 'Path
 
 #USER Libraries
 option('enable_libhw', type: 'boolean', value: false, description: 'Enable libhw support')
-option('enable_libgz', type: 'boolean', value: false, description: 'Enable gazebo lib support')
 option('enable_libfuzz', type: 'boolean', value: false, description: 'Enable rust fuzzing support')
 
 #Configuration Options
@@ -16,5 +15,8 @@ option('enable_libpy', type: 'boolean', value: false, description: 'Enable Pytho
 option('DEBUG_PRINT', type: 'boolean', value: false, description: 'Enable Debugging prints')
 
 
-#sundials support
+#physics support
+option('enable_phy', type: 'boolean', value: false, description: 'Enable Physics Engine')
 option('enable_sundials', type: 'boolean', value: false, description: 'Enable SUNDIALS solver support')
+option('enable_fmu', type: 'boolean', value: false, description: 'Enable FMU engine')
+option('enable_libgz', type: 'boolean', value: false, description: 'Enable gazebo lib support')
