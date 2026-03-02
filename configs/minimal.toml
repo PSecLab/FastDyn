@@ -58,10 +58,6 @@ twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 introspect = true
 
-[[CPU.cpu0.virtuals]]
-at = "0x800397e"
-instruction = "altimeter_setup"
-args = [""]
 
 
 
