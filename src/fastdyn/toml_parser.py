@@ -61,6 +61,7 @@ def parser(out_dir, machine_name, toml_config, svd_path):
                 twintrace = curr_cpu.get("twintrace", None),
                 hardware_trace = curr_cpu.get("hardware_trace", None),
                 introspect = curr_cpu.get("introspect", False),
+                exstng_config_path = curr_cpu.get("existing_config_path", False),
                 )
 
         #additional params if set by the user

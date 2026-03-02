@@ -83,8 +83,8 @@ class Machine:
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
-    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect):
-        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, self) #pass parent for easy referencing to objs like irq_map
+    def add_cpu(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, exstng_config_path):
+        cpu = CPU(arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, exstng_config_path, self) #pass parent for easy referencing to objs like irq_map
         self.cpus.append(cpu)
         return cpu
 
@@ -156,7 +156,7 @@ class InstructionModifier:
     patch: str
 
 class CPU:
-    def __init__(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, machine_obj):
+    def __init__(self, arch, machine, cpu, binary, init_nsvtor, twintrace, hardware_trace, introspect, exstng_config_path, machine_obj):
         """One CPU instance belonging to a machine."""
         self.arch = arch
         self.machine = machine
@@ -167,6 +167,7 @@ class CPU:
         self.hardware_trace = hardware_trace    # hardware log needed in case of replay
         self.introspect: bool = introspect
         self.machine_obj = machine_obj
+        self.exstng_config_path = exstng_config_path
 
         self.plugin_library: Optional[str] = "build/libfastdyn.so"
         self.monitor_elf: Optional[str] = None
