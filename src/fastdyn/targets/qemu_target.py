@@ -292,6 +292,9 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         plugin_kv.append(f"finline={opts.finline}")
     cmd.extend(["--plugin", ",".join(plugin_kv)])
 
+    #TODO: Fix it
+    cmd.extend(["-nographic"])
+
     # ------------------------ GDB command ------------------------
     gdb_cmd, launch_gdb, binary = get_gdb_cmd(machine, out_path)
 
