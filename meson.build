@@ -83,7 +83,7 @@ if get_option('enable_phy')
     subdir('virtuals/physics')
 endif
 
-subdir('virtuals')
+#subdir('virtuals')
 ENABLE_LIBHW = get_option('enable_libhw')
 LIBHW_DIR = get_option('libhw_path')
 
@@ -145,11 +145,16 @@ local_include = include_directories('include')
 # --- Collect all source files
 srcs += files(
   'core/core.c',
-  'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
   'virtuals/introspection/schema_loader.c'
 )
+
+if ENABLE_LIBPY
+srcs += files(
+  'virtuals/python/python.c',
+)
+endif
 
 if ENABLE_LIBGZ
 srcs += files(
