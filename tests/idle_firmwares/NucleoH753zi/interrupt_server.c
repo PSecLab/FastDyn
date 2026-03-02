@@ -2,13 +2,13 @@
 
 /* Macro to define the "Hypercall" Stub (same name as your F1/F7 version) */
 #define DEFINE_INTERRUPT_HANDLER(handler_name, id)                               \
-__attribute__((naked, used)) void handler_name(void) {                           \
+__attribute__((naked, used, retain)) void handler_name(void) {                   \
     __asm volatile (                                                            \
         "cpsid i            \n" /* prevent nested IRQs while halted */          \
         "movw r2, %c[val]   \n" /* r2 = ID (constant) */                        \
         "1:                 \n"                                                 \
         "mov  r0, r2        \n" /* r0 = ID (tool reads this) */                 \
-        "bkpt #0            \n" /* halt here */                                  \
+        "bkpt #0            \n" /* halt here */                                 \
         "cmp  r1, r2        \n" /* handshake: tool must write same ID into r1 */\
         "bne  1b            \n"                                                 \
         "cpsie i            \n" /* re-enable IRQs before returning */           \

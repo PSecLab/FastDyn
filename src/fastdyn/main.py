@@ -52,19 +52,19 @@ def cli():
     help='Optional path to an SVD file or directory.'
 )
 @click.option(
-    '-p', '--presist-work-dir',
+    '-p', '--persist-work-dir',
     is_flag=True,
     default=False,
-    help='Optional Flag to presist the existing work directory.'
+    help='Optional Flag to persist the existing work directory.'
 )
-def run(config, map_file, work_dir, svd, presist_work_dir):
+def run(config, map_file, work_dir, svd, persist_work_dir):
     if work_dir is not None:
         if not os.path.isdir(work_dir):
             log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
     else:
         work_dir = "fastdyn_work"
 
-    if not presist_work_dir:
+    if not persist_work_dir:
         if os.path.exists(work_dir):
             log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
             shutil.rmtree(work_dir)
