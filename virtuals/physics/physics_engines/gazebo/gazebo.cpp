@@ -258,7 +258,6 @@ static int get_navsat_reading(gps_data_t *gps_data) {
 }
 
 static int advance_simulation(double run_until_time) {
-    // printf("Advancing simulation to time: %.6f s\n", run_until_time);
     if (!request_run_until_time(run_until_time)) {
         return 0;
     }

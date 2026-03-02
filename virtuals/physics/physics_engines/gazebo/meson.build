@@ -15,5 +15,8 @@ libgz_wrapper_dep = declare_dependency(
   ],
 )
 
+gazebo_inc = include_directories('.')
+local_include = [local_include, gazebo_inc]
+
 # This appends to the 'deps' list defined in your root meson.build
 deps += libgz_wrapper_dep

@@ -1,4 +1,5 @@
 #include "phy.h"
+#include <config.h>
 #include <stdio.h>
 #include <string.h>
 #include "physics_engines/gazebo/gazebo.h"
@@ -18,6 +19,7 @@ static phy_backend_entry_t backends[] = {
 int phy_select_backend(const char *name)
 {
     if (!name) {
+        fprintf(stderr, "phy_select_backend: name cannot be NULL\n");
         return 0;
     }
 
@@ -92,6 +94,15 @@ int phy_init(int argc, char **argv) {
     fmu_init(argc, argv);
 #endif
     fc_init(argc, argv);
+
+#if ENABLE_LIBGZ
+    // TODO: Add a flag to determine which physics engine
+    int result = phy_select_backend("gazebo");
+    if (result == 0) {
+        fprintf(stderr, "Failed to select Gazebo backend\n");
+        return 0;
+    }
+#endif
 
     if (!active_backend || !active_backend->init) {
         return 0;
