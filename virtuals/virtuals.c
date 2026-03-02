@@ -22,6 +22,7 @@
 #include <python.h>
 #endif
 #include <virtuals.h>
+#include "introspection/inspct.h"
 // #include "ardupilot_virtuals.c"
 #if ENABLE_LIBGZ
     #include "phy.h"

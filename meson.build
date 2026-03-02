@@ -79,9 +79,8 @@ endif
 
 # USER FLAGS. USER CAN ADD CUSTOM LIBS
 ENABLE_LIBGZ = get_option('enable_libgz')
-if get_option('enable_phy')
-    subdir('virtuals/physics')
-endif
+
+subdir('virtuals')
 
 #subdir('virtuals')
 ENABLE_LIBHW = get_option('enable_libhw')
