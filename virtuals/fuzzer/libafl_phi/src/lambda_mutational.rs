@@ -15,7 +15,7 @@ use core::{marker::PhantomData, num::NonZeroUsize};
 use libafl_bolts::{Named, rands::Rand};
 
 use crate::cpexp_state::{HasInputLibrary, HasLatestRobustness, HasOptimizer};
-use crate::cpexp_input::{CPExpInput, HasEnvConfig, HasParamBytes, TargetInput, TargetInputMeta};
+use crate::cpexp_input::{CPExpInput, HasEnvConfig, HasParamBytes, TargetInput};
 #[cfg(feature = "introspection")]
 use crate::monitors::stats::PerfFeature;
 use libafl::{
@@ -253,11 +253,7 @@ where
         + MaybeHasClientPerfMonitor 
         + HasOptimizer 
         + HasLatestRobustness
-        + HasInputLibrary
-        + HasExecutions
-        + HasMetadata
-        + HasNamedMetadata
-        + HasCurrentCorpusId,
+        + HasInputLibrary,
     Z: Evaluator<E, EM, I2, S>,
 {
     /// Runs this (mutational) stage for the given testcase
