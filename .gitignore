@@ -8,7 +8,7 @@ Doxyfile.bak
 *tmp
 *fastdyn_work
 fastdyn-env
-*build
+build
 *.bin
 *bbl.txt
 .cflags

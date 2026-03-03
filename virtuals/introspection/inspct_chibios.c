@@ -179,3 +179,12 @@ void inspct_chibios_dump_ready_list(uint32_t ch_system_addr) {
     printf("[ChibiOS] =================================\n");
     fflush(stdout);
 }
+
+
+int inspct_chibios_init(int argc, char ** argv){
+	int status =0; 
+	virtual_register("__port_switch_Hook", inspct_chibios_trace_switch);
+    virtual_register("__trace_switch_Hook", inspct_chibios_trace_switch);
+    virtual_register("__thd_object_init_Hook", inspct_chibios_thd_object_init);
+	return status;
+}

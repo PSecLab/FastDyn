@@ -198,3 +198,12 @@ void inpsct_freertos_xQueueGenericCreate_epi(unsigned int cpu_idx, void *arg) {
 
     fflush(stdout);
 }
+
+int inspct_freertos_init(int argc, char ** argv) {
+	int status =0;
+	virtual_register("vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext);
+	virtual_register("prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList); 
+	virtual_register("xQueueGenericCreate_epi_Hook", inpsct_freertos_xQueueGenericCreate_epi);
+
+	return status;
+}

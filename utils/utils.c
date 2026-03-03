@@ -11,6 +11,10 @@ void utils_die(const char *msg) {
     exit(EXIT_FAILURE);
 }
 
+void utils_warn(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+}
+
 char * utils_get_arg(const char * key, int argc, char **argv) {
     int len = strlen(key);
     for (int i =0; i < argc; i ++) {

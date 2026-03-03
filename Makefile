@@ -10,6 +10,8 @@ DEBUG_PRINT  ?= false
 LIBPY        ?= false
 SUNDIALS     ?= false
 BOARD_RUNNER ?= false
+PHY			?= false
+FMU			?= false
 
 # Top-level target: clean, configure with meson, then build with ninja
 all: setup
@@ -27,7 +29,9 @@ setup: clean fetch
 	-Ddevice_models=$(DEV) \
 	-DDEBUG_PRINT=$(DEBUG_PRINT) \
 	-Denable_libpy=$(LIBPY) \
-	-Denable_sundials=$(SUNDIALS)
+	-Denable_sundials=$(SUNDIALS) \
+	-Denable_phy=$(PHY) \
+	-Denable_fmu=$(FMU) 
 
 	@if [ "$(BOARD_RUNNER)" = "true" ]; then \
 		$(MAKE) build_boardrunner; \

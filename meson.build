@@ -10,6 +10,17 @@ cc = meson.get_compiler('c')
 # suppress MAVLink packed warnings
 add_project_arguments('-Wno-address-of-packed-member', language : 'c')
 
+
+QEMU_DIR = get_option('qemu_path')
+qemu_include = include_directories(
+  join_paths(QEMU_DIR, 'include')
+)
+# --- Project include dir
+include_dirs = [include_directories('include'), qemu_include, include_directories('build')]
+
+# --- Project include dir
+local_include = include_directories('include')
+
 #glib support
 glib = dependency('glib-2.0', version: '>=2.56.0', required: true)
 cjson_dep = dependency('libcjson', required: true)
@@ -72,25 +83,9 @@ endif
 # USER FLAGS. USER CAN ADD CUSTOM LIBS
 ENABLE_LIBGZ = get_option('enable_libgz')
 
-if ENABLE_LIBGZ
-  phy_inc = include_directories('virtuals/physics')
-  gz_dir = meson.current_source_dir() + '/virtuals/physics/physics_engines/gazebo/build/lib'
+subdir('virtuals')
 
-  libgz_wrapper_dep = declare_dependency(
-    include_directories: [
-      include_directories('virtuals/physics/physics_engines/gazebo'),
-      phy_inc,
-    ],
-    link_args: [
-      '-L' + gz_dir,
-      '-lgz_wrapper',
-      '-Wl,-rpath,' + gz_dir
-    ],
-  )
-
-  deps += libgz_wrapper_dep
-endif
-
+#subdir('virtuals')
 ENABLE_LIBHW = get_option('enable_libhw')
 LIBHW_DIR = get_option('libhw_path')
 
@@ -140,9 +135,6 @@ qemu_include = include_directories(
   join_paths(QEMU_DIR, 'include')
 )
 
-# --- Project include dir
-local_include = include_directories('include')
-
 # Find BFD and libiberty
 # bfd_dep = cc.find_library('bfd', required: true)
 
@@ -152,17 +144,19 @@ local_include = include_directories('include')
 # --- Collect all source files
 srcs += files(
   'core/core.c',
-  'python/python.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
-  'virtuals/introspection/schema_loader.c'
 )
+
+if ENABLE_LIBPY
+srcs += files(
+  'virtuals/python/python.c',
+)
+endif
 
 if ENABLE_LIBGZ
 srcs += files(
-  'virtuals/physics/flight_controllers/ardupilot/gcs_receiver.c',
   'libs/ring_buffer.c',
-  'virtuals/physics/flight_controllers/ardupilot/mavlink_lib.c',
 )
 endif
 

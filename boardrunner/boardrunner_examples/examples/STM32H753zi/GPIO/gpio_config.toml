@@ -120,7 +120,7 @@ logger_content = """
         enabled = false
 
 [Device.remaining_space]
-    ranges = [["0x40000000", "0x580203FF"], ["0x58020800", "0xEFFFFFFF"]]
+    ranges = [["0x40000000", "0x580203FF"], ["0x58020800", "0xE00FFFFF"], ["0xE0000000", "0xEFFFFFFF"]]
     irq = [['1','100']]
     description = "Memory regions that will handled by passthrough and are not of interest for the modeling."
 

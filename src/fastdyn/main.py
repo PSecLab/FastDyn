@@ -34,7 +34,7 @@ def cli():
                         help='The Path to the config file.',
                         metavar= 'PATH')
 @click.option(
-    '-m', '--map-file',
+    '-m', '--map-file', #TODO: Remove this and from the codebase, deadcode
     type=click.Path(resolve_path=True, exists=True),
     help='Path to the symbol map file.',
     default=None,
@@ -51,33 +51,30 @@ def cli():
     metavar='PATH',
     help='Optional path to an SVD file or directory.'
 )
-# add option to pass existing config path
 @click.option(
-    '-ecp', '--existing-conf-path',
-    type=click.Path(resolve_path=True, exists=True),
-    default=None,
-    metavar='PATH',
-    help='Optional path to an existing config file.'
+    '-p', '--persist-work-dir',
+    is_flag=True,
+    default=False,
+    help='Optional Flag to persist the existing work directory.'
 )
-def run(config, map_file, work_dir, svd, existing_conf_path):
+def run(config, map_file, work_dir, svd, persist_work_dir):
     if work_dir is not None:
         if not os.path.isdir(work_dir):
             log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
     else:
         work_dir = "fastdyn_work"
 
-    if os.path.exists(work_dir):
-        log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
-        shutil.rmtree(work_dir)
+    if not persist_work_dir:
+        if os.path.exists(work_dir):
+            log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
+            shutil.rmtree(work_dir)
 
-    log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
-    os.makedirs(work_dir)
+        log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
+        os.makedirs(work_dir)
+    else:
+        log.info(f"Running with existing work directory.")
 
     svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
-
-    if existing_conf_path is not None:
-        log.info(f"Using existing config path: {existing_conf_path}")
-        qemu_target.FASTDYN_EXISTING_CONFIG_PATH = existing_conf_path
 
     #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
     fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)

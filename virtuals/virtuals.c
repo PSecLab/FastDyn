@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <glib.h>
+#include <stdatomic.h>
 
 #include <qemu/qemu-plugin.h>
 #include <sys/time.h>
@@ -22,18 +23,14 @@
 #include <python.h>
 #endif
 #include <virtuals.h>
+#include "introspection/inspct.h"
 // #include "ardupilot_virtuals.c"
 #if ENABLE_LIBGZ
     #include "phy.h"
-    #include "phy.c"
-    #include "physics/flight_controllers/ardupilot/ardupilot.c"
 #endif
 
 #include "fuzz.h"
-
-#include "introspection/inspct_freertos.c"
-#include "introspection/inspct_chibios.c"
-#include "introspection/inspct.c"
+#include "introspection/inspct.h"
 
 // External dependencies from core.c
 extern AddressList addressLists[];
@@ -41,15 +38,23 @@ extern size_t listCount;
 extern uint32_t qemu_get_register(int reg);
 extern void qemu_set_register(uint32_t value, int reg);
 
+// Global to track last sim time from QEMU
+_Atomic int64_t last_sim_time_ns = 0;
+
+//TODO: remove this.
 #if ENABLE_LIBPY
 #include <Python.h>
 #include "../python/python.c"
 #endif
 
-//TODO: temporary
-#if ENABLE_SUNDIALS
-void sundial_virtual(unsigned int cpu_index, void *udata);
-#endif
+#include <virtuals/inspct.h>
+#include <virtuals/fuzz.h>
+#include <virtuals/phy.h>
+
+#define VIRTUALS_MAX_COUNT 256
+
+// Track how many are currently used
+static int registry_count = -1;
 /**
  * @brief Callback registry
  *
@@ -57,7 +62,7 @@ void sundial_virtual(unsigned int cpu_index, void *udata);
  * declare the function in virtuals.h and implement it here.
  *
  */
-cb_entry_t cb_registry[] = {
+cb_entry_t cb_registry[VIRTUALS_MAX_COUNT] = {
 	{ "printreg", printreg },
     { "updatemem", updatemem},
     { "randstate", randstate},
@@ -70,172 +75,13 @@ cb_entry_t cb_registry[] = {
     { "dyninst_lib", dyninst_lib},
     { "debug_log", debug_log},
     { "raise_periodic_irq", raise_periodic_irq},
-    //Fuzzing specific
-#if ENABLE_LIBFUZZ
-    { "anchor", anchor},
-    { "assert", virt_assert},
-#endif
-#if ENABLE_LIBPY
-    { "fastdyn_callback", fastdyn_callback},
-#endif
-#if ENABLE_LIBGZ
-    // advancing sim
-    { "start_advancing_sim", start_advancing_sim},
-    // chibios debugging
-    { "chDbgContextSwitching", chDbgContextSwitching},
-    { "print_r1", print_r1},
-    { "ignore_cpu_failsafe_disarm", ignore_cpu_failsafe_disarm},
-    // storage
-    { "storage_read_block", storage_read_block},
-    { "storage_write_block", storage_write_block},
-    // voltage
-    { "adc_voltage", adc_voltage},
-    // ins
-    { "ins_block_read", ins_block_read},
-    // compass
-    { "compass_calibrate", compass_calibrate},
-    { "compass_configure", compass_configure},
-    { "compass_read_block", compass_read_block},
-    // Timer
-    { "hrt_micros64", hrt_micros64},
-    { "micros32", micros32},
-    { "chibiOS_tick_handler", chibiOS_tick_handler},
-    // wheel encoder
-    { "init_wheel_encoder", init_wheel_encoder},
-    { "copy_wheel_encoder_state_to_frontend", copy_wheel_encoder_state_to_frontend},
-    // RC Channel
-    { "write_channel", write_channel},
-    // GCS
-    { "create_gcs_mavlink_backend", create_gcs_mavlink_backend},
-    { "gcs_send_mavlink_message", gcs_send_mavlink_message},
-    { "gcs_send_text", gcs_send_text},
-    { "gcs_send_banner_once", gcs_send_banner_once},
-    { "gcs_read", gcs_read},
-    { "gcs_bytes_available", gcs_bytes_available},
-    // GPS
-    { "gps_get_type_mavlink", gps_get_type_mavlink},
-    // AHRS
-    // { "ap_ahrs_init", ap_ahrs_init},
-    // File System (Added for the flight logs)
-    { "ap_fs_open", ap_fs_open},
-    { "ap_fs_close", ap_fs_close},
-    { "ap_fs_read", ap_fs_read},
-    { "ap_fs_write", ap_fs_write},
-    { "ap_fs_fsync", ap_fs_fsync},
-    // copter allocate motors
-    { "copter_allocate_motors", copter_allocate_motors},
-    // arming
-    { "arming_check_enabled", arming_check_enabled},
-    // scheduler debug
-    { "scheduler_trace", scheduler_trace},
-    // debug sensors
-    { "read_mag_when_published", read_mag_when_published},
-    { "read_imu_when_published", read_imu_when_published},
-    { "read_gyro_when_published", read_gyro_when_published},
-    // hardfault status
-    { "set_hardfault_status", set_hardfault_status},
-#endif
-	{ "vTaskSwitchContext_Hook", inspct_freertos_vTaskSwitchContext},
-	{ "prvAddNewTaskToReadyList_Hook", inspct_freertos_prvAddNewTaskToReadyList},
-	{ "xQueueGenericCreate_epi_Hook", inpsct_freertos_xQueueGenericCreate_epi},
-	/* ChibiOS/RT introspection (port_switch is the actual call site in many builds) */
-	{ "__port_switch_Hook", inspct_chibios_trace_switch},
-	{ "__trace_switch_Hook", inspct_chibios_trace_switch},
-	{ "__thd_object_init_Hook", inspct_chibios_thd_object_init},
-#if ENABLE_SUNDIALS
-	{ "sundial_virtual", sundial_virtual}
-#endif
+	{NULL, NULL} //This should always be last entry.
 };
 
 
-#ifdef ENABLE_SUNDIALS
-/* Initial version of inline physics engine */
-#include <stdio.h>
-#include <stdlib.h>
-
-// SUNDIALS Core and CVODE Headers
-#include <cvode/cvode.h>
-#include <nvector/nvector_serial.h>
-#include <sunmatrix/sunmatrix_dense.h>
-#include <sunlinsol/sunlinsol_dense.h>
-#include <sundials/sundials_types.h>
-
-// 1. User Data Structure: Pass parameters to your equations
-typedef struct {
-    sunrealtype k; // Decay constant
-} UserData;
-
-// 2. The Right-Hand Side (RHS) Function: dy/dt = -k * y
-int rhs(sunrealtype t, N_Vector y, N_Vector ydot, void *user_data) {
-    UserData *data = (UserData *)user_data;
-    sunrealtype k = data->k;
-    sunrealtype y_val = NV_Ith_S(y, 0);
-
-    // Set the derivative
-    NV_Ith_S(ydot, 0) = -k * y_val;
-
-    return 0;
-}
-
-void sundial_virtual(unsigned int cpu_index, void *udata) {
-    // --- Setup ---
-    SUNContext sunctx;
-    SUNContext_Create(NULL, &sunctx); // Create the SUNDIALS simulation context
-
-    sunrealtype t = 0.0;
-    sunrealtype tout = 0.4; // First output time
-
-    // Create serial vector of length 1 and set initial condition y(0) = 1.0
-    N_Vector y = N_VNew_Serial(1, sunctx);
-    NV_Ith_S(y, 0) = 1.0;
-
-    // Initialize User Data
-    UserData data;
-    data.k = 0.5;
-
-    // --- CVODE Initialization ---
-    // Use CV_BDF for stiff problems, CV_ADAMS for non-stiff
-    void *cvode_mem = CVodeCreate(CV_BDF, sunctx);
-    CVodeInit(cvode_mem, rhs, t, y);
-    CVodeSetUserData(cvode_mem, &data);
-    CVodeSStolerances(cvode_mem, 1e-4, 1e-8);
-
-    // --- Linear Solver Setup ---
-    // Required for BDF/Implicit methods
-    SUNMatrix A = SUNDenseMatrix(1, 1, sunctx);
-    SUNLinearSolver LS = SUNLinSol_Dense(y, A, sunctx);
-    CVodeSetLinearSolver(cvode_mem, LS, A);
-
-    // --- Integration Loop ---
-    printf("Solving dy/dt = -%.2fy, y(0) = 1.0\n", data.k);
-    printf("Time(s)    Value(y)\n");
-    printf("-------------------\n");
-
-    for (int i = 0; i < 10; i++) {
-        int flag = CVode(cvode_mem, tout, y, &t, CV_NORMAL);
-        if (flag < 0) {
-            fprintf(stderr, "Error in CVode: %d\n", flag);
-            break;
-        }
-        printf("%10.4f %10.6f\n", t, NV_Ith_S(y, 0));
-        tout += 0.4;
-    }
-
-    // --- Cleanup ---
-    CVodeFree(&cvode_mem);
-    SUNLinSolFree(LS);
-    SUNMatDestroy(A);
-    N_VDestroy(y);
-    SUNContext_Free(&sunctx);
-
-}
-#endif
-
-const size_t cb_registry_len = sizeof(cb_registry) / sizeof(cb_registry[0]);
-
 // Function to lookup callbacks by name (moved from core.c)
 cb_func_t lookup_callback(const char *name) {
-    for (size_t i = 0; i < cb_registry_len; i++) {
+    for (size_t i = 0; i < registry_count; i++) {
         if (strcmp(cb_registry[i].name, name) == 0)
             return cb_registry[i].func;
     }
@@ -264,15 +110,15 @@ void kick_irq(void *opaque) {
 #if ENABLE_LIBGZ
     // update the sim time global in ardurover_virtuals.c
     atomic_store(&last_sim_time_ns, (int64_t)qemu_plugin_get_virtual_timer());
-    // TODO:
-    static bool physics_initialized = false;
-    if (!physics_initialized) {
-        if (!phy_select_backend("gazebo") || !phy_init()) {
-            fprintf(stderr, "Failed to initialize physics backend\n");
-            exit(EXIT_FAILURE);
-        }
-        physics_initialized = true;
-    }
+    // // TODO:
+    // static bool physics_initialized = false;
+    // if (!physics_initialized) {
+    //     if (!phy_select_backend("gazebo")) {
+    //         fprintf(stderr, "Failed to initialize physics backend\n");
+    //         exit(EXIT_FAILURE);
+    //     }
+    //     physics_initialized = true;
+    // }
 #endif
 
     qemu_plugin_raise_irq(irq_num, false);
@@ -656,8 +502,77 @@ void dump_log_buffer_to_file(const AddressList* list, const char* filename) {
     fclose(file);
 }
 
-int virtuals_init(int argc, char **argv, const char *schema_path) {
 
-	inspct_init(argc, argv, schema_path);
+/**
+ * Scans the static portion of the array to find the
+ * initial count of hardcoded functions.
+ */
+static int virtuals_init_registry() {
+    if (registry_count != -1) return -1;
+
+    registry_count = 0;
+    while (registry_count < VIRTUALS_MAX_COUNT &&
+           cb_registry[registry_count].name != NULL) {
+        registry_count++;
+    }
+
+	return 0;
+}
+
+/**
+ * Registers a new function at runtime or updates an existing one.
+ */
+int virtual_register(const char *name, cb_func_t func) {
+	virtuals_init_registry();
+
+    if (!name || !func) return -1;
+
+    // 1. Check if we're updating an existing entry
+    for (int i = 0; i < registry_count; i++) {
+        if (strcmp(cb_registry[i].name, name) == 0) {
+			fprintf(stderr, "Registry Error: Entry '%s' already exists.\n", name);
+            return -1; // Registration rejected
+        }
+    }
+
+    // 2. Check for capacity (leaving room for a trailing sentinel)
+    if (registry_count >= VIRTUALS_MAX_COUNT - 1) {
+        fprintf(stderr, "Error: VIRTUALS_MAX_COUNT reached\n");
+        return -1;
+    }
+
+    // 3. Append the new virtual
+    cb_registry[registry_count].name = name;
+    cb_registry[registry_count].func = func;
+    registry_count++;
+
+    // 4. Move the sentinel forward
+    cb_registry[registry_count].name = NULL;
+    cb_registry[registry_count].func = NULL;
+
+    return 0;
+}
+
+int virtuals_init(int argc, char **argv, const char *schema_path) {
+	int status = -1;
+	// Initialize registry
+	status = virtuals_init_registry();
+
+	if (status == -1) {
+			utils_die("Couldn't init registry");
+	}
+
+    if (status != -1) {
+		// Initialize subcomponents, each compnoent can fail independently so no reason to stop initiliaztion if one fails
+		if ((status = inspct_init(argc, argv, schema_path)) < 0)
+				utils_warn("Introspection failed");
+		if ((status = phy_init(argc, argv)) < 0)
+				utils_warn("Physics Engine failed");
+#if ENABLE_LIBFUZZ
+		if ((status = fuzz_init(argc, argv)) < 0)
+				utils_warn("Fuzzer Failed");
+#endif
+	}
+
     return 0;
 }

@@ -80,9 +80,6 @@ static void fuzz_irq_exit(int irq) {
     cc_list.log_buf.index = (uint16_t)(cc_list.log_buf.index + 4);
 }
 
-// Rust export, 0 on fail, 1 otherwise
-int fuzz_init(char *numbers);
-
 // input side (Rust -> C)
 bool fuzz_buffer_write(fuzz_input_t *input) {
     fuzz_state_t state = atomic_load_explicit(&fuzz_buffer.state, memory_order_acquire);
@@ -511,4 +508,8 @@ void fuzz_add_observed_value(uint32_t val) {
         g_prev_pc = val;
     }
     fuzz_bbl_add(val);
+}
+
+int fuzz_init(int argc, char **argv) {
+
 }
