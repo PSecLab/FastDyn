@@ -63,11 +63,12 @@ use libafl::state::{HasCorpus, HasExecutions};
 
 // -------------------------------
 // CONSTANT VALUES
-const MISSION_TIMEOUT: f64 = 420.0; // seconds == 7 minutes max for rollover mission
+const MISSION_TIMEOUT: f64 = 20.0; // seconds == 7 minutes max for rollover mission
 const RECORDING_TIMESTEP: f64 = 0.1; // seconds
 const TRACE_LOG_PATH: &str = "./trace_logs";
 const ROBUSTNESS_LOG_PATH: &str = "./robustness_logs";
 const CRASH_LOG_PATH: &str = "./crashes";
+const CORPUS_LOG_PATH: &str = "./corpus";
 const COVERAGE_DUMP_PATH: &str = "./covg.csv";
 const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this size in C is the same
 // -------------------------------
@@ -135,6 +136,7 @@ where
 
         let executions = state.executions_mut();
         *executions += 1;
+        env::set_var("EXECUTION", executions.to_string());
 
         let param_info = state.input_library().get_param_input().clone();
         let mut param_names = String::new();
@@ -148,24 +150,24 @@ where
 }
 
 pub fn main() {
-    let api_key = env::var("OPENAI_API_KEY")
-        .expect("Set OPENAI_API_KEY in your environment");
 
-    let response = param_shim::get_parameter_shim_from_openai(
-        &api_key,
-        "ArduPilot",
-        "Rover-4.6",
-    ).expect("Failed to get parameter shim from OpenAI");
+    // let api_key = env::var("OPENAI_API_KEY")
+    //     .expect("Set OPENAI_API_KEY in your environment");
 
-    let mut generated_param_input: Vec<ParamInput> = param_shim::parse_param_shim_response(&api_key, &response)
-        .expect("Failed to parse parameter shim response");
+    // let response = param_shim::get_parameter_shim_from_openai(
+    //     &api_key,
+    //     "ArduPilot",
+    //     "Rover-4.6",
+    // ).expect("Failed to get parameter shim from OpenAI");
 
-    // For debugging print out the generated parameter input
-    println!("Generated parameter inputs from OpenAI:");
-    for param in generated_param_input.iter() {
-        println!("  - {}: {:?}", param.get_name(), param.get_range());
-    }
+    // let mut generated_param_input: Vec<ParamInput> = param_shim::parse_param_shim_response(&api_key, &response)
+    //     .expect("Failed to parse parameter shim response");
 
+    // // For debugging print out the generated parameter input
+    // println!("Generated parameter inputs from OpenAI:");
+    // for param in generated_param_input.iter() {
+    //     println!("  - {}: {:?}", param.get_name(), param.get_range());
+    // }
 
     // println!("OpenAI says: {}", response);
 
@@ -314,7 +316,8 @@ pub fn main() {
         // RNG
         StdRand::with_seed(current_nanos()),
         // Corpus that will be evolved, we keep it in memory for performance
-        InMemoryCorpus::new(),
+        // InMemoryCorpus::new(),
+        OnDiskCorpus::new(PathBuf::from(CORPUS_LOG_PATH)).unwrap(),
         // Corpus in which we store solutions (crashes in this example),
         // on disk so the user can get them after stopping the fuzzer
         OnDiskCorpus::new(PathBuf::from(CRASH_LOG_PATH)).unwrap(),

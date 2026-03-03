@@ -2,7 +2,7 @@ use env_logger::Target;
 use gz_msgs::param;
 use libafl::inputs::{BytesInput, Input, ResizableMutator, ValueInput};
 use libafl::inputs::HasMutatorBytes;
-use libafl_bolts::HasLen;
+use libafl_bolts::{HasLen, SerdeAny,};
 use core::hash;
 use std::{collections::HashMap, env, fmt::format, hash::{DefaultHasher, Hash, Hasher}, ptr::hash};
 use serde::{Deserialize, Serialize};
@@ -186,9 +186,11 @@ impl Input for TargetInput {
     } 
 
     fn generate_name(&self, _id: Option<libafl::corpus::CorpusId>) -> String {
+        let execution = env::var("EXECUTION").unwrap_or_else(|_| "unknown".to_string());
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
-        hasher.finish().to_string()
+        let hash = hasher.finish();
+        format!("{}_{}", execution, hash)
     }
 
 }
@@ -401,5 +403,23 @@ impl HasEnvConfig for TargetInput {
     }
     fn set_env_config(&mut self, new_config: String) {
         self.env_config = new_config;
+    }
+}
+
+/**
+ * Struct that will be added as metadata to TargetInputs in the corpus.
+ * It stores the fuzzer's execution number so we can find the corresponding trace
+ * and robustness logs.
+ */
+#[derive(Debug, Serialize, Deserialize, SerdeAny)]
+pub struct TargetInputMeta {
+    pub execution: u64,
+}
+
+impl TargetInputMeta {
+    pub fn new(execution: &u64) -> Self {
+        Self {
+            execution: execution.clone(),
+        }
     }
 }

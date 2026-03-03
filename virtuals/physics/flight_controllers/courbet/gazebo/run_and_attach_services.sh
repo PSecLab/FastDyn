@@ -5,8 +5,20 @@
 
 VEHICLE_TYPE=$1
 if [ -z "$VEHICLE_TYPE" ]; then
-    echo "Usage: $0 <vehicle_type>"
+    echo "Usage: $0 <vehicle_type> [headless]"
+    echo "Example: $0 rover headless"
+    echo "Example: $0 plane headless"
+    exit 1
+fi
+
+HEADLESS=$2
+CMD_STRING="gz sim -r"
+if [ "$HEADLESS" == "headless" ]; then
+    CMD_STRING="$CMD_STRING -s"
+elif [ -n "$HEADLESS" ]; then
+    echo "Usage: $0 <vehicle_type> [headless]"
     echo "Example: $0 rover"
+    echo "Example: $0 plane headless"
     exit 1
 fi
 
@@ -14,24 +26,24 @@ MODEL_NAME=""
 
 # Start Gazebo with the specified world file
 if [ "$VEHICLE_TYPE" == "copter-heli" ]; then
-    gz sim -r bicopter_runway.sdf &
+    $CMD_STRING bicopter_runway.sdf &
     MODEL_NAME="bicopter"
 elif [ "$VEHICLE_TYPE" == "copter" ]; then
     # gz sim -r gs_drone_runway.sdf &
     # MODEL_NAME="gs_drone"
-    gz sim -r iris_runway.sdf &
+    $CMD_STRING iris_runway.sdf &
     MODEL_NAME="iris"
 elif [ "$VEHICLE_TYPE" == "rover" ]; then
-    gz sim -r r1_rover_runway.sdf &
+    $CMD_STRING r1_rover_runway.sdf &
     MODEL_NAME="r1_rover"
 elif [ "$VEHICLE_TYPE" == "boat" ]; then
-    gz sim -r waves.sdf &
+    $CMD_STRING waves.sdf &
     MODEL_NAME="blueboat"
 elif [ "$VEHICLE_TYPE" == "plane" ]; then
-    gz sim -r vtail_runway.sdf &
+    $CMD_STRING vtail_runway.sdf &
     MODEL_NAME="vtail_plane"
 elif [ "$VEHICLE_TYPE" == "sub" ]; then
-    gz sim -r bluerov2_underwater.world &
+    $CMD_STRING bluerov2_underwater.world &
     MODEL_NAME="bluerov2"
 else
     echo "Error: Unsupported vehicle type '$VEHICLE_TYPE'"

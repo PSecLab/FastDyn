@@ -55,6 +55,11 @@ pub struct PhysicalObserver {
     #[serde(skip)]
     formulas: Vec<ParsedFormula>,
 
+    // The indices of the formulas to be optimized in this instantiation.
+    // We observe all formulas, but optimize a subset.
+    #[serde(skip)]
+    optimized_formula_indices: Vec<usize>,
+
     #[serde(skip)]
     recorder_process: Option<Child>, // Child process handle for the recorder
 }
@@ -73,7 +78,7 @@ impl PhysicalObserver {
         let limit: f64 = if limit <= 0.0 { 10.0 } else { limit };
 
         // Load STL formulas from the configured text file.
-        let formulas = Self::load_formulas_from_file(STL_FORMULAS_PATH);
+        let (formulas, opt_indices) = Self::load_formulas_from_file(STL_FORMULAS_PATH);
 
         // Initialize robustness vector with +inf for each loaded formula so that
         // the first evaluation will always improve it.
@@ -96,6 +101,7 @@ impl PhysicalObserver {
             robustness_log_dir: String::from(robustness_log_dir),
             latest_robustness_vec: robustness_vec,
             formulas,
+            optimized_formula_indices: opt_indices,
             recorder_process: None,
         }
     }
@@ -108,7 +114,7 @@ impl PhysicalObserver {
     ///
     /// - One formula per non-empty line.
     /// - Lines starting with `#` are treated as comments and ignored.
-    fn load_formulas_from_file(path: &str) -> Vec<ParsedFormula> {
+    fn load_formulas_from_file(path: &str) -> (Vec<ParsedFormula>, Vec<usize>) {
         let file = File::open(path).unwrap_or_else(|err| {
             panic!(
                 "Failed to open STL formula file '{}': {}\n\
@@ -120,6 +126,7 @@ impl PhysicalObserver {
 
         let reader = BufReader::new(file);
         let mut formulas = Vec::new();
+        let mut opt_indices: Vec<usize> = Vec::new();
 
         for (idx, line_res) in reader.lines().enumerate() {
             let line_num = idx + 1;
@@ -131,8 +138,18 @@ impl PhysicalObserver {
             // issues tied to the `line` binding.
             let formula_str = line.trim().to_owned();
 
-            // Skip blank lines and comments.
-            if formula_str.is_empty() || formula_str.starts_with('#') {
+            // Skip blank lines. 
+            if formula_str.is_empty() {
+                continue;
+            }
+
+            if formula_str.starts_with('#') {
+                // Check for optimization flag in comment lines, e.g.:
+                // # OPTIMIZE
+                if formula_str == "# OPTIMIZE" {
+                    opt_indices.push(formulas.len());
+                }
+
                 continue;
             }
 
@@ -146,7 +163,13 @@ impl PhysicalObserver {
             formulas.push(parsed);
         }
 
-        formulas
+        if opt_indices.is_empty() {
+            for i in 0..formulas.len() {
+                opt_indices.push(i);
+            }
+        }
+
+        (formulas, opt_indices)
     }
 
 }
@@ -286,15 +309,15 @@ where
 
         // println!("Robustness for execution {}: {:?}", state.executions(), self.latest_robustness_vec);
 
-        // Get minimum robustness value and place it in the state
-        let mut min_robustness: f64 = f64::INFINITY;
-        for robustness in self.latest_robustness_vec.iter() {
-            if *robustness < min_robustness {
-                min_robustness = *robustness;
+        // Get minimum robustness value of the OPTIMIZED formulas, and put it in the state to tell the optimizer
+        let mut min_optimized_robustness: f64 = f64::INFINITY;
+        for opt in self.optimized_formula_indices.iter() {
+            let current_robustness = self.latest_robustness_vec[*opt];
+            if current_robustness < min_optimized_robustness {
+                min_optimized_robustness = current_robustness;
             }
         }
-
-        state.set_latest_robustness(min_robustness);
+        state.set_latest_robustness(min_optimized_robustness);
 
         // Also, log the robustness values to a file for later analysis
         let robustness_log_path = format!("{}/robustness_{}.csv", self.robustness_log_dir, state.executions());

@@ -11,8 +11,6 @@ MAVPROXY_CMD = [
     "mavproxy.py",
     "--master=udpout:127.0.0.1:14551",
     "--out=udpout:127.0.0.1:14552",
-    "--map",
-    "--console",
 ]
 
 MISSION_IN_PROGRESS = 3
@@ -71,6 +69,8 @@ def main():
 
     usage = "Usage: python3 ardu_mav_c2.py /path/to/init/params.txt"
     usage += " /path/to/mission.txt/ comma,separated,parameter,names /path/to/param/bytes.bin"
+    usage += " [headless]"
+
     if len(sys.argv) < 2:
         print(usage)
         exit(1)
@@ -93,6 +93,13 @@ def main():
     param_bytes_path = sys.argv[4]
     if not os.path.isfile(param_bytes_path):
         print(f"Set parameter file {param_bytes_path} does not exist.")
+        exit(1)
+
+    if not len(sys.argv) > 5:
+        MAVPROXY_CMD.append("--map")
+        MAVPROXY_CMD.append("--console")
+    elif sys.argv[5] != "headless":
+        print("Invalid fifth argument. Use 'headless' or leave empty.")
         exit(1)
     
     master_fd, slave_fd = pty.openpty()

@@ -16,12 +16,9 @@ use std::io::Write;
 use gz_transport::Node;
 use gz_msgs::clock::Clock;
 
-// ------------------------------
-// Input your paths here...
-const RUN_SERVICES_PATH: &str = "/root/fire/fuzz_testing/FastDyn/courbet/gazebo/";
-const QEMU_BUILD_PATH: &str = "/root/fire/fuzz_testing/qemu/build";
-const MAV_C2_PATH: &str = "/root/fire/fuzz_testing/FastDyn/courbet/mavlink/";
-// ------------------------------
+const RUN_SERVICES_DIR: &str = "../../physics/flight_controllers/courbet/gazebo";
+const QEMU_BUILD_DIR: &str = "../../../../qemu/build";
+const MAV_C2_DIR: &str = "../../physics/flight_controllers/courbet/mavlink";
 
 /**
  * Assigning each value in file to corresponding index in CVG array.
@@ -77,7 +74,7 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
 
     // 2. Start Courbet services
     let spawn_services = Command::new("./run_and_attach_services.sh")
-        .current_dir(RUN_SERVICES_PATH)
+        .current_dir(RUN_SERVICES_DIR)
         .arg("rover")
         .stdout(Stdio::null())
         .spawn();
@@ -88,7 +85,7 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
     std::thread::sleep(std::time::Duration::from_secs(3));
 
     let mut spawn_c2 = Command::new("python3")
-        .current_dir(MAV_C2_PATH)
+        .current_dir(MAV_C2_DIR)
         .arg("ardu_mav_c2.py")
         .arg("rover_init.param")
         .arg("rover_rollover_obtuse.txt")
@@ -103,7 +100,7 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
     std::thread::sleep(std::time::Duration::from_secs(3));
 
     let spawn_fd = Command::new("bash")
-        .current_dir(QEMU_BUILD_PATH)
+        .current_dir(QEMU_BUILD_DIR)
         .arg("../roverv462.sh")
         .stdout(Stdio::null())
         .spawn();
@@ -167,13 +164,18 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
     }
 
     // Just use kill script to force everything dead
-    let mut kill = Command::new("/root/fire/fuzz_testing/FastDyn/virtuals/fuzzer/libafl_phi/kill.sh")
+    let mut kill = Command::new("./kill.sh")
         .spawn()
         .expect("Failed to spawn kill.sh");
     kill.wait();
 
+    // Clean up zombies
+    spawn_services.unwrap().wait();
+    spawn_c2.unwrap().wait();
+    spawn_fd.unwrap().wait();
+
     // TODO: Add deserialization of coverage here.
-    deserialize_coverage("/root/fire/fuzz_testing/FastDyn/virtuals/fuzzer/libafl_phi/covg.csv");
+    deserialize_coverage("./covg.csv");
 
     println!("Mission execution finished with exit kind: {:?}", exit_kind);
     exit_kind
