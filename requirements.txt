@@ -1,0 +1,11 @@
+cmsis-svd==0.6
+colorama==0.4.6
+lxml==6.0.1
+numpy==2.2.6
+scipy==1.15.3
+six==1.17.0
+tomli==2.2.1
+click==8.0.3
+dotenv==0.9.9
+pyelftools==0.32
+capstone==5.0.7
