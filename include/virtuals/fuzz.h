@@ -6,7 +6,7 @@
 
 #if ENABLE_LIBFUZZ
 
-typedef void (*fuzz_anchor_callback_t)(uint8_t *buff, size_t len);
+typedef void (*fuzz_anchor_callback_t)(char *buff, size_t len);
 
 void fuzz_register_callback(fuzz_anchor_callback_t cb);
 
@@ -14,9 +14,6 @@ void virt_assert(unsigned int cpu_index, void *udata);
 void anchor(unsigned int cpu_index, void *udata);
 
 void fuzz_dump_bbl(void);
-void fuzz_bbl_init(void);
-
-void fuzz_add_observed_value(uint32_t val);
 
 int fuzz_init(int argc, char **argv);
 

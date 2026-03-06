@@ -15,20 +15,20 @@
 #include <immintrin.h>
 #include "core.h"
 #include "common.h"
+#include "virtuals.h"
+#include "fuzz_bbl.h"
+#include "fuzz_trace.h"
 
-extern int coverage;
+static int coverage = 0;
 
 static bool fuzz_started = false;
 
 static char g_fuzzing_buf[1024];
 static char g_fuzzing_input[1024];
 
+static pthread_t thread;
 static uint32_t g_prev_pc;
-
-// Dumping to fastdyn_work will cause this to be erased after each run, bad if fuzzing restarts
-#define DEFAULT_BBL_DUMP_PATH "fuzz_out/bbl.txt"
-static const char *bbl_dump_path = DEFAULT_BBL_DUMP_PATH;
-static GHashTable *bbl_set;
+static int tracer_ready =0;
 
 // list of consecutive address+size values listing writable regions of memory, count is total entries not # of pairs
 #define WLIST_PATH "fastdyn_work/bin-writable-ranges"
@@ -37,12 +37,12 @@ static uint32_t *wlist = NULL;
 
 // If testing stability with forced inputs, this will cause it to compare all runs and output when a different path taken
 static const bool forced_trace = false;
-static GArray *current_run = NULL;
-static GArray *previous_run = NULL;
 
 #define MAP_SIZE 65536 // should always match the rust definition
 extern uint8_t CVG[MAP_SIZE];
-extern AddressList cc_list;
+extern AddressList core_cc_list; // in future, update so that we aren't using an extern global for this, maybe add core.c helper to consume inputs
+extern LoggerEntry core_cc_entry;
+extern LookupResult core_cc_ret;
 
 typedef void (*fuzz_anchor_callback_t)(char *buff, size_t len);
 static fuzz_anchor_callback_t g_fuzz_anchor_callback = NULL;
@@ -72,13 +72,15 @@ void fuzz_register_callback(fuzz_anchor_callback_t cb) {
 }
 
 static void fuzz_irq_entry(int irq) {
-    cc_list.log_buf.buffer[(uint16_t)cc_list.log_buf.index / 4] = 0xFFFFFFFF;
-    cc_list.log_buf.index = (uint16_t)(cc_list.log_buf.index + 4);
+    core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFF;
+    core_cc_list.log_buf.index = (uint16_t)(core_cc_list.log_buf.index + 4);
 }
 static void fuzz_irq_exit(int irq) {
-    cc_list.log_buf.buffer[(uint16_t)cc_list.log_buf.index / 4] = 0xFFFFFFFD;
-    cc_list.log_buf.index = (uint16_t)(cc_list.log_buf.index + 4);
+    core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFD;
+    core_cc_list.log_buf.index = (uint16_t)(core_cc_list.log_buf.index + 4);
 }
+
+int fuzz_libAFL_init(char *numbers);
 
 // input side (Rust -> C)
 bool fuzz_buffer_write(fuzz_input_t *input) {
@@ -121,89 +123,21 @@ bool fuzz_check_empty() {
     return (atomic_load_explicit(&fuzz_buffer.state, memory_order_relaxed) == FUZZ_EMPTY);
 }
 
-static void fuzz_trace_print_run(GArray *run, const char *name) {
-    printf("%s (%u entries):\n", name, run->len);
-    for (guint i = 0; i < run->len; i++) {
-        uint32_t val = g_array_index(run, uint32_t, i);
-        printf("  [%4u] 0x%08x\n", i, val);
-    }
-}
-
-// for debugging on forcing the same input to view changed path, forced_trace = true
-// This is setup at compile time as its just a somewhat target specific debugging helper
-static void fuzz_trace_finish_run(void) {
-    if (previous_run->len == 0) {
-        printf("First run recorded.\n");
-        g_array_append_vals(previous_run,
-                            current_run->data,
-                            current_run->len);
-        g_array_set_size(current_run, 0);
-        return;
-    }
-
-    gboolean identical = TRUE;
-    guint min_len = MIN(previous_run->len, current_run->len);
-
-    for (guint i = 0; i < min_len; i++) {
-        uint32_t a = g_array_index(previous_run, uint32_t, i);
-        uint32_t b = g_array_index(current_run, uint32_t, i);
-
-        if (a != b) {
-            printf("Runs diverge at index %u:\n", i);
-            printf("  Previous: 0x%08x\n", a);
-            printf("  Current : 0x%08x\n", b);
-            identical = FALSE;
-            break;
-        }
-    }
-
-    if (identical && previous_run->len != current_run->len) {
-        printf("Runs differ in length: prev=%u current=%u\n",
-               previous_run->len,
-               current_run->len);
-        identical = FALSE;
-    }
-
-    if (!identical) {
-        fuzz_trace_print_run(previous_run, "Previous run");
-        fuzz_trace_print_run(current_run,  "Current run");
-        exit(0);
-    } else {
-        printf("Run identical to previous.\n");
-    }
-
-    /* Replace previous with current */
-    g_array_set_size(previous_run, 0);
-    g_array_append_vals(previous_run,
-                        current_run->data,
-                        current_run->len);
-
-    g_array_set_size(current_run, 0);
-}
-
-// If the anchor is busy (didn't skip consuming input), set it to done
 static void fuzz_finish() {
     // Wait until tracer catches up with the logged pc's, otherwise coverage is innacurate
-    uint16_t idx = (uint16_t)(cc_list.log_buf.index - 4);
-    uint32_t last_log = cc_list.log_buf.buffer[idx / 4];
+    uint16_t idx = (uint16_t)(core_cc_list.log_buf.index - 4);
+    uint32_t last_log = core_cc_list.log_buf.buffer[idx / 4];
 
     while (g_prev_pc != last_log);
 
     g_prev_pc = 0;
 
-    // first time hitting anchor, so clear coverage for pre-anchor tracked pcs
-    if (fuzz_started == false) {
-        if (forced_trace) {
-            current_run  = g_array_new(FALSE, FALSE, sizeof(uint32_t));
-            previous_run = g_array_new(FALSE, FALSE, sizeof(uint32_t));
-        }
-
-        memset(CVG, 0, sizeof(CVG));
-        return;
-    }
+    // if fuzzer not started, return
+    if (fuzz_started == false) return;
 
     if (forced_trace) fuzz_trace_finish_run();
 
+    // if fuzzer had previously consumed input, mark empty and ready for next
     if (atomic_load_explicit(&fuzz_buffer.state, memory_order_acquire) == FUZZ_BUSY) {
         atomic_store_explicit(&fuzz_buffer.state, FUZZ_EMPTY, memory_order_release);
     }
@@ -258,31 +192,39 @@ static uint32_t *fuzz_get_writable_ranges(const char *filename, size_t *out_coun
         array[count++] = b;
     }
 
+    // Doesn't include stack information
+    if (array[count-1] != 0) {
+        printf("No stack information\n");
+        return 0;
+    }
+
     fclose(f);
 
     *out_count = count;   // number of uint32_t entries (not pairs!)
     return array;
 }
 
+// Initialization related things that should wait until anchor is reached
 static void fuzz_initialize_anchor(char* args) {
     if (!args) {
         utils_die("Error, anchor doesn't have arguments");
     }
 
+    // clear coverage from the run up to the anchor
+    memset(CVG, 0, sizeof(CVG));
+
     atomic_init(&fuzz_buffer.state, FUZZ_EMPTY);
     atomic_init(&fuzz_buffer.assert, 0);
     fuzz_buffer.buffer = NULL;
 
-    wlist = fuzz_get_writable_ranges(WLIST_PATH, &wlist_count);
-    if (wlist == NULL || (wlist_count & 1)) {
-        utils_die("[anchor] Couldn't parse writable memory definitions");
-    }
-
-    if (!fuzz_init(args)) {
+    if (!fuzz_libAFL_init(args)) {
         utils_die("[anchor] Failed initialization");
     }
 
-    core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
+    // start tracing our coverage now that we've reached anchor
+    if (forced_trace && (fuzz_trace_init() != 0)) {
+        utils_die("[anchor] Failed to initialize tracing");
+    }
 }
 
 void virt_assert(unsigned int cpu_index, void *udata)
@@ -343,24 +285,16 @@ void anchor(unsigned int cpu_index, void *udata)
 
     // Lets libAFL know input is done, enforces correct coverage tracking timing
     fuzz_finish();
-    if (fuzz_started) {
-        // Restore saved regs
-        for (int i = 0; i < 16; i++) {
-            qemu_set_register(saved_regs[i], i);
-        }
-
-        // Restore saved memory
-        uint32_t total_mem = 0;
-        for (int i = 0; i < wlist_count; i += 2) {
-            qemu_plugin_write_memory(wlist[i], membuff + total_mem, wlist[i+1]);
-            total_mem += wlist[i+1];
-        }
-    } else {
+    if (!fuzz_started) {
         fuzz_initialize_anchor(udata);
         // save regs
         for (int i = 0; i < 16; i++) {
             saved_regs[i] = qemu_get_register(i);
         }
+
+        // first, rewrite the stack part of the wlist with the actual stack base to top
+        wlist[wlist_count - 1] = wlist[wlist_count - 2] - saved_regs[15]; // size
+        wlist[wlist_count - 2] = saved_regs[15]; // stack pointer
 
         uint32_t total_mem = 0;
         for (int i = 1; i < wlist_count; i += 2) {
@@ -380,6 +314,18 @@ void anchor(unsigned int cpu_index, void *udata)
             total_mem += wlist[i+1];
         }
         fuzz_started = true;
+    } else {
+        // Restore saved regs
+        for (int i = 0; i < 16; i++) {
+            qemu_set_register(saved_regs[i], i);
+        }
+
+        // Restore saved memory
+        uint32_t total_mem = 0;
+        for (int i = 0; i < wlist_count; i += 2) {
+            qemu_plugin_write_memory(wlist[i], membuff + total_mem, wlist[i+1]);
+            total_mem += wlist[i+1];
+        }
     }
 
     uint32_t read_count = fuzz_buffer_read(g_fuzzing_input, sizeof(g_fuzzing_input));
@@ -409,87 +355,7 @@ void anchor(unsigned int cpu_index, void *udata)
     }
 }
 
-static void fuzz_bbl_add(uint32_t pc) {
-    guint bbl_pc = pc & (~1ULL);
-    if (!g_hash_table_lookup(bbl_set, GUINT_TO_POINTER(bbl_pc))) {
-        guint timestamp = (guint)(g_get_monotonic_time() / 1000);
-
-        g_hash_table_insert(
-            bbl_set,
-            GUINT_TO_POINTER(bbl_pc),
-            GUINT_TO_POINTER(timestamp)
-        );
-    }
-}
-
-void fuzz_dump_bbl(void)
-{
-    if (!bbl_set) {
-        utils_die("bbl_set is not initialized");
-    }
-
-    FILE *f = fopen(bbl_dump_path, "w");
-    if (!f) {
-        utils_die("Failed to open dump file for writing");
-    }
-
-    GHashTableIter iter;
-    gpointer key, value;
-    int total = 0;
-
-    g_hash_table_iter_init(&iter, bbl_set);
-
-    while (g_hash_table_iter_next(&iter, &key, &value)) {
-        guint pc = GPOINTER_TO_UINT(key);
-        guint timestamp = GPOINTER_TO_UINT(value);
-
-        /* Write as: hex_pc<TAB>timestamp */
-        fprintf(f, "%08x\t%u\n", pc, timestamp);
-
-        total++;
-    }
-
-    fclose(f);
-
-    printf("Dumped %d blocks\n", total);
-}
-
-
-void fuzz_bbl_init(void)
-{
-    int total = 0;
-
-    bbl_set = g_hash_table_new(g_direct_hash, g_direct_equal);
-    if (!bbl_set) {
-        utils_die("Failed to allocate bbl_set");
-    }
-
-    FILE *f = fopen(bbl_dump_path, "r");
-    if (!f) {
-        printf("Allocating new bbl_set\n");
-        return;
-    }
-
-    guint pc;
-    guint timestamp;
-
-    /* Read lines like: 08001234<TAB>1573 */
-    while (fscanf(f, "%x\t%u", &pc, &timestamp) == 2) {
-        total++;
-
-        g_hash_table_insert(
-            bbl_set,
-            GUINT_TO_POINTER(pc),
-            GUINT_TO_POINTER(timestamp)
-        );
-    }
-
-    fclose(f);
-
-    printf("Loaded %d blocks\n", total);
-}
-
-void fuzz_add_observed_value(uint32_t val) {
+static void fuzz_add_observed_value(uint32_t val) {
     static int irq_depth = 0;
     
     if (val == 0xFFFFFFFF) {
@@ -497,19 +363,70 @@ void fuzz_add_observed_value(uint32_t val) {
     } else if (val == 0xFFFFFFFD) {
         irq_depth--;
     } else {
-        // we don't want stale value from before trace
-        if (g_prev_pc != 0) {
-            uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
-            CVG[idx] = CVG[idx] + 1;
-        }
+        if (irq_depth == 0) {
+            // we don't want stale value from before trace
+            if (g_prev_pc != 0) {
+                uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
+                CVG[idx] = CVG[idx] + 1;
+            }
 
-        //printf("[trace] %x\n", val);
-        if (current_run) g_array_append_val(current_run, val);
-        g_prev_pc = val;
+            if (forced_trace) fuzz_trace_add_value(val);
+            g_prev_pc = val;
+        }
+        fuzz_bbl_add(val);
     }
-    fuzz_bbl_add(val);
+}
+
+static void* tracer(void* arg) {
+	core_cc_list.count =1;
+	core_cc_ret.entry = &core_cc_entry;
+    core_cc_ret.list = &core_cc_list;
+	core_cc_ret.entry->reg = 15;
+	core_cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
+	uint16_t tracer_index =0;
+
+	tracer_ready=1;
+
+	//Maybe make read atomic
+	while(true) {
+		while((uint16_t) (core_cc_list.log_buf.index - tracer_index)) {
+            uint32_t value = core_cc_list.log_buf.buffer[tracer_index/4];
+            fuzz_add_observed_value(value);
+
+			tracer_index +=4;//32bit PC
+		}
+	}
+
+    return NULL;
 }
 
 int fuzz_init(int argc, char **argv) {
+    const char *filename = utils_get_arg("coverage", argc, argv);
+    if (filename &&
+        (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
 
+        coverage = 1;
+        if (pthread_create(&thread, NULL, tracer, NULL) != 0) {
+            perror("Failed to create thread");
+            exit(1);
+        }
+        fuzz_bbl_init();
+        core_register_exit_hook(fuzz_dump_bbl);
+    }
+
+    core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
+
+    //fuzz_register_callback(...);
+
+    wlist = fuzz_get_writable_ranges(WLIST_PATH, &wlist_count);
+    if (wlist == NULL || (wlist_count & 1)) {
+        utils_die("[anchor] Couldn't parse writable memory definitions");
+    }
+
+    while (!tracer_ready);
+
+    virtual_register("assert", virt_assert);
+    virtual_register("anchor", anchor);
+
+    return 0;
 }

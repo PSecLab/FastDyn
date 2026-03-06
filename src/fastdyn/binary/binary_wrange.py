@@ -18,6 +18,29 @@ def get_readelf_output(elf_path):
     )
     return result.stdout.splitlines()
 
+def get_initial_stack_pointer(elf_path):
+    result = subprocess.run(
+        ["arm-none-eabi-objdump", "-s", "-j", ".isr_vector", elf_path],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    for line in result.stdout.splitlines():
+        # Match a line containing the vector table bytes
+        m = re.search(r'^\s*[0-9a-fA-F]+\s+([0-9a-fA-F]{8})', line)
+        if m:
+            word = m.group(1)
+
+            # objdump shows bytes in order like: 00c00720
+            # which corresponds to bytes: 00 c0 07 20
+            # little-endian -> reverse
+            b = bytes.fromhex(word)
+            sp = int.from_bytes(b, "little")
+            return sp
+
+    raise RuntimeError("Could not locate ISR vector contents")
+
 # Parses through sections, if writable, adds address range and name to list
 
 def parse_sections(lines):
@@ -79,6 +102,8 @@ def run(out_file, bin_path):
             for start, end, names in merged:
                 size = end - start
                 f.write(f"0x{start:08X}\t{size:#x}\n")
+            stack = get_initial_stack_pointer(bin_path)
+            f.write(f"0x{stack:08X}\t0x0")
     except Exception as e:
         print("[binary_wrange.py] Couldn't open ", out_file, e)
 
