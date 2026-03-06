@@ -18,6 +18,7 @@
 #include "virtuals.h"
 #include "fuzz_bbl.h"
 #include "fuzz_trace.h"
+#include "protocol_fuzzers/protocol_fuzzers.h"
 
 static int coverage = 0;
 
@@ -355,6 +356,20 @@ void anchor(unsigned int cpu_index, void *udata)
     }
 }
 
+uint32_t fuzz_get_register(int reg) {
+    return qemu_get_register(reg);
+}
+void fuzz_set_register(uint32_t value, int reg) {
+    qemu_set_register(value, reg);
+}
+
+int fuzz_write_memory(unsigned long long addr, uint8_t *mem_buf, int len) {
+    return qemu_plugin_write_memory(addr, mem_buf, len);
+}
+int fuzz_read_memory(unsigned long long addr, uint8_t *mem_buf, int len) {
+    return qemu_plugin_read_memory(addr, mem_buf, len);
+}
+
 static void fuzz_add_observed_value(uint32_t val) {
     static int irq_depth = 0;
     
@@ -416,7 +431,7 @@ int fuzz_init(int argc, char **argv) {
 
     core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
 
-    //fuzz_register_callback(...);
+    fuzz_register_callback(fuzz_plugin_lwip_http_fuzzer);
 
     wlist = fuzz_get_writable_ranges(WLIST_PATH, &wlist_count);
     if (wlist == NULL || (wlist_count & 1)) {

@@ -6,6 +6,8 @@ libfuzz_wrapper_dep = declare_dependency(
 )
 deps += libfuzz_wrapper_dep
 
+subdir('protocol_fuzzers')
+
 srcs += files(
     'fuzz.c',
     'fuzz_bbl.c',
