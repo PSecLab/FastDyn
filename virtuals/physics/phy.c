@@ -90,10 +90,13 @@ int phy_get_joint_state(double *motor_0_pos, double *motor_2_pos)
 
 int phy_init(int argc, char **argv) {
     // FIX: Hacky
-#if FMU
+#if ENABLE_FMU
     fmu_init(argc, argv);
 #endif
+
+#if ENABLE_FLIGHT_CONTROLLERS
     fc_init(argc, argv);
+#endif 
 
 #if ENABLE_LIBGZ
     // TODO: Add a flag to determine which physics engine

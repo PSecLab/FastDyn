@@ -109,6 +109,7 @@ if ENABLE_LIBHW
   deps += libhw_dep
 endif
 
+
 #Based on the configurations, generate config.h
 ENABLE_LIBDEV = get_option('device_models')
 configure_file(
@@ -122,6 +123,8 @@ configure_file(
     'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0,
     'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0,
     'ENABLE_LIBDEV' : ENABLE_LIBDEV ? 1:0,
+	'ENABLE_FMU' : get_option('enable_fmu') ? 1 : 0,
+	'ENABLE_FLIGHT_CONTROLLERS' : get_option('enable_flight_controllers') ? 1 : 0,
   }
 )
 #config_inc = include_directories(meson.current_build_dir())
