@@ -9,6 +9,8 @@ extern "C" {
 
 extern phy_backend_t gazebo_backend;
 
+int virtual_gz_altimeter_init(int argc, char **argv);
+
 #ifdef __cplusplus
 }
 #endif

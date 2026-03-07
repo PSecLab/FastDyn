@@ -75,6 +75,8 @@ typedef struct phy_backend {
 
     int (*get_joint_state)(double *motor_0_pos, double *motor_2_pos);
 
+    int (*get_altimeter_reading)(double *altitude);
+
 } phy_backend_t;
 
 typedef struct phy_backend_entry {
@@ -106,6 +108,7 @@ int phy_get_navsat_reading(gps_data_t *gps_data);
 int phy_set_servo_pwm(int channel, int pwm);
 int phy_advance_simulation(double run_until_time);
 int phy_get_joint_state(double *motor_0_pos, double *motor_2_pos);
+int phy_get_altimeter_reading(double *altitude);
 
 
 #endif /* PHY_H */

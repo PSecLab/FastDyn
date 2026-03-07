@@ -5,6 +5,7 @@
 #include <gz/transport.hh>
 #include <gz/msgs/model.pb.h>
 #include <gz/msgs/magnetometer.pb.h>
+#include <gz/msgs/altimeter.pb.h>
 #include <gz/msgs/imu.pb.h>
 #include <gz/msgs/clock.pb.h>
 #include <gz/msgs/navsat.pb.h>
@@ -1075,6 +1076,7 @@ int main(int argc, char **argv)
   std::string mag_topic = "/world/runway/model/r1_rover/link/base_link/sensor/magnetometer_sensor/magnetometer";
   std::string joint_states_topic = "/joint_states";
   std::string pose_topic = "/model/r1_rover/pose";
+  std::string altimeter_topic = "NONE";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
@@ -1082,10 +1084,12 @@ int main(int argc, char **argv)
   } else if (model_name == "iris") {
     navsat_topic = "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    pose_topic = "/model/iris_with_ardupilot/pose";
     joint_states_topic = "NONE";
   } else if (model_name == "bicopter") {
     navsat_topic = "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    pose_topic = "/model/bicopter_with_ardupilot/pose";
     joint_states_topic = "NONE";
   } else if (model_name == "vtail_plane") {
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
@@ -1108,6 +1112,11 @@ int main(int argc, char **argv)
     mag_topic =    "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
   }
+
+  if (model_name == "r1_rover") {
+    altimeter_topic = "/world/runway/altitude";
+  }
+
   GenericSensorService<gz::msgs::NavSat> navSatService(
     node,
     navsat_topic,
@@ -1119,6 +1128,12 @@ int main(int argc, char **argv)
   //   mag_topic,
   //   "/get_mag_reading"
   // );
+
+  GenericSensorService<gz::msgs::Altimeter> altimeterService(
+    node,
+    altimeter_topic,
+    "/get_altimeter_reading"
+  );
 
   GetMagReadingService magService(
     node,

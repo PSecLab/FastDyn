@@ -977,6 +977,7 @@ void compass_read_block(unsigned int cpu_index, void *udata)
 
     // convert to raw format
     HMC5843RawData raw_data = convert_to_hmc5843(sim_data);
+    // printf("Converted magnetometer raw data: X=%d, Y=%d, Z=%d\n", raw_data.mag_x_raw, raw_data.mag_y_raw, raw_data.mag_z_raw);
     uint8_t wire_bytes[6];
     pack_to_hmc5843_wire_format(raw_data, wire_bytes);
     qemu_plugin_write_memory(buf, wire_bytes, 6);
@@ -1523,6 +1524,26 @@ void copter_allocate_motors(unsigned int cpu_index, void *udata)
 }
 
 /**
+ * @brief Allocate motors for heli frame
+ *
+ * Called like this from virtuals.txt:
+ *
+ * <address/symbol> heli_allocate_motors
+ */
+void heli_allocate_motors(unsigned int cpu_index, void *udata)
+{
+    // uint32_t frame_class_addr = 0x20008284; // AP_Copter::FrameClass static instance
+    uint32_t frame_class = 11; // dual
+    // uint8_t frame_class = 1; // quad
+    uint32_t copter_base = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    uint32_t g2_ref = copter_base + 0x42c8;
+    uint32_t g2_addr = 0;
+    qemu_plugin_read_memory(g2_ref, (uint8_t *)&g2_addr, sizeof(uint32_t));
+    uint32_t frame_class_addr = g2_addr + 0xaac;
+    qemu_plugin_write_memory(frame_class_addr, (uint8_t *)&frame_class, sizeof(uint32_t));
+}
+
+/**
  * @brief Set the frame type for copter
  */
 
@@ -1655,8 +1676,8 @@ void read_mag_when_published(unsigned int cpu_index, void *udata)
     }
     else
     {
-        fprintf(stderr, "HIT: read_mag_when_published\n");
-        printf("Magnetometer reading from Driver Backend (milliGauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_values[0], mag_values[1], mag_values[2]);
+        // fprintf(stderr, "HIT: read_mag_when_published\n");
+        // printf("Magnetometer reading from Driver Backend (milliGauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_values[0], mag_values[1], mag_values[2]);
         mag_udp_send_mg(mag_values[0], mag_values[1], mag_values[2]);
     }
 }
@@ -1671,8 +1692,8 @@ void read_imu_when_published(unsigned int cpu_index, void *udata)
         return;
     }
     else {
-        fprintf(stderr, "HIT: read_imu_when_published\n");
-        printf("Accel reading from Driver Backend (m/s^2): X=%.3f, Y=%.3f, Z=%.3f\n", imu_values[0], imu_values[1], imu_values[2]);
+        // fprintf(stderr, "HIT: read_imu_when_published\n");
+        // printf("Accel reading from Driver Backend (m/s^2): X=%.3f, Y=%.3f, Z=%.3f\n", imu_values[0], imu_values[1], imu_values[2]);
         // mag_udp_send_mg(imu_values[0], imu_values[1], imu_values[2]);
     }
 
@@ -1774,6 +1795,8 @@ void set_hardfault_status(unsigned int cpu_index, void *udata)
 //     set_hardfault_pc(faulting_pc);
 // }
 
+
+
 int ardupilot_init_virtuals(int argc, char **argv)
 {
     int status = 0;
@@ -1833,6 +1856,7 @@ int ardupilot_init_virtuals(int argc, char **argv)
 
     // copter allocate motors
     virtual_register("copter_allocate_motors", copter_allocate_motors);
+    virtual_register("heli_allocate_motors", heli_allocate_motors);
 
     // arming
     virtual_register("arming_check_enabled", arming_check_enabled);

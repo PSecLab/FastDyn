@@ -5,6 +5,7 @@
 #include <gz/msgs/boolean.pb.h>
 #include <gz/msgs/model.pb.h>
 #include <gz/msgs/magnetometer.pb.h>
+#include <gz/msgs/altimeter.pb.h>
 #include <gz/msgs/uint32.pb.h>
 #include <gz/msgs/navsat.pb.h>
 #include <gz/msgs/uint32.pb.h>
@@ -153,6 +154,17 @@ static int advance_simulation(double run_until_time);
  * @return 1 on success, 0 on failure
  */
 static int get_imu_batch(imu_batch_t *imu_batch);
+
+/**
+ * @brief Get an altimeter reading
+ *
+ * This function retrieves the latest altimeter reading from the Gazebo
+ * simulation.
+ *
+ * @param altitude Pointer to store the altitude reading
+ * @return 1 on success, 0 on failure
+ */
+static int get_altimeter_reading(double *altitude);
 
 /**
  * @brief Sets the program counter for hardfault simulation
@@ -356,6 +368,15 @@ static int set_hardfault_pc(uint32_t pc) {
     return 1;
 }
 
+static int get_altimeter_reading(double *altitude) {
+    gz::msgs::Altimeter response;
+    if (!request_service("/get_altimeter_reading", response)) {
+        return 0;
+    }
+    *altitude = response.vertical_position();
+    return 1;
+}
+
 static int gz_init(void)
 {
     // Set initial pose as a demo
@@ -372,7 +393,8 @@ phy_backend_t gazebo_backend = {
     .get_navsat_reading = get_navsat_reading,
     .set_servo_pwm = set_servo_pwm,
     .advance_simulation = advance_simulation,
-    .get_joint_state = get_joint_state
+    .get_joint_state = get_joint_state,
+    .get_altimeter_reading = get_altimeter_reading
 };
 
 } // extern "C"

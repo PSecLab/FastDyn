@@ -6,7 +6,7 @@
 #include <virtuals.h>
 
 // --- 1. Include the Auto-Generated Header ---
-#include "fmu_header.h" 
+#include "fmu_header.h"
 
 #if 01
 
@@ -21,7 +21,7 @@ typedef fmi2Status    (*fmi2SetReal_ft)(fmi2Component, const fmi2ValueReference[
 typedef fmi2Status    (*fmi2SetInteger_ft)(fmi2Component, const fmi2ValueReference[], size_t, const fmi2Integer[]);
 typedef fmi2Status    (*fmi2SetBoolean_ft)(fmi2Component, const fmi2ValueReference[], size_t, const fmi2Boolean[]);
 typedef void          (*fmi2FreeInstance_ft)(fmi2Component);
-#endif 
+#endif
 
 // --- FMI Callback Functions ---
 void cb_log(fmi2ComponentEnvironment env, fmi2String instanceName, fmi2Status status, fmi2String category, fmi2String message, ...) {
@@ -51,7 +51,7 @@ FMU fmu;
 void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
 
 	//Hardcoded for now
-	char * fmu_path = "/home/faculty/abk6349/data/fastdyn/virtuals/physics/physics_engines/fmu/hifi_altimeter/harness/../output_folder/249.fmutmp/sources/build/Altimeter.so";
+	char * fmu_path = "/root/rooney/FastDyn/virtuals/physics/physics_engines/fmu/hifi_altimeter/output_folder/249.fmutmp/sources/build/Altimeter.so";
 
     fmu.handle = dlopen(fmu_path, RTLD_LAZY);
     if (!fmu.handle) {
@@ -73,7 +73,7 @@ void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
     fmi2CallbackFunctions callbacks = {cb_log, calloc, free, NULL, NULL};
 
     // 2. Instantiate using generated macros
-    fmu.instance = fmu.instantiate(MODEL_IDENTIFIER, fmi2CoSimulation, 
+    fmu.instance = fmu.instantiate(MODEL_IDENTIFIER, fmi2CoSimulation,
                                    FMU_GUID, resource_uri, &callbacks, fmi2False, fmi2False);
 
     if (!fmu.instance) {
@@ -85,7 +85,7 @@ void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
     fmu.enterInit(fmu.instance);
 
     // 3.5 Setup parameters & Determinism
-    
+
     // Disable automatic OS entropy seeding
     fmi2ValueReference vr_auto_seed = VREF_PARAM_GLOBALSEED_USEAUTOMATICSEED;
     fmi2Boolean disable_auto = fmi2False;
@@ -93,7 +93,7 @@ void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
 
     // Set your deterministic master seed (this can be passed in via argv later)
     fmi2ValueReference vr_master_seed = VREF_PARAM_RNGSEED;
-    fmi2Integer master_seed = 1337; 
+    fmi2Integer master_seed = 1337;
     fmu.setInteger(fmu.instance, &vr_master_seed, 1, &master_seed);
 
     fmu.exitInit(fmu.instance);
@@ -125,7 +125,7 @@ void virtual_altimeter_get(unsigned int cpu_index, void *udata) {
 	if (last_qemu_ns != 0) {  // after first step
 	    h = now_fmu_sec - t;  // delta in seconds
 	}
-	
+
 
     // 5. Simulation Loop
    // printf("Time\tTrueAltitude (In)\tSensedPressure (Out)\n");
@@ -147,7 +147,7 @@ void virtual_altimeter_get(unsigned int cpu_index, void *udata) {
     t += h;
     last_qemu_ns = now_qemu_ns;
 
-} 
+}
 
 
 void virtual_altimeter_teardown(unsigned int cpu_index, void *udata) {
