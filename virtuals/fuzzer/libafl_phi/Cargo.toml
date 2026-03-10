@@ -32,10 +32,10 @@ env_logger = "0.11.7"
 gz-msgs = "0.9.0"
 gz-transport = "0.9.0"
 
-# libafl = { path = "/root/fire/LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
-# libafl_bolts = { path = "/root/fire/LibAFL-0.15.4/crates/libafl_bolts" }
-libafl = { path = "../../../../LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
-libafl_bolts = { path = "../../../../LibAFL-0.15.4/crates/libafl_bolts" }
+# libafl = { path = "../../../../LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
+# libafl_bolts = { path = "../../../../LibAFL-0.15.4/crates/libafl_bolts" }
+libafl = { version = "0.15.4", features = ["tui_monitor"] }
+libafl_bolts = "0.15.4"
 
 log = { version = "0.4.22", features = ["release_max_level_info"] }
 ordered-float = "5.1.0"

@@ -1,3 +1,7 @@
+// -----------------------------------------------------------------------------------------------
+// ----------------------------------- DO NOT MODIFY BELOW ---------------------------------------
+// -----------------------------------------------------------------------------------------------
+
 mod phi_observer;
 mod phi_feedback;
 mod phi_objective;
@@ -61,28 +65,9 @@ use libafl::executors::{Executor, WithObservers};
 use std::marker::PhantomData;
 use libafl::state::{HasCorpus, HasExecutions};
 
-// -------------------------------
-// CONSTANT VALUES
-const MISSION_TIMEOUT: f64 = 20.0; // seconds == 7 minutes max for rollover mission
-const RECORDING_TIMESTEP: f64 = 0.1; // seconds
-const TRACE_LOG_PATH: &str = "./trace_logs";
-const ROBUSTNESS_LOG_PATH: &str = "./robustness_logs";
-const CRASH_LOG_PATH: &str = "./crashes";
-const CORPUS_LOG_PATH: &str = "./corpus";
-const COVERAGE_DUMP_PATH: &str = "./covg.csv";
-const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this size in C is the same
-// -------------------------------
-
-// -------------------------------
-// Coverage map shared with the instrumentation in core.c
-#[no_mangle]
-pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
-// -------------------------------
-
-/*
-    Once the CPExpInput is built, you can use this helper function to automatically
-    create a search space object for the optimizer.
-*/
+/**
+ * Given a CPExpInput, automatically create a search space for the optimizer.
+ */
 fn search_space_from_input_library(input_lib: &CPExpInput) -> Space {
 
     let mut space = Space::new();
@@ -145,11 +130,72 @@ where
             param_names.push(',');
         }
 
-        Ok(execute_mission(input, param_names, MISSION_TIMEOUT))
+        let result: ExitKind = execute_mission(
+            input, 
+            param_names, 
+            SYSTEM_UNDER_TEST,
+            MISSION_WAYPOINT_FILE_NAME, 
+            MISSION_TIMEOUT, 
+            POST_ARM_PARAMETER_UPDATE_DELAY,
+            NOISE_APPLICATION_SIM_TIME,
+            HEADLESS_MODE
+        );
+
+        Ok(result)
     }
 }
 
+// Coverage map shared with the instrumentation in core.c
+const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this size in C is the same
+#[no_mangle]
+pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
+const COVERAGE_DUMP_PATH: &str = "./covg.csv";
+
+const TRACE_LOG_PATH: &str = "./trace_logs";
+const ROBUSTNESS_LOG_PATH: &str = "./robustness_logs";
+const CRASH_LOG_PATH: &str = "./crashes";
+const CORPUS_LOG_PATH: &str = "./corpus";
+
+// ------------------------------------------------------------------------------------------------
+// ----------------------------------- DO NOT MODIFY ABOVE ----------------------------------------
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * MISCELLANEOUS CONSTANT VALUES
+ * 
+ * Edit these values as needed.
+ * 
+ * SYSTEM_UNDER_TEST: The name of the CPS to test.
+ * MISSION_WAYPOINT_FILE_NAME: The name of the file containing mission waypoints for the system under test.
+ *     NOTE: the file must be in FastDyn/virtuals/fuzzer/physics/flight_controllers/courbet/mavlink/
+ * MISSION_TIMEOUT: The maximum simulation time allowed before it is killed
+ * POST_ARM_PARAMETER_UPDATE_DELAY: The time to wait after arming the CPS before updating parameter values.
+ * NOISE_APPLICATION_SIM_TIME: The simulation time at which noise should be applied to the system's sensors.
+ * RECORDING_TIMESTEP: An approximation of how often the CPS's physical state is logged during a simulation
+ * INITIAL_EXPLORATION_POINTS: The number of inputs to generate and test before the main fuzz loop begins.
+ * EXECUTIONS_PER_PHI_STAGE: The number of consecutive optimizer-generated inputs to test during each phi stage.
+ * MAX_EXECUTIONS_PER_LAMBDA_STAGE: The maximum number of mutations to make during each lambda stage.
+ * HEADLESS_MODE: Run the fuzzing campaign with or without the Gazebo/MAVproxy GUIs. Mainly for debugging.
+ */
+const SYSTEM_UNDER_TEST: &str = "plane"; // Choose either "rover" or "plane"
+const MISSION_WAYPOINT_FILE_NAME: &str = "plane_circle_point.txt"; 
+const MISSION_TIMEOUT: f64 = 300.0; // seconds
+const POST_ARM_PARAMETER_UPDATE_DELAY: f64 = 15.0; // seconds
+const NOISE_APPLICATION_SIM_TIME: f64 = 100.0; // seconds
+const RECORDING_TIMESTEP: f64 = 0.1; // seconds
+const INITIAL_EXPLORATION_POINTS: usize = 10;
+const EXECUTIONS_PER_PHI_STAGE: usize = 10;
+const MAX_EXECUTIONS_PER_LAMBDA_STAGE: usize = 10;
+const HEADLESS_MODE: bool = true; // WARNING: Only set to false if fuzzing outside of a docker container...
+
 pub fn main() {
+
+    env_logger::init();
+
+    /**
+     * This code translates English descriptions of parameters into actual parameters using LLM.
+     * For March NSWCPD Demonstration purposes, we omit this feature as it requires internet.
+     */
 
     // let api_key = env::var("OPENAI_API_KEY")
     //     .expect("Set OPENAI_API_KEY in your environment");
@@ -171,145 +217,105 @@ pub fn main() {
 
     // println!("OpenAI says: {}", response);
 
-    env_logger::init();
-
-    let physical_observer = PhysicalObserver::new(
-        RECORDING_TIMESTEP, // time step
-        MISSION_TIMEOUT, // mission time limit
-        TRACE_LOG_PATH, // directory to store the trace logs
-        ROBUSTNESS_LOG_PATH, // directory to store the robustness logs
-    );
     let cvg_observer = unsafe { StdMapObserver::new("cvg", &mut CVG) }; // Example address
+    let coverage_feedback_for_stats = MaxMapFeedback::new(&cvg_observer);
 
-    // Feedback to rate the interestingness of an input
-    let mut physical_feedback = PhysicalFeedback::new();
-    let mut coverage_feedback = MaxMapFeedback::new(&cvg_observer);
-
-    let stats_stage = AflStatsStage::builder()
-        .map_feedback(&coverage_feedback)
-        .build()
-        .unwrap();
-
-    let mut feedback = feedback_or!(physical_feedback, coverage_feedback); // MaxMapFeedback::new(&observer), );
-
-    // A feedback to choose if an input is a solution or not
-    // let mut objective = feedback_or!(PhysicalObjective::new(), CrashFeedback::new(), TimeoutFeedback::new());
-    let mut objective = feedback_or!(PhysicalObjective::new(), CrashFeedback::new(),); // No timeout for debugging
-
-
-    // Build the optimizer and input library (CPExpInput) here
-    // TODO: Load all this stuff from a file + create a function
-
-    // --------------------------------
-    // NOTE: Add Ardu parameters to space first, then env parameters!!
-    // --------------------------------
-
-    // https://ardupilot.org/rover/docs/parameters.html
-
-    let mut param_info_vec: Vec<ParamInput> = Vec::new();
-
-    /*
-        ChatGPT recommendations for causing rollover:
-            - ATC_STR_RAT_MAX
-            - ATC_STR_ACC_MAX
-            - ATC_TURN_MAX_G
-            - CRUISE_SPEED
-            - CRUISE_THROTTLE
-            - ATC_ACCEL_MAX
-            - TURN_RADIUS
-            - ATC_TURN_MAX_G
-            - WP_SPEED
+    /**
+     * BUILDING THE FEEDBACK AND OBJECTIVE OBJECTS
+     * 
+     * These objects define how the fuzzer evaluates input as "interesting" or a solution.
+     * Interesting inputs (associated with feedback) are added to the corpus and will be mutated in the future.
+     * Solutions (associated with objectives) are saved to the "crashes/" directory.
+     * 
+     * Choose which metrics are used for feedback and objectives by adding them inside the `feedback_or!` macro.
      */
 
-    param_info_vec.push(ParamInput::new_float(
-        "ATC_STR_RAT_MAX",
-        (0.0, 1000.0), // min, max
-        0.1, // increment
-    ));
+    let mut physical_feedback = PhysicalFeedback::new(); // Does the input lower an STL's minimum robustness?
+    let mut coverage_feedback = coverage_feedback_for_stats.clone(); // Does the input increase code coverage?
+    let crash_feedback = CrashFeedback::new(); // Does the input cause a hardfault in the firmware?
+    let timeout_feedback = TimeoutFeedback::new(); // Does the input cause the mission to exceed the time limit?
+    let physical_objective = PhysicalObjective::new(); // Does the input falsify an STL formula (robustness < 0)?
 
-    param_info_vec.push(ParamInput::new_float(
-        "ATC_STR_ACC_MAX",
-        (0.0, 1000.0), // min, max
-        0.1, // increment
-    ));
+    // Modify these lines to adjust feedback/objective metrics
+    let mut feedback = feedback_or!(physical_feedback, coverage_feedback,);
+    let mut objective = feedback_or!(physical_objective, crash_feedback,);
 
-    param_info_vec.push(ParamInput::new_float(
-        "ATC_TURN_MAX_G",
-        (0.1, 10.0), // min, max
-        0.01, // increment
-    ));
+    /**
+     * DEFINING THE FUZZING INPUTS
+     * 
+     * Here, you may define which inputs you wish to search during the fuzzing campaign.
+     * We define two types of inputs: parameter inputs and environment inputs.
+     * Parameter inputs are actual ArduPilot firmware parameters which are updated using MAVlink.
+     * All other inputs are environment inputs. In this example, we have magnetometer and IMU sensor noise.
+     * 
+     * With the parameter description to LLM functionality, you would not need to manually specify parameter inputs.
+     * In any case, you may consult the following references below for ArduPilot parameter descriptions:
+     * 
+     * https://ardupilot.org/rover/docs/parameters-Rover-stable-V4.6.2.html
+     * https://ardupilot.org/plane/docs/parameters-Plane-stable-V4.6.2.html
+     */
 
-    param_info_vec.push(ParamInput::new_float(
-        "CRUISE_SPEED",
-        // (0.0, 100.0), // min, max
-        (50.0, 100.0), // We want high speed by default.
-        0.1, // increment
-    ));
+    // We have included the parameters we fuzzed during the ArduPlane campaign here as an example. 
+    let param_info_vec: Vec<ParamInput> = vec![
+        // Group 1 — Roll Control Loop
+        // ParamInput::new_float("RLL_RATE_P", (0.08, 0.35), 0.005),
+        // ParamInput::new_float("RLL_RATE_I", (0.01, 0.6), 0.01),
+        // ParamInput::new_float("RLL_RATE_D", (0.01, 0.6), 0.01),
+        // ParamInput::new_float("RLL_RATE_SMAX", (0.0, 200.0), 0.5),
+        // ParamInput::new_float("RLL2SRV_RMAX", (0.0, 180.0), 1.0),
 
-    param_info_vec.push(ParamInput::new_float(
-        "CRUISE_THROTTLE",
-        // (0.0, 100.0), // min, max
-        (50.0, 100.0), // We want high throttle by default.
-        1.0, // increment
-    ));
+        // Group 2 — Pitch Control Loop
+        // ParamInput::new_float("PTCH_RATE_P", (0.08, 0.35), 0.005),
+        // ParamInput::new_float("PTCH_RATE_I", (0.01, 0.6), 0.01),
+        // ParamInput::new_float("PTCH_RATE_D", (0.001, 0.03), 0.001),
+        // ParamInput::new_float("PTCH_RATE_SMAX", (0.0, 200.0), 0.5),
+        // ParamInput::new_float("PTCH2SRV_RMAX_UP", (0.0, 100.0), 1.0),
+        // ParamInput::new_float("PTCH2SRV_RMAX_DN", (0.0, 100.0), 1.0),
 
-    param_info_vec.push(ParamInput::new_float(
-        "ATC_ACCEL_MAX",
-        (0.0, 10.0), // min, max
-        0.1, // increment
-    ));
+        // Group 3 — Energy/Throttle Management
+        // ParamInput::new_float("THR_MAX", (0.0, 100.0), 1.00),
+        // ParamInput::new_float("THR_MIN", (-100.0, 100.0), 1.00),
+        // ParamInput::new_float("THR_SLEWRATE", (0.0, 127.0), 1.00),
+        // ParamInput::new_float("KFF_THR2PTCH", (-5.0, 5.0), 0.01),
 
-    param_info_vec.push(ParamInput::new_float(
-        "TURN_RADIUS",
-        (0.0, 5.0), // min, max
-        0.1, // increment
-    ));
+        // Group 4 — Flight Envelope Limits
+        // ParamInput::new_float("LEVEL_ROLL_LIMIT", (0.0, 45.0), 1.0),
+        // ParamInput::new_float("PTCH_LIM_MAX_DEG", (0.0, 90.0), 1.0),
+        // ParamInput::new_float("PTCH_LIM_MIN_DEG", (-90.0, 0.0), 1.0),
 
-    param_info_vec.push(ParamInput::new_float(
-        "ATC_TURN_MAX_G",
-        (0.1, 10.0), // min, max
-        0.01, // increment
-    ));
+        // Group 5 — Navigation / Path Following
+        // ParamInput::new_float("WP_LOITER_RAD", (-32767.0, 32767.0), 1.0),
+        // ParamInput::new_float("WP_MAX_RADIUS", (0.0, 32767.0), 1.0),
+        // ParamInput::new_float("FBWB_CLIMB_RATE", (1.0, 10.0), 0.1),
 
-    param_info_vec.push(ParamInput::new_float(
-        "WP_SPEED",
-        (50.0, 100.0), // min, max
-        0.1, // increment
-    ));
+        // Group 6 — Sensor / Estimation Perturbation
+        // ParamInput::new_float("GPS1_MB_OFS_X", (-5.0, 5.0), 0.01),
+        // ParamInput::new_float("GPS1_MB_OFS_Y", (-5.0, 5.0), 0.01),
+        // ParamInput::new_float("GPS1_MB_OFS_Z", (-5.0, 5.0), 0.01),
+        // ParamInput::new_float("INS_POS1_X", (-5.0, 5.0), 0.01),
+        // ParamInput::new_float("INS_POS1_Y", (-5.0, 5.0), 0.01),
+        // ParamInput::new_float("INS_POS1_Z", (-5.0, 5.0), 0.01),
+    ];
 
-    // Example of categorical parameter input
-    // param_info_vec.push((ParamInput::new_categorical(
-    //     "powers_of_ten",
-    //     vec![1.0, 10.0, 100.0, 1000.0], // categories
-    // )));
+    let env_info_vec: Vec<EnvInput> = vec![
+        // Group 1 - IMU gyroscope noise
+        // EnvInput::new("gyro_white_scale", (0.0, 5.0), false),
+        // EnvInput::new("gyro_drift_scale", (0.0, 5.0), false),
 
-    let mut env_info_vec: Vec<EnvInput> = Vec::new();
+        // Group 2 - IMU accelerometer noise
+        // EnvInput::new("accel_white_scale", (0.0, 5.0), false),
+        // EnvInput::new("accel_drift_scale", (0.0, 5.0), false),
 
-    // env_info_vec.push(EnvInput::new(
-    //     "wind_speed",
-    //     (0.0, 20.0), // min, max
-    //     false, // truncate = false --> float
-    // ));
+        // Group 3 - Magnetometer noise
+        // EnvInput::new("mag_white_scale", (0.0, 5.0), false),
+        // EnvInput::new("mag_drift_scale", (0.0, 5.0), false),
+    ];
 
-    // env_info_vec.push(EnvInput::new(
-    //     "terrain_type",
-    //     (0.0, 3.0), // 3 types: 0, 1, 2
-    //     true, // truncate = true --> integer
-    // ));
-
+    // Create optimizer
     let input_library = CPExpInput::new(param_info_vec, env_info_vec);
-
-    // println!("Input library: {:?}", input_library);
-
     let space = search_space_from_input_library(&input_library);
-
-    // println!("Search space: {:?}", space);
-
-    // Create options object
-    let initial_points = 20; // This controls how many initial inputs are generated before fuzzing starts
     let mut opt = BayesianOptimizationOptions::default();
-    opt.n_initial_points = initial_points.clone();
-
+    opt.n_initial_points = INITIAL_EXPLORATION_POINTS;
     let mut bo = BayesianOptimizer::new(space, Some(opt));
 
     let mut state = CPExpState::new(
@@ -333,8 +339,7 @@ pub fn main() {
         // CPExpInput object for transforming TargetInputs (serializable) into usable values
         input_library,
 
-    )
-    .unwrap();
+    ).unwrap();
 
     // The Monitor trait define how the fuzzer stats are displayed to the user
     #[cfg(not(feature = "tui"))]
@@ -355,6 +360,13 @@ pub fn main() {
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
+    let physical_observer = PhysicalObserver::new(
+        RECORDING_TIMESTEP,
+        MISSION_TIMEOUT,
+        TRACE_LOG_PATH,
+        ROBUSTNESS_LOG_PATH,
+    );
+
     let executor = FastDynExecutor::new(&state);
     let mut executor = WithObservers::new(executor, tuple_list!(physical_observer, cvg_observer));
 
@@ -364,20 +376,23 @@ pub fn main() {
             &mut fuzzer,
             &mut executor,
             &mut mgr,
-            initial_points,
+            INITIAL_EXPLORATION_POINTS,
         )
         .expect("Failed to generate the initial corpus");
 
     println!("Starting the fuzzing loop!");
 
+    let stats_stage = AflStatsStage::builder()
+        .map_feedback(&coverage_feedback_for_stats)
+        .build()
+        .unwrap();
+
     // Setup a mutational stage with a basic bytes mutator
     let mutator = HavocScheduledMutator::new(havoc_mutations());
 
-    // TODO: Do we need a calibration stage?
     let mut stages = tuple_list!(
-        // calibration_stage,
-        PhiStage::new(10), // 10 optimizer executions per phi stage
-        LambdaMutationalStage::with_max_iterations(mutator, nonzero!(10)),
+        PhiStage::new(EXECUTIONS_PER_PHI_STAGE),
+        LambdaMutationalStage::with_max_iterations(mutator, nonzero!(MAX_EXECUTIONS_PER_LAMBDA_STAGE)),
         stats_stage,
     );
 

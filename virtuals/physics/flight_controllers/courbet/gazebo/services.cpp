@@ -282,6 +282,9 @@ private:
 
     double dt = 0.01; // assuming 100 Hz update rate
     gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
+    // std::cerr << "NEW READING:" << std::endl;
+    // std::cerr << "\tCorrected mag: " << m_corr.X() << ", " << m_corr.Y() << ", " << m_corr.Z() << std::endl;
+    // std::cerr << "\tNoisy mag: " << noisy_mag_corr.X() << ", " << noisy_mag_corr.Y() << ", " << noisy_mag_corr.Z() << std::endl;
     gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
 
     gz::msgs::Magnetometer latest_msg_corr_ = raw; // timestamp/frame_id 유지
@@ -416,6 +419,8 @@ bool OnSetNoiseScaleRequest(const gz::msgs::StringMsg &req,
   double white_scale = std::stod(token);
   std::getline(ss, token, ',');
   double drift_scale = std::stod(token);
+
+  // printf("got payload: %s\n", payload.c_str());
 
   if (sensor_type == "gyro") {
     gyro_noise_model.white_scale = white_scale;
@@ -1075,6 +1080,7 @@ int main(int argc, char **argv)
   std::string mag_topic = "/world/runway/model/r1_rover/link/base_link/sensor/magnetometer_sensor/magnetometer";
   std::string joint_states_topic = "/joint_states";
   std::string pose_topic = "/model/r1_rover/pose";
+  std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
@@ -1091,6 +1097,7 @@ int main(int argc, char **argv)
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/skywalker_x8/pose";
+    imu_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/imu_sensor/imu";
     // pose_topic = "/world/runway/dynamic_pose/info";
     // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
     // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
@@ -1149,7 +1156,6 @@ int main(int argc, char **argv)
 
   // std::string pose_topic = "/model/r1_rover/pose";
   // std::string pose_topic = "/model/gs_drone/pose";
-  std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
   std::string clock_topic = "/world/runway/clock";
 
   MultiSensorService multiSensorService(

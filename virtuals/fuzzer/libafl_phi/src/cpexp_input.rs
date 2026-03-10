@@ -288,6 +288,7 @@ impl TargetInput {
         let ask_vec= ask_array.to_vec();
         let param_info_vec = input_library.get_param_input();
         let asked_param_values = &ask_vec[0..param_info_vec.len()];
+        // println!("Asked parameter values from optimizer (pre-processing): {:?}", asked_param_values);
 
         // Process the proposed parameter values before byte conversion
         let mut processed_param_values: Vec<f32> = Vec::new();
@@ -335,7 +336,8 @@ impl TargetInput {
         // First, extract the environment values from ask_array
         let ask_vec= ask_array.to_vec();
         let env_info_vec = input_library.get_env_input();
-        let asked_env_values = &ask_vec[env_info_vec.len()..];
+        let asked_env_values = &ask_vec[ask_vec.len() - env_info_vec.len()..];
+        // println!("Asked environment values from optimizer (pre-processing): {:?}", asked_env_values);
 
         // Make a comma-separated string of the environment values
         let mut env_string = String::new();

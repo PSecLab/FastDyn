@@ -4,8 +4,81 @@ use gz_transport::Node;
 use protobuf::text_format::parse_from_str;
 use gz_msgs::{pose::Pose, pose_v::Pose_V, clock::Clock};
 use gz_msgs::gz_msgs10::{
-    any::Any, empty::Empty, stringmsg::StringMsg
+    any::Any, empty::Empty, stringmsg::StringMsg, boolean::Boolean
 };
+
+fn set_noise(node: &mut Node, noise_type: &str, white_scale: f64, drift_scale: f64) {
+
+    let request_str = format!("{noise_type},{white_scale},{drift_scale}");
+    let mut request = StringMsg::new();
+    request.data = request_str;
+    let timeout: u64 = 3000; // milliseconds
+    let service_name: &str = "/set_noise_scale";
+
+    let mut response_opt: Option<(Boolean, bool)> = None;
+    for attempt in 0..5 {
+        response_opt = node.request::<StringMsg, Boolean>(
+            service_name, &request, Duration::from_millis(timeout));
+        if response_opt.is_some() {
+            break;
+        } else {
+            println!("Service call to {} failed, retrying... ({}/5)", service_name, attempt + 1);
+        }
+    }
+
+    // return the result
+    if let Some((_, success)) = response_opt {
+        println!("Applied {} noise with white scale {} and drift scale {}.", noise_type, white_scale, drift_scale);
+    } else {
+        println!("FAILED to apply {} noise.", noise_type);
+    }
+}
+
+pub fn apply_noise(raw_env_config: String, node: &mut Node, sim_time: f64) {
+
+    if raw_env_config.is_empty() {
+        return;
+    }
+
+    // We need at least one parameter
+    if !raw_env_config.contains("gyro_white_scale") && !raw_env_config.contains("gyro_drift_scale") && !raw_env_config.contains("accel_white_scale") && !raw_env_config.contains("accel_drift_scale") && !raw_env_config.contains("mag_white_scale") && !raw_env_config.contains("mag_drift_scale") {
+        return;
+    }
+
+    let mut gyro_white_scale = 0.0;
+    let mut gyro_drift_scale = 0.0;
+    let mut accel_white_scale = 0.0;
+    let mut accel_drift_scale = 0.0;
+    let mut mag_white_scale = 0.0;
+    let mut mag_drift_scale = 0.0;
+
+    // Extract values conditionally
+    if let Some(value) = raw_env_config.split("gyro_white_scale:").nth(1) {
+        gyro_white_scale = value.split(',').nth(0).unwrap_or("0.0").parse().unwrap_or(0.0);
+    }
+    if let Some(value) = raw_env_config.split("gyro_drift_scale:").nth(1) {
+        gyro_drift_scale = value.split(',').nth(0).unwrap_or("0.0").parse().unwrap_or(0.0);
+    }
+    if let Some(value) = raw_env_config.split("accel_white_scale:").nth(1) {
+        accel_white_scale = value.split(',').nth(0).unwrap_or("0.0").parse().unwrap_or(0.0);
+    }
+    if let Some(value) = raw_env_config.split("accel_drift_scale:").nth(1) {
+        accel_drift_scale = value.split(',').nth(0).unwrap_or("0.0").parse().unwrap_or(0.0);
+    }
+    if let Some(value) = raw_env_config.split("mag_white_scale:").nth(1) {
+        mag_white_scale = value.split(',').nth(0).unwrap_or("0.0").parse().unwrap_or(0.0);
+    }
+    if let Some(value) = raw_env_config.split("mag_drift_scale:").nth(1) {
+        mag_drift_scale = value.split(',').nth(0).unwrap_or("0.0").parse().unwrap_or(0.0);
+    }
+
+    // Send the noise
+    let gyro_result = set_noise(node, "gyro", gyro_white_scale, gyro_drift_scale);
+    let accel_result = set_noise(node, "accel", accel_white_scale, accel_drift_scale);
+    let mag_result = set_noise(node, "mag", mag_white_scale, mag_drift_scale);
+
+    println!("Applied noise at sim time {} seconds.", sim_time);
+}
 
 /**
  * After making repeated, rapid succession service calls over the course of a fuzzing campaign,

@@ -2,7 +2,13 @@ FROM ubuntu:24.04
 
 # Rando dependencies
 RUN apt-get update && apt-get install -y \
+    vim \
     curl \
+    ninja-build \
+    flex \
+    bison \
+    libglib2.0-dev \
+    libpixman-1-dev \
     build-essential \ 
     git \
     lsb-release \
@@ -13,7 +19,17 @@ RUN apt-get update && apt-get install -y \
     libprotobuf-dev \
     protobuf-compiler \
     libfdt1 \ 
-    libdw1
+    libdw1 \
+    rapidjson-dev \
+    libopencv-dev \
+    libgstreamer1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-tools
 
 # Rustup
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -25,19 +41,52 @@ RUN curl https://packages.osrfoundation.org/gazebo.gpg --output /usr/share/keyri
     apt-get update && \
     apt-get install -y gz-harmonic
 
-# Populate the root directory with supporting repos
-# TODO: In the future we will clone repos instead of copying them
 WORKDIR /root
-COPY qemu qemu/
-COPY banquo banquo/
-COPY LibAFL-0.15.4 LibAFL-0.15.4/
-COPY ardupilot_gazebo ardupilot_gazebo/
-COPY SITL_Models/Gazebo SITL_Models/Gazebo/
 
-# The Dyn™️
+# Clone all repos
+RUN git clone https://github.com/Arslan8/qemu.git
+RUN git clone https://github.com/michaelprooney/banquo.git
+RUN git clone https://github.com/ArduPilot/ardupilot_gazebo.git
+RUN git clone https://github.com/michaelprooney/SITL_Models.git
+
+# Setup Qemu
+WORKDIR /root/qemu
+RUN git checkout fastdyn && \
+    mkdir -p ws/memory && \
+    touch ws/memory/my_m4_ram3 && \
+    mkdir build && \
+    cd build && \
+    ../configure --target-list=arm-softmmu --enable-debug && \
+    make qemu-system-arm
+
+# Setup Banquo
+WORKDIR /root/banquo/
+RUN git checkout banquo-parser-impl && \
+    cd banquo-parser && \
+    cargo build --release
+
+# Setup ardupilot_gazebo
+ENV GZ_VERSION="harmonic"
+WORKDIR /root/ardupilot_gazebo
+RUN mkdir build && \
+    cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo && \
+    make -j4
+ENV GZ_SIM_SYSTEM_PLUGIN_PATH="/root/ardupilot_gazebo/build"
+ENV GZ_SIM_RESOURCE_PATH="/root/ardupilot_gazebo/models:/root/ardupilot_gazebo/worlds"
+ENV GZ_SIM_RESOURCE_PATH="/root/SITL_Models/Gazebo/models:/root/SITL_Models/Gazebo/worlds:${GZ_SIM_RESOURCE_PATH}"
+
+# The Dyn™
+# TODO: We have to configure everything in FastDyn!
+# make in Fastdyn/, services, and maybe somewhere else I'm forgetting
 WORKDIR /root/FastDyn
 COPY FastDyn/virtuals virtuals/ 
 COPY FastDyn/build build/
+
+# Copy the plane and rover scripts into qemu/
+WORKDIR /root/qemu
+RUN cp /root/FastDyn/virtuals/physics/flight_controllers/courbet/scripts/planev462.sh ./ && \
+    cp /root/FastDyn/virtuals/physics/flight_controllers/courbet/scripts/roverv462.sh ./
 
 # Setup python dependencies
 WORKDIR /root/FastDyn/virtuals/fuzzer/libafl_phi
@@ -46,10 +95,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 ENV LD_LIBRARY_PATH="/root/FastDyn/virtuals/physics/physics_engines/gazebo/build/lib"
-ENV GZ_VERSION="harmonic"
-ENV GZ_SIM_SYSTEM_PLUGIN_PATH="/root/ardupilot_gazebo/build"
-ENV GZ_SIM_RESOURCE_PATH="/root/ardupilot_gazebo/models:/root/ardupilot_gazebo/worlds"
-ENV GZ_SIM_RESOURCE_PATH="/root/SITL_Models/Gazebo/models:/root/SITL_Models/Gazebo/worlds:${GZ_SIM_RESOURCE_PATH}"
 
 RUN cargo clean && cargo build
 CMD ["bash"]

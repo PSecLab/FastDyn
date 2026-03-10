@@ -6,7 +6,7 @@
 VEHICLE_TYPE=$1
 if [ -z "$VEHICLE_TYPE" ]; then
     echo "Usage: $0 <vehicle_type> [headless]"
-    echo "Example: $0 rover headless"
+    echo "Example: $0 rover"
     echo "Example: $0 plane headless"
     exit 1
 fi

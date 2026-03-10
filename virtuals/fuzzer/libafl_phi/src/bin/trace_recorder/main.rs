@@ -83,9 +83,9 @@ fn record_state_at_time(gz_data: &str, file: &File) -> f64 {
     //     pose_proto = pose_v_proto.pose[0].clone();
     // }
 
-    // let x_pos = pose_proto.position.x;
-    // let y_pos = pose_proto.position.y;
-    // let z_pos = pose_proto.position.z;
+    let x_pos = pose_proto.position.x;
+    let y_pos = pose_proto.position.y;
+    let z_pos = pose_proto.position.z;
     let x_quat = pose_proto.orientation.x;
     let y_quat = pose_proto.orientation.y;
     let z_quat = pose_proto.orientation.z;
@@ -104,7 +104,7 @@ fn record_state_at_time(gz_data: &str, file: &File) -> f64 {
 
     let mut writer: BufWriter<&File> = BufWriter::new(&file);
     // writeln!(writer, "{},{},{},{}", sim_time, x_pos, y_pos, z_pos).unwrap();
-    writeln!(writer, "{},{},{},{},{}", sim_time, roll, pitch, roll_rate, lateral_accel).unwrap();
+    writeln!(writer, "{},{},{},{},{},{},{},{}", sim_time, x_pos, y_pos, z_pos, roll, pitch, roll_rate, lateral_accel).unwrap();
 
     writer.flush().unwrap();
 

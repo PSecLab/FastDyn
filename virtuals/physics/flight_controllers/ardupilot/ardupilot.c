@@ -1655,7 +1655,7 @@ void read_mag_when_published(unsigned int cpu_index, void *udata)
     }
     else
     {
-        fprintf(stderr, "HIT: read_mag_when_published\n");
+        // fprintf(stderr, "HIT: read_mag_when_published\n");
         printf("Magnetometer reading from Driver Backend (milliGauss): X=%.3f, Y=%.3f, Z=%.3f\n", mag_values[0], mag_values[1], mag_values[2]);
         mag_udp_send_mg(mag_values[0], mag_values[1], mag_values[2]);
     }
@@ -1671,7 +1671,7 @@ void read_imu_when_published(unsigned int cpu_index, void *udata)
         return;
     }
     else {
-        fprintf(stderr, "HIT: read_imu_when_published\n");
+        // fprintf(stderr, "HIT: read_imu_when_published\n");
         printf("Accel reading from Driver Backend (m/s^2): X=%.3f, Y=%.3f, Z=%.3f\n", imu_values[0], imu_values[1], imu_values[2]);
         // mag_udp_send_mg(imu_values[0], imu_values[1], imu_values[2]);
     }
