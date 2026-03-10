@@ -1,4 +1,4 @@
-# srcs += files('gazebo.cpp')
+srcs += files('./altimeter_virtuals.c')
 
 # The path to the build/lib needs to be relative to THIS file.
 gz_dir = meson.current_source_dir() + '/build/lib'

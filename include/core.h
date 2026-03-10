@@ -33,5 +33,8 @@ int core_write_ram(uintptr_t address, size_t size, const void* buffer);
 
 // Wrapper for qemu's irq registration, allows multiple hooks
 void core_register_irq_hook(void (*cb)(int), void (*cb_end)(int));
+
+// Allow users to register a hook for when fastdyn exits
+void core_register_exit_hook(void (*cb)(void));
 #endif /* CORE_H */
 

@@ -9,7 +9,7 @@ base_address = "0x20000000"
 memory_size  = "512M"
 memory_type  = "SRAM"
 backend      = "file"          # file | ram | memfd
-memory_file  = "../qemu/ws/my_m4_ram3"
+memory_file  = "/dev/shm/my_m4_ram3"
 share        = true
 prealloc     = false
 
@@ -20,7 +20,7 @@ base_address = "0x30000000"
 memory_size  = "512K"
 memory_type  = "SRAM"
 backend      = "file"
-memory_file  = "../qemu/ws/my_m4_ram"
+memory_file  = "/dev/shm/my_m4_ram"
 share        = true
 prealloc     = false
 
@@ -28,7 +28,7 @@ prealloc     = false
 #                                CPU Configuration
 # ==============================================================================
 [Machine]
-platform = "STM32F427"
+platform = "STM32F429"
 # --- Debugging, Control, and Logging ---
 qemu_path = "../qemu/build/qemu-system-arm"
 enable_gdb = false
@@ -49,16 +49,31 @@ print_command = true          #set to true if you want to print the final qemu o
 # --- Core Emulation & Plugin Settings ---
 arch = "arm"
 machine = "cortexm"
-cpu = "cortex-m4"
+cpu = "cortex-m3"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../qemu/ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "virtuals/physics/flight_controllers/courbet/bin/arduplane_v462"
-init_nsvtor = "0x08004000"
+binary = "./tests/sample_binaries/RTOS/sensor.axf"
+init_nsvtor = "0x08000000"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
-introspect = true
-existing_config_path = "virtuals/physics/flight_controllers/courbet/plane462/unlabeled_conf"
+introspect = false
+existing_config_path  = false #'/path/to/dir containing virtuals.txt and modifiers.txt' add your existing virtuals.txt here, will traverse through to find the virtuals.txt and modifiers.txt
 
+[[CPU.cpu0.virtuals]]
+at = "0x8003972"
+instruction = "altimeter_setup"
+args = [""]
+
+[[CPU.cpu0.virtuals]]
+at = "0x8003974"
+instruction = "altimeter_get"
+args = [""]
+
+
+[[CPU.cpu0.virtuals]]
+at = "0x8003978"
+instruction = "debug_log"
+args = [""]
 
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """

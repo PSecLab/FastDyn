@@ -88,14 +88,27 @@ int phy_get_joint_state(double *motor_0_pos, double *motor_2_pos)
     return active_backend->get_joint_state(motor_0_pos, motor_2_pos);
 }
 
+int phy_get_altimeter_reading(double *altitude)
+{
+    if (!active_backend || !active_backend->get_altimeter_reading) {
+        return 0;
+    }
+
+    return active_backend->get_altimeter_reading(altitude);
+}
+
 int phy_init(int argc, char **argv) {
     // FIX: Hacky
-#if FMU
+#if ENABLE_FMU
     fmu_init(argc, argv);
 #endif
+
+#if ENABLE_FLIGHT_CONTROLLERS
     fc_init(argc, argv);
+#endif
 
 #if ENABLE_LIBGZ
+    virtual_gz_altimeter_init(argc, argv);
     // TODO: Add a flag to determine which physics engine
     int result = phy_select_backend("gazebo");
     if (result == 0) {

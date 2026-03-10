@@ -83,6 +83,11 @@ endif
 # USER FLAGS. USER CAN ADD CUSTOM LIBS
 ENABLE_LIBGZ = get_option('enable_libgz')
 
+#fuzzer support
+ENABLE_LIBFUZZ = get_option('enable_libfuzz')
+
+ENABLE_PHY = get_option('enable_phy')
+
 subdir('virtuals')
 
 #subdir('virtuals')
@@ -104,14 +109,6 @@ if ENABLE_LIBHW
   deps += libhw_dep
 endif
 
-#fuzzer support
-ENABLE_LIBFUZZ = get_option('enable_libfuzz')
-if ENABLE_LIBFUZZ
-  libfuzz_wrapper_dep = declare_dependency(
-    link_args: ['-L' + meson.current_source_dir() + '/virtuals/fuzzer/fastdyn_fuzz_lib/target/release', '-lfastdyn_fuzzer']
-  )
-  deps += libfuzz_wrapper_dep
-endif
 
 #Based on the configurations, generate config.h
 ENABLE_LIBDEV = get_option('device_models')
@@ -122,9 +119,12 @@ configure_file(
     'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
     'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0,
     'ENABLE_LIBFUZZ' : ENABLE_LIBFUZZ ? 1 : 0,
+    'ENABLE_PHY' : ENABLE_PHY ? 1 : 0,
     'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0,
     'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0,
     'ENABLE_LIBDEV' : ENABLE_LIBDEV ? 1:0,
+	'ENABLE_FMU' : get_option('enable_fmu') ? 1 : 0,
+	'ENABLE_FLIGHT_CONTROLLERS' : get_option('enable_flight_controllers') ? 1 : 0,
   }
 )
 #config_inc = include_directories(meson.current_build_dir())
@@ -158,12 +158,6 @@ if ENABLE_LIBGZ
 srcs += files(
   'libs/ring_buffer.c',
 )
-endif
-
-if ENABLE_LIBFUZZ
-  srcs += files(
-    'virtuals/fuzzer/fuzz.c',
-  )
 endif
 
 if ENABLE_LIBDEV

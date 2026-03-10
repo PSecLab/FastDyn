@@ -29,7 +29,6 @@
     #include "phy.h"
 #endif
 
-#include "fuzz.h"
 #include "introspection/inspct.h"
 
 // External dependencies from core.c
@@ -248,10 +247,10 @@ void randstate(unsigned int cpu_index, void *udata) {
 }
 
 void debug_log(unsigned int cpu_index, void *udata) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
+    // print sim time from qemu
 
-    double fractional_seconds = tv.tv_sec + tv.tv_usec / 1e6;
+    uint64_t sim_time_ns = qemu_plugin_get_virtual_timer();
+    double fractional_seconds = (double)(sim_time_ns % 1000000000) / 1e9;
 
     const char *msg = (const char *)udata;
 
@@ -566,8 +565,10 @@ int virtuals_init(int argc, char **argv, const char *schema_path) {
 		// Initialize subcomponents, each compnoent can fail independently so no reason to stop initiliaztion if one fails
 		if ((status = inspct_init(argc, argv, schema_path)) < 0)
 				utils_warn("Introspection failed");
+#if ENABLE_PHY
 		if ((status = phy_init(argc, argv)) < 0)
 				utils_warn("Physics Engine failed");
+#endif
 #if ENABLE_LIBFUZZ
 		if ((status = fuzz_init(argc, argv)) < 0)
 				utils_warn("Fuzzer Failed");

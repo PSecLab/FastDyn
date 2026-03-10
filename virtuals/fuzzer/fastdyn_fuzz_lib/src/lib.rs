@@ -41,6 +41,8 @@ use std::sync::{Mutex, Arc};
 use bincode;
 use serde::ser;
 
+use std::fs;
+
 static STOP_FLAG: AtomicBool = AtomicBool::new(false);
 
 lazy_static::lazy_static! {
@@ -52,7 +54,7 @@ const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this 
 #[no_mangle]
 pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 
-static STATE_PATH: &str = "fuzz_out/state.bin";
+static STATE_PATH: &str = "fastdyn_work/state.bin";
 
 #[repr(C)]
 pub struct FuzzInput {
@@ -146,7 +148,7 @@ where
                     OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open("./fuzz_out/timeout.log")
+                        .open("./fastdyn_work/timeout.log")
                         .expect("Failed to open file"),
                 ));
 
@@ -166,7 +168,7 @@ where
                     OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open("/root/rooney/FastDyn/fuzz_out/fuzzer.log")
+                        .open("./fastdyn_work/fuzzer.log")
                         .expect("Failed to open file"),
                 ));
 
@@ -205,8 +207,11 @@ pub fn fuzzer_thread_main(input_size: usize) {
         MaxMapFeedback::with_name("on_crash", &observer)
     );
 
-    let corpus_path = PathBuf::from("fuzz_out/corpus");
-    let crashes_path = PathBuf::from("fuzz_out/crashes");
+    let corpus_path = PathBuf::from("fastdyn_work/corpus");
+    let crashes_path = PathBuf::from("fastdyn_work/crashes");
+
+    fs::create_dir_all(&corpus_path);
+    fs::create_dir_all(&crashes_path);
 
     //let mut corpus = OnDiskCorpus::<BytesInput>::new(corpus_path.clone()).unwrap();
     let mut corpus = InMemoryCorpus::new();
@@ -305,7 +310,7 @@ pub fn fuzzer_thread_main(input_size: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn fuzz_init(cstr: *const c_char) -> u32 {
+pub extern "C" fn fuzz_libAFL_init(cstr: *const c_char) -> u32 {
     // Safety: cstr must be a valid null-terminated C string
     let c_str = unsafe { CStr::from_ptr(cstr) };
     let r_str = c_str.to_str().unwrap(); // handle errors in production

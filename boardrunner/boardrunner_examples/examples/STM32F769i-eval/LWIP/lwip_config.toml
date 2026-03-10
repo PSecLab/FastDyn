@@ -97,30 +97,30 @@ finline  = ""
   """
   # This anchor alters the http request in http_recv, anchor needs target specific modification
     [[CPU.cpu0.virtuals]]
-    at          = "0x08008ee2"
+    at          = "0x08008edc"
     instruction = "anchor"
-    args        = ["0xFFFFFFFF"]
+    args        = [""]
 
   # These modifiers keep our http_recv in a loop
     [[CPU.cpu0.modifiers]]
     at          = "0x08008efa"
-    patch       = "r15 0x08008ee2"
+    patch       = "r15 0x08008edc"
 
     [[CPU.cpu0.modifiers]]
     at          = "0x08008f0e"
-    patch       = "r15 0x08008ee2"
+    patch       = "r15 0x08008edc"
 
     [[CPU.cpu0.modifiers]]
     at          = "0x080091ac"
-    patch       = "r15 0x08008ee2"
+    patch       = "r15 0x08008edc"
 
     [[CPU.cpu0.modifiers]]
     at          = "0x080091b6"
-    patch       = "r15 0x08008ee2"
+    patch       = "r15 0x08008edc"
 
     [[CPU.cpu0.modifiers]]
     at          = "0x0800935a"
-    patch       = "r15 0x08008ee2"
+    patch       = "r15 0x08008edc"
 
   # This assert triggers a restart on a hard fault
     [[CPU.cpu0.virtuals]]
@@ -167,7 +167,7 @@ tap_interface = "tap0"
     [[Device.ethernet.handlers]]
         model   = "elder"
         enabled = true                          # Set to TRUE to use your generated .so
-        scroll = "boardrunner/boardrunner_sdk/build/lwip_model.so"  # UPDATE THIS PATH
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"  # UPDATE THIS PATH
 
     [[Device.ethernet.handlers]]
         model   = "passthrough"

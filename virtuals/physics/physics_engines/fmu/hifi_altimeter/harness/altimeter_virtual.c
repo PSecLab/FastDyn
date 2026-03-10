@@ -6,7 +6,7 @@
 #include <virtuals.h>
 
 // --- 1. Include the Auto-Generated Header ---
-#include "fmu_header.h" 
+#include "fmu_header.h"
 
 #if 01
 
@@ -21,7 +21,7 @@ typedef fmi2Status    (*fmi2SetReal_ft)(fmi2Component, const fmi2ValueReference[
 typedef fmi2Status    (*fmi2SetInteger_ft)(fmi2Component, const fmi2ValueReference[], size_t, const fmi2Integer[]);
 typedef fmi2Status    (*fmi2SetBoolean_ft)(fmi2Component, const fmi2ValueReference[], size_t, const fmi2Boolean[]);
 typedef void          (*fmi2FreeInstance_ft)(fmi2Component);
-#endif 
+#endif
 
 // --- FMI Callback Functions ---
 void cb_log(fmi2ComponentEnvironment env, fmi2String instanceName, fmi2Status status, fmi2String category, fmi2String message, ...) {
@@ -51,9 +51,8 @@ FMU fmu;
 void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
 
 	//Hardcoded for now
-	char * fmu_path = "/home/faculty/abk6349/data/fastdyn/virtuals/physics/physics_engines/fmu/hifi_altimeter/harness/../output_folder/249.fmutmp/sources/build/Altimeter.so";
+	char * fmu_path = "/root/rooney/FastDyn/virtuals/physics/physics_engines/fmu/hifi_altimeter/output_folder/249.fmutmp/sources/build/Altimeter.so";
 
-    FMU fmu;
     fmu.handle = dlopen(fmu_path, RTLD_LAZY);
     if (!fmu.handle) {
         fprintf(stderr, "Error loading .so: %s\n", dlerror());
@@ -74,7 +73,7 @@ void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
     fmi2CallbackFunctions callbacks = {cb_log, calloc, free, NULL, NULL};
 
     // 2. Instantiate using generated macros
-    fmu.instance = fmu.instantiate(MODEL_IDENTIFIER, fmi2CoSimulation, 
+    fmu.instance = fmu.instantiate(MODEL_IDENTIFIER, fmi2CoSimulation,
                                    FMU_GUID, resource_uri, &callbacks, fmi2False, fmi2False);
 
     if (!fmu.instance) {
@@ -86,7 +85,7 @@ void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
     fmu.enterInit(fmu.instance);
 
     // 3.5 Setup parameters & Determinism
-    
+
     // Disable automatic OS entropy seeding
     fmi2ValueReference vr_auto_seed = VREF_PARAM_GLOBALSEED_USEAUTOMATICSEED;
     fmi2Boolean disable_auto = fmi2False;
@@ -94,12 +93,20 @@ void virtual_altimeter_setup(unsigned int cpu_index, void *udata) {
 
     // Set your deterministic master seed (this can be passed in via argv later)
     fmi2ValueReference vr_master_seed = VREF_PARAM_RNGSEED;
-    fmi2Integer master_seed = 1337; 
+    fmi2Integer master_seed = 1337;
     fmu.setInteger(fmu.instance, &vr_master_seed, 1, &master_seed);
 
     fmu.exitInit(fmu.instance);
 }
 
+double qemu_to_fmu_time(int64_t qemu_ns)
+{
+    return (double)qemu_ns / 1e9;
+}
+
+
+double t = 0.0;           // absolute FMU time
+int64_t last_qemu_ns = 0; // last QEMU virtual time in ns
 
 void virtual_altimeter_get(unsigned int cpu_index, void *udata) {
 	// 4. Simulation Setup using generated size macros
@@ -109,36 +116,43 @@ void virtual_altimeter_get(unsigned int cpu_index, void *udata) {
     // Seed initial input value (TrueAltitude in meters)
     current_inputs[0] = 50.0;
 
-    double h = 0.01; // Time step (100Hz matching the altimeter samplePeriod)
-    double t = 0.0;
+
+	int64_t now_qemu_ns = qemu_plugin_get_virtual_timer(); // QEMU time in ns
+	double now_fmu_sec = qemu_to_fmu_time(now_qemu_ns);
+
+	//Delta = step size for FMU
+	double h = 0.01; // fallback fixed step
+	if (last_qemu_ns != 0) {  // after first step
+	    h = now_fmu_sec - t;  // delta in seconds
+	}
+
 
     // 5. Simulation Loop
-    printf("Time\tTrueAltitude (In)\tSensedPressure (Out)\n");
-    for (int i = 0; i < 200; i++) {
-        // Write all inputs using the generated array
-        fmu.setReal(fmu.instance, ALTIMETER_INPUT_REFS, ALTIMETER_NUM_INPUTS, current_inputs);
+   // printf("Time\tTrueAltitude (In)\tSensedPressure (Out)\n");
+    // Write all inputs using the generated array
+    fmu.setReal(fmu.instance, ALTIMETER_INPUT_REFS, ALTIMETER_NUM_INPUTS, current_inputs);
 
-        // Advance the solver
-        fmi2Status status = fmu.doStep(fmu.instance, t, h, fmi2True);
-        if (status != fmi2OK) {
-            printf("[WARNING] Solver failed at t=%.2f with FMI Status Code: %d\n", t, status);
-        }
-
-        // Read all outputs using the generated array
-        fmu.getReal(fmu.instance, ALTIMETER_OUTPUT_REFS, ALTIMETER_NUM_OUTPUTS, current_outputs);
-
-        // Log the current state
-        printf("%.2f\t%.2f\t\t\t%.2f\n", t, current_inputs[0], current_outputs[0]);
-
-        t += h;
+    // Advance the solver
+    fmi2Status status = fmu.doStep(fmu.instance, t, h, fmi2True);
+    if (status != fmi2OK) {
+        printf("[WARNING] Solver failed at t=%.2f with FMI Status Code: %d\n", t, status);
     }
 
-    // 6. Cleanup
-    fmu.freeInstance(fmu.instance);
-} 
+    // Read all outputs using the generated array
+    fmu.getReal(fmu.instance, ALTIMETER_OUTPUT_REFS, ALTIMETER_NUM_OUTPUTS, current_outputs);
+
+	//TODO: update qemu state if required
+
+	// Update t and last QEMU time
+    t += h;
+    last_qemu_ns = now_qemu_ns;
+
+}
 
 
 void virtual_altimeter_teardown(unsigned int cpu_index, void *udata) {
+
+	fmu.freeInstance(fmu.instance);
 	dlclose(fmu.handle);
 }
 
