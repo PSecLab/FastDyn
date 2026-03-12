@@ -2,7 +2,7 @@
 
 qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
-LIBGZ        ?= false
+LIBGZ        ?= true
 LIBHW        ?= false
 LIBFUZZ		 ?= false
 DEV          ?= false
@@ -10,8 +10,9 @@ DEBUG_PRINT  ?= false
 LIBPY        ?= false
 SUNDIALS     ?= false
 BOARD_RUNNER ?= false
-PHY			?= false
-FMU			?= false
+PHY			?= true
+FMU			?= true
+FLIGHT_CONTROLLERS ?= true
 
 # Top-level target: clean, configure with meson, then build with ninja
 all: setup
@@ -31,7 +32,8 @@ setup: clean fetch
 	-Denable_libpy=$(LIBPY) \
 	-Denable_sundials=$(SUNDIALS) \
 	-Denable_phy=$(PHY) \
-	-Denable_fmu=$(FMU) 
+	-Denable_fmu=$(FMU) \
+	-Denable_flight_controllers=$(FLIGHT_CONTROLLERS)
 
 	@if [ "$(BOARD_RUNNER)" = "true" ]; then \
 		$(MAKE) build_boardrunner; \
