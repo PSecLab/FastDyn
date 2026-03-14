@@ -27,9 +27,7 @@ static bool fuzz_started = false;
 static char g_fuzzing_buf[1024];
 static char g_fuzzing_input[1024];
 
-static pthread_t thread;
 static uint32_t g_prev_pc;
-static int tracer_ready =0;
 
 // list of consecutive address+size values listing writable regions of memory, count is total entries not # of pairs
 #define WLIST_PATH "fastdyn_work/bin-writable-ranges"
@@ -370,7 +368,7 @@ int fuzz_read_memory(unsigned long long addr, uint8_t *mem_buf, int len) {
     return qemu_plugin_read_memory(addr, mem_buf, len);
 }
 
-static void fuzz_add_observed_value(uint32_t val) {
+void fuzz_add_observed_value(uint32_t val) {
     static int irq_depth = 0;
     
     if (val == 0xFFFFFFFF) {
@@ -392,39 +390,12 @@ static void fuzz_add_observed_value(uint32_t val) {
     }
 }
 
-static void* tracer(void* arg) {
-	core_cc_list.count =1;
-	core_cc_ret.entry = &core_cc_entry;
-    core_cc_ret.list = &core_cc_list;
-	core_cc_ret.entry->reg = 15;
-	core_cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
-	uint16_t tracer_index =0;
-
-	tracer_ready=1;
-
-	//Maybe make read atomic
-	while(true) {
-		while((uint16_t) (core_cc_list.log_buf.index - tracer_index)) {
-            uint32_t value = core_cc_list.log_buf.buffer[tracer_index/4];
-            fuzz_add_observed_value(value);
-
-			tracer_index +=4;//32bit PC
-		}
-	}
-
-    return NULL;
-}
-
 int fuzz_init(int argc, char **argv) {
     const char *filename = utils_get_arg("coverage", argc, argv);
     if (filename &&
         (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
 
         coverage = 1;
-        if (pthread_create(&thread, NULL, tracer, NULL) != 0) {
-            perror("Failed to create thread");
-            exit(1);
-        }
         fuzz_bbl_init();
         core_register_exit_hook(fuzz_dump_bbl);
     }
@@ -437,8 +408,6 @@ int fuzz_init(int argc, char **argv) {
     if (wlist == NULL || (wlist_count & 1)) {
         utils_die("[anchor] Couldn't parse writable memory definitions");
     }
-
-    while (!tracer_ready);
 
     virtual_register("assert", virt_assert);
     virtual_register("anchor", anchor);

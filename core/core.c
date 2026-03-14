@@ -45,6 +45,7 @@ int isdigit(int c);
 #endif
 
 #include <virtuals.h>  // For lookup_callback function
+#include <virtuals/fuzz.h> // Coverage handling whether built with fuzzer or not
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -823,6 +824,32 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 #include <pthread.h>
 #include <immintrin.h>
 
+static pthread_t thread;
+static int tracer_ready =0;
+
+static void* tracer(void* arg) {
+	core_cc_list.count =1;
+	core_cc_ret.entry = &core_cc_entry;
+    core_cc_ret.list = &core_cc_list;
+	core_cc_ret.entry->reg = 15;
+	core_cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
+	uint16_t tracer_index =0;
+
+	tracer_ready=1;
+
+	//Maybe make read atomic
+	while(true) {
+		while((uint16_t) (core_cc_list.log_buf.index - tracer_index)) {
+            uint32_t value = core_cc_list.log_buf.buffer[tracer_index/4];
+            fuzz_add_observed_value(value);
+
+			tracer_index +=4;//32bit PC
+		}
+	}
+
+    return NULL;
+}
+
 #define MAX_EXIT_HOOKS 32
 
 typedef void (*exit_cb_t)(void);
@@ -1033,6 +1060,12 @@ static int core_parse_arguments(int argc, char ** argv) {
     if (!arg_is_disabled(filename) &&
         (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
         coverage = 1;
+        if (pthread_create(&thread, NULL, tracer, NULL) != 0) {
+            perror("Failed to create thread");
+            exit(1);
+        }
+
+        while (!tracer_ready);
     }
 
     //parse args for twintrace
