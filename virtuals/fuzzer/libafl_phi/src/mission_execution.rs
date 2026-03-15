@@ -20,6 +20,7 @@ use gz_msgs::clock::Clock;
 const RUN_SERVICES_DIR: &str = "../../physics/flight_controllers/courbet/gazebo";
 const QEMU_BUILD_DIR: &str = "../../../../qemu/build";
 const MAV_C2_DIR: &str = "../../physics/flight_controllers/courbet/mavlink";
+const FASTDYN_DIR: &str = "../../..";
 
 /**
  * Assigning each value in file to corresponding index in CVG array.
@@ -58,10 +59,10 @@ fn deserialize_coverage(path: &str) {
 */
 
 pub fn execute_mission(
-    input: &TargetInput, 
+    input: &TargetInput,
     param_names: String,
     cps_name: &str,
-    mission_file_name: &str, 
+    mission_file_name: &str,
     timeout: f64,
     param_input_delay: f64,
     noise_time: f64,
@@ -89,7 +90,7 @@ pub fn execute_mission(
     }
 
     let spawn_services = services_command
-        .stdout(Stdio::null())
+        // .stdout(Stdio::null())
         .spawn();
     if spawn_services.is_err() {
         panic!("Error: Failed to start services: {}", spawn_services.err().unwrap());
@@ -128,11 +129,17 @@ pub fn execute_mission(
     // Let mavlink C2 spin up
     std::thread::sleep(std::time::Duration::from_secs(3));
 
-    let script_name: String = format!("../{}v462.sh", cps_name);
+    // let script_name: String = format!("../{}v462.sh", cps_name);
+    // let spawn_fd = Command::new("bash")
+    //     .current_dir(QEMU_BUILD_DIR)
+    //     .arg(script_name)
+    //     // .stdout(Stdio::null())
+    //     .spawn();
+    let script_name: String = format!("fastdyn run -c configs/{}462.toml", cps_name);
     let spawn_fd = Command::new("bash")
-        .current_dir(QEMU_BUILD_DIR)
+        .current_dir(FASTDYN_DIR)
         .arg(script_name)
-        .stdout(Stdio::null())
+        // .stdout(Stdio::null())
         .spawn();
     if spawn_fd.is_err() {
         panic!("Error: Failed to start FastDyn QEMU: {}", spawn_fd.err().unwrap());
