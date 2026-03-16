@@ -207,7 +207,8 @@ pub fn execute_mission(
     let _ = spawn_c2.unwrap().wait();
     let _ = spawn_fd.unwrap().wait();
 
-    deserialize_coverage("./covg.csv");
+    let cvg_path = format!("{}/fastdyn_work/cvg.bin", FASTDYN_DIR);
+    deserialize_coverage(&cvg_path);
 
     println!("Mission execution finished with exit kind: {:?}", exit_kind);
     exit_kind

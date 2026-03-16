@@ -301,7 +301,7 @@ void anchor(unsigned int cpu_index, void *udata)
         for (int i = 1; i < wlist_count; i += 2) {
             total_mem += wlist[i]; // pairs of addresses + size
         }
-        
+
         membuff = malloc(total_mem);
         if (!membuff) {
             printf("Failed to malloc buffer\n");
@@ -372,7 +372,7 @@ int fuzz_read_memory(unsigned long long addr, uint8_t *mem_buf, int len) {
 
 void fuzz_add_observed_value(uint32_t val) {
     static int irq_depth = 0;
-    
+
     if (val == 0xFFFFFFFF) {
         irq_depth++;
     } else if (val == 0xFFFFFFFD) {
@@ -451,7 +451,7 @@ int fuzz_init(int argc, char **argv) {
 
     wlist = fuzz_get_writable_ranges(WLIST_PATH, &wlist_count);
     if (wlist == NULL || (wlist_count & 1)) {
-        utils_die("[anchor] Couldn't parse writable memory definitions");
+        utils_warn("[anchor] Couldn't parse writable memory definitions");
     }
 
     virtual_register("assert", virt_assert);
