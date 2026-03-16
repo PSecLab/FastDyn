@@ -29,6 +29,8 @@ static char g_fuzzing_input[1024];
 
 static uint32_t g_prev_pc;
 
+#define CVG_PATH "fastdyn_work/cvg.bin"
+
 // list of consecutive address+size values listing writable regions of memory, count is total entries not # of pairs
 #define WLIST_PATH "fastdyn_work/bin-writable-ranges"
 static size_t wlist_count = 0;
@@ -390,6 +392,49 @@ void fuzz_add_observed_value(uint32_t val) {
     }
 }
 
+static void fuzz_serialize_coverage(const char *filename) {
+    char tmp[512];
+
+    /* Construct temp filename in same directory */
+    snprintf(tmp, sizeof(tmp), "%s.tmp", filename);
+
+    FILE *f = fopen(tmp, "wb");
+    if (!f) {
+        perror("[-] Failed to open temp coverage file for writing");
+        return;
+    }
+
+    // comma separated values
+    for (size_t i = 0; i < MAP_SIZE; i++) {
+        if (fprintf(f, "%u", CVG[i]) < 0) {
+            perror("[-] Write error");
+            fclose(f);
+            remove(tmp);
+            return;
+        }
+        if (i < MAP_SIZE - 1) {
+            fputc(',', f);
+        }
+    }
+    fputc('\n', f);
+
+    /* Ensure data is flushed to disk before rename */
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    /* Atomic rename replaces old file */
+    if (rename(tmp, filename) != 0) {
+        perror("[-] Failed to rename temp coverage file");
+        remove(tmp);
+    }
+}
+
+static void fuzz_destroy(void) {
+    fuzz_dump_bbl();
+    fuzz_serialize_coverage(CVG_PATH);
+}
+
 int fuzz_init(int argc, char **argv) {
     const char *filename = utils_get_arg("coverage", argc, argv);
     if (filename &&
@@ -397,7 +442,7 @@ int fuzz_init(int argc, char **argv) {
 
         coverage = 1;
         fuzz_bbl_init();
-        core_register_exit_hook(fuzz_dump_bbl);
+        core_register_exit_hook(fuzz_destroy);
     }
 
     core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
