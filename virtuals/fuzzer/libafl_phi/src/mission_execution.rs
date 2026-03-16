@@ -138,6 +138,7 @@ pub fn execute_mission(
     let script_name: String = format!("fastdyn run -c configs/{}462.toml", cps_name);
     let spawn_fd = Command::new("bash")
         .current_dir(FASTDYN_DIR)
+        .arg("-c")
         .arg(script_name)
         // .stdout(Stdio::null())
         .spawn();

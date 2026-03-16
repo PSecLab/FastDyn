@@ -149,7 +149,6 @@ where
 const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this size in C is the same
 #[no_mangle]
 pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
-const COVERAGE_DUMP_PATH: &str = "./covg.csv";
 
 const TRACE_LOG_PATH: &str = "./trace_logs";
 const ROBUSTNESS_LOG_PATH: &str = "./robustness_logs";
@@ -179,7 +178,7 @@ const CORPUS_LOG_PATH: &str = "./corpus";
  */
 const SYSTEM_UNDER_TEST: &str = "plane"; // Choose either "rover" or "plane"
 const MISSION_WAYPOINT_FILE_NAME: &str = "plane_circle_point.txt"; 
-const MISSION_TIMEOUT: f64 = 300.0; // seconds
+const MISSION_TIMEOUT: f64 = 30.0; // seconds
 const POST_ARM_PARAMETER_UPDATE_DELAY: f64 = 15.0; // seconds
 const NOISE_APPLICATION_SIM_TIME: f64 = 100.0; // seconds
 const RECORDING_TIMESTEP: f64 = 0.1; // seconds
