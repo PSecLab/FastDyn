@@ -104,11 +104,12 @@ int phy_init(int argc, char **argv) {
 #endif
 
 #if ENABLE_FLIGHT_CONTROLLERS
+    printf("Initializing flight controllers\n");
     fc_init(argc, argv);
 #endif
 
 #if ENABLE_LIBGZ
-    virtual_gz_altimeter_init(argc, argv);
+    // virtual_gz_altimeter_init(argc, argv);
     // TODO: Add a flag to determine which physics engine
     int result = phy_select_backend("gazebo");
     if (result == 0) {

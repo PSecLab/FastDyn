@@ -70,7 +70,28 @@ bool AP_Proximity_Backend_Serial::detect(uint8_t serial_instance)
 }
 ```
 
+Since we need a serial line to be configured with the serial protocol for lidar360 we will have to compile a new binary and change the following lines.
+
+```C++
+#ifndef DEFAULT_SERIAL5_PROTOCOL
+#define DEFAULT_SERIAL5_PROTOCOL SerialProtocol_Lidar360
+#endif
+#ifndef DEFAULT_SERIAL5_BAUD
+#define DEFAULT_SERIAL5_BAUD AP_SERIALMANAGER_GIMBAL_BAUD/1000
+#endif
+#ifndef DEFAULT_SERIAL5_OPTIONS
+#define DEFAULT_SERIAL5_OPTIONS 0
+```
+
+I wrote two virtuals to help with the initialization which is selecting the type of lidar and setting the type in the params struct. The backend will be initialized if the type is set to RPLidarA2 and the serial manager has a port configured for lidar360. The virtuals are `proximity_get_type` and `proximity_set_type_param`. The first one is used to select the lidar type and the second is used to set the lidar type in the params struct which is used by the driver to determine how to parse data from the sensor.
+
 #### c. Look at how the driver backend communicates with the device and what format the data is in.
 
 [RPLidarA2 High-Fidelity State Machine / Model](https://chatgpt.com/share/69b44219-844c-800c-9eff-41df606279d8)
+
+#### d. Design a service in the backend which can mimic the way the actual sensor acts.
+
+In our case the lidar rotates at a constant speed and adds readings from each angle to a buffer. When the buffer is full, it would overwrite the oldest data.
+
+#### d. Now, that you have a model, you can map hook points in the driver to our model.
 

@@ -36,47 +36,6 @@
 #define RPLIDAR_CMD_GET_DEVICE_HEALTH  0x52
 #define RPLIDAR_CMD_EXPRESS_SCAN       0x82
 
-typedef enum {
-    RPLIDAR_STATE_IDLE = 0,
-    RPLIDAR_STATE_STREAMING_SCAN,
-    RPLIDAR_STATE_RESETTING
-} rplidar_state_t;
-
-typedef struct {
-    /* RX assembly buffer (host -> device) */
-    uint8_t rx_buf[RPLIDAR_RX_BUF_SIZE];
-    size_t rx_len;
-
-    /* TX queue (device -> host) */
-    uint8_t tx_buf[RPLIDAR_TX_BUF_SIZE];
-    size_t tx_head;   /* next byte to read */
-    size_t tx_tail;   /* next position to write */
-
-    rplidar_state_t state;
-
-    /* fake identity */
-    uint8_t model;
-    uint8_t firmware_minor;
-    uint8_t firmware_major;
-    uint8_t hardware;
-    uint8_t serial_number[16];
-
-    /* fake health */
-    uint8_t health_status;
-    uint16_t health_error_code;
-
-    /* fake reset banner */
-    uint8_t reset_banner[63];
-
-    /* scan generation */
-    double scan_angle_deg;
-    double scan_angle_step_deg;
-    bool new_scan_flag;
-
-    uint64_t sample_period_us;
-    uint64_t last_sample_time_us;
-} fake_rplidar_t;
-
 
 /* -------------------------------------------------------------------------- */
 /* Utility                                                                     */

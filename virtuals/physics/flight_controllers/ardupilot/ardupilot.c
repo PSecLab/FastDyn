@@ -1795,7 +1795,29 @@ void set_hardfault_status(unsigned int cpu_index, void *udata)
 //     set_hardfault_pc(faulting_pc);
 // }
 
+/**
+ * Currently hardcoded for RPLidarA2
+ *
+ * Called like this from virtuals.txt:
+ *
+ * 0x80aa646 proximity_get_type
+ *
+ * ^^ for rover
+ */
+void proximity_get_type(unsigned int cpu_index, void *udata)
+{
+    if (0 == (uint32_t)qemu_get_register(ARM_V7M_R4))
+    {
+        qemu_set_register(5, ARM_V7M_R0); // RPLidarA2
+    }
+}
 
+void proximity_set_type_param(unsigned int cpu_index, void *udata)
+{
+    uint32_t zero_index_params_addr = 0x20009244;
+    uint8_t lidar_type = 5; // set to rplidar a2
+    qemu_plugin_write_memory(zero_index_params_addr, &lidar_type, sizeof(uint8_t));
+}
 
 int ardupilot_init_virtuals(int argc, char **argv)
 {
@@ -1846,6 +1868,10 @@ int ardupilot_init_virtuals(int argc, char **argv)
 
     // GPS
     virtual_register("gps_get_type_mavlink", gps_get_type_mavlink);
+
+    // Lidar360 / Proximity
+    virtual_register("proximity_get_type", proximity_get_type);
+    virtual_register("proximity_set_type_param", proximity_set_type_param);
 
     // File System (flight logs)
     virtual_register("ap_fs_open", ap_fs_open);
