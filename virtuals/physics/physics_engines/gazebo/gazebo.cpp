@@ -167,6 +167,15 @@ static int get_imu_batch(imu_batch_t *imu_batch);
 static int get_altimeter_reading(double *altitude);
 
 /**
+ * @brief Gets the laser scan data for a specific number of samples and returns
+ * an a populated array of rplidar_sample_t structs.
+ *
+ * This function takes in a number of samples to retrieve from the laser scan data. It calls the
+ * get_laser_scan service to get the latest laser scan data.
+ */
+static int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples);
+
+/**
  * @brief Sets the program counter for hardfault simulation
  *
  * This function sets the program counter (PC) value to simulate
@@ -377,6 +386,114 @@ static int get_altimeter_reading(double *altitude) {
     return 1;
 }
 
+// angle_deg: any real angle, normalized to [0, 360)
+// distance_m: meters
+// quality: 0..63
+// start_flag: 1 for first sample of a new revolution, else 0
+static rplidar_sample_t make_rplidar_sample(float angle_deg,
+                                            float distance_m,
+                                            uint8_t quality,
+                                            uint8_t start_flag)
+{
+    rplidar_sample_t s;
+
+    // normalize angle to [0, 360)
+    angle_deg = fmodf(angle_deg, 360.0f);
+    if (angle_deg < 0.0f) {
+        angle_deg += 360.0f;
+    }
+
+    // clamp quality
+    if (quality > 63) {
+        quality = 63;
+    }
+
+    // clamp distance
+    if (distance_m < 0.0f) {
+        distance_m = 0.0f;
+    }
+
+    // angle in Q6: degrees * 64
+    uint16_t angle_q6 = (uint16_t)lroundf(angle_deg * 64.0f);
+
+    // distance in Q2 over millimeters: mm * 4
+    float distance_mm = distance_m * 1000.0f;
+    uint16_t dist_q2 = (uint16_t)lroundf(distance_mm * 4.0f);
+
+    // byte 0:
+    // bit 0 = S
+    // bit 1 = !S
+    // bits 2..7 = quality
+    uint8_t S = start_flag ? 1u : 0u;
+    uint8_t notS = S ? 0u : 1u;
+    s.sync_quality = (uint8_t)((quality << 2) | (notS << 1) | S);
+
+    // byte 1:
+    // bit 0 = check bit, should be 1
+    // bits 1..7 = angle_q6 low 7 bits
+    s.angle_lsb = (uint8_t)(((angle_q6 & 0x7F) << 1) | 0x01);
+
+    // byte 2:
+    // high 8 bits of 15-bit angle_q6
+    s.angle_msb = (uint8_t)((angle_q6 >> 7) & 0xFF);
+
+    // bytes 3-4:
+    // little-endian distance_q2
+    s.dist_lsb = (uint8_t)(dist_q2 & 0xFF);
+    s.dist_msb = (uint8_t)((dist_q2 >> 8) & 0xFF);
+
+    return s;
+}
+
+static inline float index_to_angle(int index)
+{
+    const float angle_min = -M_PI;
+    const float step = 0.015747318295739349f;
+
+    return angle_min + index * step;
+}
+
+static int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples) {
+    gz::msgs::UInt32 request;
+    request.set_data(static_cast<int>(num_samples));
+
+    gz::msgs::StringMsg response;
+    gz::transport::Node node;
+    bool result;
+    bool executed = node.Request("/get_laser_scan", request, 5000, response, result);
+    if (!executed || !result) {
+        return 0;
+    }
+
+    if (response == "None") {
+        return 0;
+    }
+    // response is a string of comma-separated values: "index:range1,range2,..."
+    std::string data = response.data();
+    size_t colon_pos = data.find(':');
+    if (colon_pos == std::string::npos) {
+        return 0;
+    }
+    int start_index = std::stoi(data.substr(0, colon_pos)); // not used for now but could be useful for debugging
+    double angle_increment = 0.015747318295739349; // 2 * pi / 400
+    std::string ranges_str = data.substr(colon_pos + 1);
+    std::istringstream ss(ranges_str);
+    std::string range_str;
+    size_t count = 0;
+    while (std::getline(ss, range_str, ',') && count < num_samples) {
+        float range = 16.0f;
+        if (range_str != "inf") {
+            range = std::stof(range_str);
+        }
+        float angle_deg = index_to_angle((start_index + count) % 400) * 180.0f / M_PI; // convert to degrees
+        int idx = (start_index + count) % 400;
+        uint8_t start_flag = (idx == 0) ? 1 : 0;
+        samples[count] = make_rplidar_sample(angle_deg, range, 10, start_flag);
+        count++;
+    }
+    return 1;
+}
+
 static int gz_init(void)
 {
     // Set initial pose as a demo
@@ -394,7 +511,8 @@ phy_backend_t gazebo_backend = {
     .set_servo_pwm = set_servo_pwm,
     .advance_simulation = advance_simulation,
     .get_joint_state = get_joint_state,
-    .get_altimeter_reading = get_altimeter_reading
+    .get_altimeter_reading = get_altimeter_reading,
+    .get_lidar_samples = get_lidar_samples
 };
 
 } // extern "C"

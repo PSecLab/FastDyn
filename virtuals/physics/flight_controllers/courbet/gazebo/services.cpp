@@ -13,6 +13,7 @@
 #include <gz/msgs/pose.pb.h>
 #include <gz/msgs/pose_v.pb.h>
 #include <gz/msgs/any.pb.h>
+#include <gz/msgs/laserscan.pb.h>
 #include <gz/msgs/uint32.pb.h>
 #include <boost/circular_buffer.hpp>
 #include <iostream>
@@ -349,6 +350,72 @@ private:
   }
 
   gz::msgs::Magnetometer latest_msg_;
+  std::mutex mutex_;
+};
+
+/**
+ * @brief Service handler for /get_laser_scan
+ *
+ * This class subscribes to the /lidar topic (of type gz::msgs::LaserScan) and provides
+ * responses to the /get_laser_scan service. Argument to the service call is the number
+ * of samples to return. There are 400 samples in each full scan so the subscribe will continuously
+ * update the latest_msg_ with the most recent scan, and the service call will keep track of the
+ * index of the next sample to return, looping back to the beginning when it reaches the end. We will use
+ * a mutex to protect access to latest_msg_ and the sample index since they are shared between the subscribe callback and the service handler.
+ */
+class GetLaserScanService
+{public:
+  GetLaserScanService(gz::transport::Node &node,
+                      const std::string &topic_name,
+                      const std::string &service_name)
+  {
+    if (topic_name == "NONE")
+      return;
+    node.Subscribe(topic_name, &GetLaserScanService::OnLaserScanMsg, this);
+    node.Advertise(service_name, &GetLaserScanService::OnServiceRequest, this);
+  }
+private:
+  void OnLaserScanMsg(const gz::msgs::LaserScan &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_msg_ = msg;
+    auto ranges = latest_msg_.ranges();
+    for (int i = 0; i < 400; ++i) {
+      latest_scan_[i] = ranges.Get(i);
+    }
+    if (!have_scan_) {
+      have_scan_ = true;
+    }
+  }
+
+  bool OnServiceRequest(const gz::msgs::UInt32 &req,
+                        gz::msgs::StringMsg &rep)
+  {
+    if (!have_scan_) {
+      rep.set_data("None");
+      return true;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string scan_data;
+    int num_samples = req.data();
+    scan_data += std::to_string(sample_index_); // include starting index in the response
+    std::string delimiter = ":";
+    for (int i = 0; i < num_samples; ++i) {
+      int index = (sample_index_ + i) % 400; // loop back to the beginning if we reach the end
+      scan_data += std::to_string(latest_scan_[index]) + delimiter;
+      if (i == 0) {
+        delimiter = ",";
+      }
+    }
+    sample_index_ = (sample_index_ + num_samples) % 400; // update sample index for next call
+    rep.set_data(scan_data);
+    return true;
+  }
+
+  double latest_scan_[400];
+  gz::msgs::LaserScan latest_msg_;
+  bool have_scan_ = false;
+  int sample_index_ = 0;
   std::mutex mutex_;
 };
 
@@ -1153,6 +1220,18 @@ int main(int argc, char **argv)
     node,
     joint_states_topic,
     "/get_joint_state"
+  );
+
+  // GenericSensorService<gz::msgs::LaserScan> laserScanService(
+  //   node,
+  //   "/lidar",
+  //   "/get_laser_scan"
+  // );
+
+  GetLaserScanService laserScanService(
+    node,
+    "/lidar",
+    "/get_laser_scan"
   );
 
   HFService hfService(

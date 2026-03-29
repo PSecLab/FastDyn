@@ -97,6 +97,15 @@ int phy_get_altimeter_reading(double *altitude)
     return active_backend->get_altimeter_reading(altitude);
 }
 
+int phy_get_lidar_samples(rplidar_sample_t *samples, size_t num_samples)
+{
+    if (!active_backend || !active_backend->get_lidar_samples) {
+        return 0;
+    }
+
+    return active_backend->get_lidar_samples(samples, num_samples);
+}
+
 int phy_init(int argc, char **argv) {
     // FIX: Hacky
 #if ENABLE_FMU

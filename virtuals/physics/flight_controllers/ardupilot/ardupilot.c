@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include "rplidara2.h"
 
 #define PROFILE_INS_READS 0
 #define PROFILE_COMPASS_READS 1
@@ -1033,6 +1034,8 @@ void chibiOS_tick_handler(unsigned int cpu_index, void *udata)
 }
 
 static uint32_t gcs_uarts[8] = {0};
+static uint32_t lidar_uart = 0;
+static rplidar_dev_t rplidar_device;
 
 /**
  * @brief Record UART used by GCS
@@ -1117,14 +1120,26 @@ static bool ring_buffer_initialized = false;
 #define RING_BUFFER_SIZE 1024
 
 /**
+ * @brief Record Lidar UART for later use
+ */
+void record_lidar_uart(unsigned int cpu_index, void *udata)
+{
+    uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    lidar_uart = uart_num;
+    rplidar_init(&rplidar_device);
+    printf("Lidar using UART at address 0x%X\n", uart_num);
+}
+
+/**
  * @brief Read a byte from a UART used by GCS
  *
  * Called like this from virtuals.txt:
  *
- * <address/symbol> gcs_read *
+ * <address/symbol> uart_read *
  */
-void gcs_read(unsigned int cpu_index, void *udata)
+void uart_read(unsigned int cpu_index, void *udata)
 {
+    // gcs
     if (!ring_buffer_initialized)
     {
         if (!ring_buffer_init(&ring_buffer, RING_BUFFER_SIZE))
@@ -1136,18 +1151,27 @@ void gcs_read(unsigned int cpu_index, void *udata)
     }
 
     uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
-    int found = 0;
+
+
+    // lidar (found from virtual at 0x080ab09a)
+    if (uart_num == lidar_uart)
+    {
+
+        // rplidar_read(&rplidar_device, &byte, 1);
+    }
+
+    int gcs_uart = 0;
 
     for (int i = 0; i < 8; i++)
     {
         if (gcs_uarts[i] == uart_num)
         {
-            found = 1;
+            gcs_uart = 1;
             break;
         }
     }
 
-    if (!found)
+    if (!gcs_uart)
     {
         // return -1 for no data
         qemu_set_register((uint32_t)(-1), ARM_V7M_R0);
@@ -1184,18 +1208,18 @@ void gcs_bytes_available(unsigned int cpu_index, void *udata)
     }
 
     uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
-    int found = 0;
+    int gcs_uart = 0;
 
     for (int i = 0; i < 8; i++)
     {
         if (gcs_uarts[i] == uart_num)
         {
-            found = 1;
+            gcs_uart = 1;
             break;
         }
     }
 
-    if (!found)
+    if (!gcs_uart)
     {
         // return 0 bytes available
         qemu_set_register(0, ARM_V7M_R0);
@@ -1863,7 +1887,7 @@ int ardupilot_init_virtuals(int argc, char **argv)
     virtual_register("gcs_send_mavlink_message", gcs_send_mavlink_message);
     virtual_register("gcs_send_text", gcs_send_text);
     virtual_register("gcs_send_banner_once", gcs_send_banner_once);
-    virtual_register("gcs_read", gcs_read);
+    virtual_register("uart_read", uart_read);
     virtual_register("gcs_bytes_available", gcs_bytes_available);
 
     // GPS
@@ -1872,6 +1896,7 @@ int ardupilot_init_virtuals(int argc, char **argv)
     // Lidar360 / Proximity
     virtual_register("proximity_get_type", proximity_get_type);
     virtual_register("proximity_set_type_param", proximity_set_type_param);
+    virtual_register("record_lidar_uart", record_lidar_uart);
 
     // File System (flight logs)
     virtual_register("ap_fs_open", ap_fs_open);

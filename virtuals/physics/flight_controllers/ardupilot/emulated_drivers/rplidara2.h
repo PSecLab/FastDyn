@@ -1,114 +1,124 @@
-#ifndef FAKE_RPLIDAR_H
-#define FAKE_RPLIDAR_H
+#ifndef RPLIDAR_EMULATOR_H
+#define RPLIDAR_EMULATOR_H
 
-#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include "phy.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// #define RPLIDAR_RX_BUF_SIZE 256
-// #define RPLIDAR_TX_BUF_SIZE 8192
+#define RPLIDAR_PREAMBLE              0xA5
+#define RPLIDAR_CMD_STOP              0x25
+#define RPLIDAR_CMD_SCAN              0x20
+#define RPLIDAR_CMD_FORCE_SCAN        0x21
+#define RPLIDAR_CMD_RESET             0x40
+#define RPLIDAR_CMD_GET_DEVICE_INFO   0x50
+#define RPLIDAR_CMD_GET_DEVICE_HEALTH 0x52
 
-// #define RPLIDAR_PREAMBLE               0xA5
-// #define RPLIDAR_CMD_STOP               0x25
-// #define RPLIDAR_CMD_SCAN               0x20
-// #define RPLIDAR_CMD_FORCE_SCAN         0x21
-// #define RPLIDAR_CMD_RESET              0x40
-// #define RPLIDAR_CMD_GET_DEVICE_INFO    0x50
-// #define RPLIDAR_CMD_GET_DEVICE_HEALTH  0x52
-// #define RPLIDAR_CMD_EXPRESS_SCAN       0x82
+#define RPLIDAR_RESP_SYNC_1           0xA5
+#define RPLIDAR_RESP_SYNC_2           0x5A
+
+#define RPLIDAR_SCAN_DESCRIPTOR_TYPE        0x81
+#define RPLIDAR_HEALTH_DESCRIPTOR_TYPE      0x06
+#define RPLIDAR_DEVICE_INFO_DESCRIPTOR_TYPE 0x04
+
+#define RPLIDAR_TX_FIFO_SIZE 8192
 
 typedef enum {
-    RPLIDAR_STATE_IDLE = 0,
-    RPLIDAR_STATE_STREAMING_SCAN,
-    RPLIDAR_STATE_RESETTING
-} rplidar_state_t;
+    RPLIDAR_DEV_IDLE = 0,
+    RPLIDAR_DEV_RESETTING,
+    RPLIDAR_DEV_READY,
+    RPLIDAR_DEV_SCANNING
+} rplidar_mode_t;
 
 typedef struct {
-    /* RX assembly buffer (host -> device) */
-    uint8_t rx_buf[RPLIDAR_RX_BUF_SIZE];
-    size_t rx_len;
+    uint8_t data[RPLIDAR_TX_FIFO_SIZE];
+    size_t head;
+    size_t tail;
+    size_t count;
+} rplidar_byte_fifo_t;
 
-    /* TX queue (device -> host) */
-    uint8_t tx_buf[RPLIDAR_TX_BUF_SIZE];
-    size_t tx_head;   /* next byte to read */
-    size_t tx_tail;   /* next position to write */
+#define RPLIDAR_SAMPLE_BATCH 32
 
-    rplidar_state_t state;
+typedef struct {
+    /* Device identity exposed via DEVICE_INFO response. */
+    uint8_t  model;
+    uint8_t  firmware_minor;
+    uint8_t  firmware_major;
+    uint8_t  hardware;
+    uint8_t  serialnum[16];
 
-    /* fake identity */
-    uint8_t model;
-    uint8_t firmware_minor;
-    uint8_t firmware_major;
-    uint8_t hardware;
-    uint8_t serial_number[16];
+    /* Runtime state. */
+    rplidar_mode_t mode;
+    bool motor_running;
+    bool scan_started;
 
-    /* fake health */
-    uint8_t health_status;
-    uint16_t health_error_code;
+    /* Lookahead sample buffer, filled by get_lidar_samples(). */
+    rplidar_sample_t sample_buf[RPLIDAR_SAMPLE_BATCH];
+    size_t sample_buf_count;
+    size_t sample_buf_head;
 
-    /* fake reset banner */
-    uint8_t reset_banner[63];
+    /* Outbound bytes waiting for rplidar_read(). */
+    rplidar_byte_fifo_t tx_fifo;
+} rplidar_dev_t;
 
-    /* scan generation */
-    double scan_angle_deg;
-    double scan_angle_step_deg;
-    bool new_scan_flag;
 
-    uint64_t sample_period_us;
-    uint64_t last_sample_time_us;
-} fake_rplidar_t;
-
-/*
- * Initialize the fake device.
- *
- * sample_rate_hz:
- *   Number of fake scan samples per second generated while in scan mode.
- *   If <= 0, the implementation may fall back to a default rate.
- */
-void rplidar_init(fake_rplidar_t *dev, double sample_rate_hz);
+/* ========================= simulation interface ========================= */
 
 /*
- * Deliver bytes written by the host to the lidar UART.
+ * Implemented by the simulation environment.
  *
- * data/len:
- *   Incoming UART bytes from the flight controller / driver.
+ * Fill up to num_samples entries in the provided array with pre-packed
+ * wire-format scan nodes.  Returns the number of samples written, or -1
+ * on error.  A return of 0 means no data is available yet; the emulator
+ * will retry on the next rplidar_read() call.
  *
- * now_us:
- *   Current emulated time in microseconds.
- *
- * returns:
- *   Number of bytes consumed from data.
+ * The caller is responsible for encoding startbit, !startbit, checkbit,
+ * angle_q6, and distance_q2 correctly inside each rplidar_sample_t.
  */
-size_t rplidar_receive(fake_rplidar_t *dev,
-                       const uint8_t *data,
-                       size_t len,
-                       uint64_t now_us);
+// extern int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples);
+
+
+/* ========================= public API ========================= */
 
 /*
- * Advance the device model and emit scan samples if scan mode is active.
- *
- * now_us:
- *   Current emulated time in microseconds.
+ * Initialise a device instance.  Must be called before any other function.
+ * Hardcodes A2M8 identity (model 0x28, firmware 1.24, hardware rev 7).
  */
-void rplidar_tick(fake_rplidar_t *dev, uint64_t now_us);
+void rplidar_init(rplidar_dev_t *dev);
 
 /*
- * Read bytes the fake lidar has transmitted.
- *
- * out/max_len:
- *   Destination buffer for outgoing UART bytes.
- *
- * returns:
- *   Number of bytes copied into out.
+ * Returns the number of bytes currently queued and ready to be read.
  */
-size_t rplidar_read_tx(fake_rplidar_t *dev, uint8_t *out, size_t max_len);
+size_t rplidar_available(const rplidar_dev_t *dev);
+
+/**
+ * @brief Read up to len bytes from the device TX FIFO into dst.
+ * If the device is scanning and the FIFO is running low, new scan nodes
+ * are fetched from get_lidar_samples() before the read is serviced.
+ * Returns the number of bytes actually copied.
+ *
+ * @param dev Pointer to the device instance.
+ * @param dst Buffer to copy data into.
+ * @param len Maximum number of bytes to read.
+ * @return Number of bytes read and copied into dst.
+ */
+size_t rplidar_read(rplidar_dev_t *dev, uint8_t *dst, size_t len);
+
+/*
+ * Feed len bytes of host-to-device command data into the emulator.
+ * Valid 2-byte commands (preamble 0xA5 + command byte) are acted on
+ * immediately; unrecognised commands are silently ignored.
+ * Returns the number of bytes consumed.
+ */
+size_t rplidar_write(rplidar_dev_t *dev, const uint8_t *src, size_t len);
+
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* FAKE_RPLIDAR_H */
+#endif /* RPLIDAR_EMULATOR_H */

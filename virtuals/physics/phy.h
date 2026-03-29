@@ -2,6 +2,7 @@
 #define PHY_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 typedef struct gps_data_t {
     double lat;
@@ -55,6 +56,14 @@ typedef struct {
     float speed;
 } wind_vane_apparent_t;
 
+typedef struct {
+    uint8_t sync_quality;   // S, !S, quality
+    uint8_t angle_lsb;      // angle Q6 low byte
+    uint8_t angle_msb;      // angle Q6 high byte
+    uint8_t dist_lsb;       // distance Q2 low byte
+    uint8_t dist_msb;       // distance Q2 high byte
+} rplidar_sample_t;
+
 /* Backend interface */
 typedef struct phy_backend {
 
@@ -76,6 +85,8 @@ typedef struct phy_backend {
     int (*get_joint_state)(double *motor_0_pos, double *motor_2_pos);
 
     int (*get_altimeter_reading)(double *altitude);
+
+    int (*get_lidar_samples)(rplidar_sample_t *samples, size_t num_samples);
 
 } phy_backend_t;
 
@@ -109,6 +120,6 @@ int phy_set_servo_pwm(int channel, int pwm);
 int phy_advance_simulation(double run_until_time);
 int phy_get_joint_state(double *motor_0_pos, double *motor_2_pos);
 int phy_get_altimeter_reading(double *altitude);
-
+int phy_get_lidar_samples(rplidar_sample_t *samples, size_t num_samples);
 
 #endif /* PHY_H */

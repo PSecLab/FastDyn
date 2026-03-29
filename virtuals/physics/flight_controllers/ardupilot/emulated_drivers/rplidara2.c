@@ -1,489 +1,389 @@
+/*
+ * Minimal stateful RPLidar A2 emulator for ArduPilot-style UART traffic.
+ *
+ * Device-side model:
+ *   - host writes commands into rplidar_write()
+ *   - host reads queued device response bytes from rplidar_read()
+ *
+ * Scan data is sourced from get_lidar_samples(), which must be provided
+ * by the surrounding simulation environment.
+ */
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
-#include <math.h>
-#include <stdio.h>
 #include "rplidara2.h"
+#include "phy.h"
+
+#define RPLIDAR_PREAMBLE              0xA5
+#define RPLIDAR_CMD_STOP              0x25
+#define RPLIDAR_CMD_SCAN              0x20
+#define RPLIDAR_CMD_FORCE_SCAN        0x21
+#define RPLIDAR_CMD_RESET             0x40
+#define RPLIDAR_CMD_GET_DEVICE_INFO   0x50
+#define RPLIDAR_CMD_GET_DEVICE_HEALTH 0x52
+
+#define RPLIDAR_RESP_SYNC_1           0xA5
+#define RPLIDAR_RESP_SYNC_2           0x5A
+
+#define RPLIDAR_SCAN_DESCRIPTOR_TYPE        0x81
+#define RPLIDAR_HEALTH_DESCRIPTOR_TYPE      0x06
+#define RPLIDAR_DEVICE_INFO_DESCRIPTOR_TYPE 0x04
+
+#define RPLIDAR_TX_FIFO_SIZE 8192
 
 /*
- * Fake RPLidar A2 UART device model
+ * Pre-packed scan sample as returned by get_lidar_samples().
+ * Bytes are already in the wire format expected by the ArduPilot driver,
+ * so they can be written into the TX FIFO without further encoding.
  *
- * Supported commands:
- *   A5 40  RESET
- *   A5 50  GET_DEVICE_INFO
- *   A5 52  GET_DEVICE_HEALTH
- *   A5 20  SCAN
- *   A5 21  FORCE_SCAN (treated same as SCAN)
- *   A5 25  STOP
- *
- * Host usage pattern:
- *   1. call rplidar_init()
- *   2. deliver host UART writes via rplidar_receive()
- *   3. periodically call rplidar_tick(now_us)
- *   4. read outgoing UART bytes with rplidar_read_tx()
+ *   sync_quality : bit0 = startbit, bit1 = !startbit, bits[7:2] = quality
+ *   angle_lsb    : bit0 = checkbit (must be 1), bits[7:1] = angle_q6[6:0]
+ *   angle_msb    : angle_q6[14:7]
+ *   dist_lsb     : distance_q2[7:0]
+ *   dist_msb     : distance_q2[15:8]
  */
+// typedef struct {
+//     uint8_t sync_quality;
+//     uint8_t angle_lsb;
+//     uint8_t angle_msb;
+//     uint8_t dist_lsb;
+//     uint8_t dist_msb;
+// } rplidar_sample_t;
 
-#define RPLIDAR_RX_BUF_SIZE 256
-#define RPLIDAR_TX_BUF_SIZE 8192
+/*
+ * Implemented by the simulation environment.
+ * Fills up to num_samples entries; returns the number actually written,
+ * or -1 on error.  Callers must handle a return of 0 (no data yet)
+ * gracefully.
+ */
+// extern int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples);
 
-#define RPLIDAR_PREAMBLE               0xA5
-#define RPLIDAR_CMD_STOP               0x25
-#define RPLIDAR_CMD_SCAN               0x20
-#define RPLIDAR_CMD_FORCE_SCAN         0x21
-#define RPLIDAR_CMD_RESET              0x40
-#define RPLIDAR_CMD_GET_DEVICE_INFO    0x50
-#define RPLIDAR_CMD_GET_DEVICE_HEALTH  0x52
-#define RPLIDAR_CMD_EXPRESS_SCAN       0x82
+/* Batch size used when refilling the internal sample buffer. */
+#define RPLIDAR_SAMPLE_BATCH 32
 
+// typedef struct {
+//     /* Device identity exposed via DEVICE_INFO payload. */
+//     uint8_t  model;            /* 0x28 = A2M8                        */
+//     uint8_t  firmware_minor;   /* reported as fw version minor       */
+//     uint8_t  firmware_major;   /* reported as fw version major       */
+//     uint8_t  hardware;         /* hardware revision                  */
+//     uint8_t  serialnum[16];
 
-/* -------------------------------------------------------------------------- */
-/* Utility                                                                     */
-/* -------------------------------------------------------------------------- */
+//     /* Runtime state. */
+//     rplidar_mode_t mode;
+//     bool motor_running;
+//     bool scan_started;
 
-static size_t min_size(size_t a, size_t b)
+//     /*
+//      * Small lookahead buffer: filled by get_lidar_samples(), drained one
+//      * entry at a time by queue_scan_node().  Keeps the number of calls to
+//      * get_lidar_samples() low and lets callers return a batch efficiently.
+//      */
+//     rplidar_sample_t sample_buf[RPLIDAR_SAMPLE_BATCH];
+//     size_t sample_buf_count;   /* valid entries waiting in sample_buf */
+//     size_t sample_buf_head;    /* next entry to consume               */
+
+//     /* Outbound bytes waiting for rplidar_read(). */
+//     rplidar_byte_fifo_t tx_fifo;
+// } rplidar_dev_t;
+
+/* ========================= FIFO helpers ========================= */
+
+static void fifo_init(rplidar_byte_fifo_t *f)
 {
-    return (a < b) ? a : b;
+    memset(f, 0, sizeof(*f));
 }
 
-static uint16_t clamp_u16_from_int(int v)
+static size_t fifo_write(rplidar_byte_fifo_t *f, const uint8_t *src, size_t len)
 {
-    if (v < 0) {
-        return 0;
+    size_t written = 0;
+    while (written < len && f->count < RPLIDAR_TX_FIFO_SIZE) {
+        f->data[f->tail] = src[written];
+        f->tail = (f->tail + 1) % RPLIDAR_TX_FIFO_SIZE;
+        f->count++;
+        written++;
     }
-    if (v > 65535) {
-        return 65535;
-    }
-    return (uint16_t)v;
+    return written;
 }
 
-/* -------------------------------------------------------------------------- */
-/* TX ring buffer helpers                                                      */
-/* -------------------------------------------------------------------------- */
-
-static size_t rplidar_tx_available(const fake_rplidar_t *dev)
+static size_t fifo_read(rplidar_byte_fifo_t *f, uint8_t *dst, size_t len)
 {
-    if (dev->tx_tail >= dev->tx_head) {
-        return dev->tx_tail - dev->tx_head;
+    size_t n = 0;
+    while (n < len && f->count > 0) {
+        dst[n] = f->data[f->head];
+        f->head = (f->head + 1) % RPLIDAR_TX_FIFO_SIZE;
+        f->count--;
+        n++;
     }
-    return RPLIDAR_TX_BUF_SIZE - dev->tx_head + dev->tx_tail;
+    return n;
 }
 
-static size_t rplidar_tx_space(const fake_rplidar_t *dev)
+static size_t fifo_available(const rplidar_byte_fifo_t *f)
 {
-    /* keep one byte empty to distinguish full vs empty */
-    return (RPLIDAR_TX_BUF_SIZE - 1) - rplidar_tx_available(dev);
+    return f->count;
 }
 
-static bool rplidar_tx_push_byte(fake_rplidar_t *dev, uint8_t b)
+
+/* ========================= protocol helpers ========================= */
+
+static void queue_bytes(rplidar_dev_t *dev, const uint8_t *data, size_t len)
 {
-    if (rplidar_tx_space(dev) == 0) {
-        return false;
+    fifo_write(&dev->tx_fifo, data, len);
+}
+
+static void queue_descriptor(rplidar_dev_t *dev,
+                              uint32_t payload_len,
+                              bool     single_response,
+                              uint8_t  data_type)
+{
+    uint8_t d[7];
+    d[0] = RPLIDAR_RESP_SYNC_1;
+    d[1] = RPLIDAR_RESP_SYNC_2;
+    d[2] = (uint8_t)(payload_len        & 0xFF);
+    d[3] = (uint8_t)((payload_len >>  8) & 0xFF);
+    d[4] = (uint8_t)((payload_len >> 16) & 0xFF);
+    d[5] = (uint8_t)((payload_len >> 24) & 0x3F);
+    if (!single_response) {
+        d[5] |= 0x40;   /* multiple-response / streaming */
     }
-    dev->tx_buf[dev->tx_tail] = b;
-    dev->tx_tail = (dev->tx_tail + 1) % RPLIDAR_TX_BUF_SIZE;
+    d[6] = data_type;
+    queue_bytes(dev, d, sizeof(d));
+}
+
+static void queue_device_info(rplidar_dev_t *dev)
+{
+    queue_descriptor(dev, 0x14, true, RPLIDAR_DEVICE_INFO_DESCRIPTOR_TYPE);
+
+    uint8_t p[20];
+    memset(p, 0, sizeof(p));
+    p[0] = dev->model;
+    p[1] = dev->firmware_minor;
+    p[2] = dev->firmware_major;
+    p[3] = dev->hardware;
+    memcpy(&p[4], dev->serialnum, 16);
+    queue_bytes(dev, p, sizeof(p));
+}
+
+static void queue_health(rplidar_dev_t *dev, uint8_t status, uint16_t error_code)
+{
+    queue_descriptor(dev, 0x03, true, RPLIDAR_HEALTH_DESCRIPTOR_TYPE);
+
+    uint8_t p[3];
+    p[0] = status;
+    p[1] = (uint8_t)(error_code        & 0xFF);
+    p[2] = (uint8_t)((error_code >> 8) & 0xFF);
+    queue_bytes(dev, p, sizeof(p));
+}
+
+static void queue_scan_descriptor(rplidar_dev_t *dev)
+{
+    /* streaming response, 5 bytes per node */
+    queue_descriptor(dev, 0x05, false, RPLIDAR_SCAN_DESCRIPTOR_TYPE);
+}
+
+static void queue_reset_banner(rplidar_dev_t *dev)
+{
+    /*
+     * The ArduPilot driver RESET handler:
+     *   1. scans incoming bytes until it sees 'R' (0x52)
+     *   2. then reads 63 bytes total (including the 'R') and discards them
+     *
+     * Any 63-byte sequence whose first byte is 'R' satisfies the protocol.
+     */
+    uint8_t banner[63];
+    memset(banner, 0x00, sizeof(banner));
+
+    const char msg[] = "RPlidar boot v1.24 (A2M8) READY.           "
+                       "                   ";   /* pad to 63 bytes  */
+    /* msg[] is exactly 63 chars including the NUL, copy without NUL */
+    memcpy(banner, msg, sizeof(banner));
+
+    queue_bytes(dev, banner, sizeof(banner));
+}
+
+
+/* ========================= scan node feeding ========================= */
+
+/*
+ * Attempt to fetch a fresh batch of samples from the simulation into the
+ * device's lookahead buffer.  Returns true if at least one sample is now
+ * available.
+ */
+static bool refill_sample_buf(rplidar_dev_t *dev)
+{
+    if (dev->sample_buf_count > 0) {
+        return true;   /* still have unconsumed samples */
+    }
+
+    int got = phy_get_lidar_samples(dev->sample_buf, RPLIDAR_SAMPLE_BATCH);
+    if (got <= 0) {
+        return false;  /* simulation not ready yet, try later */
+    }
+
+    dev->sample_buf_count = (size_t)got;
+    dev->sample_buf_head  = 0;
     return true;
 }
 
-static size_t rplidar_tx_push_bytes(fake_rplidar_t *dev, const uint8_t *data, size_t len)
+/*
+ * Push one pre-packed scan node into the TX FIFO.
+ * Returns false if no sample data was available from the simulation.
+ */
+static bool queue_scan_node(rplidar_dev_t *dev)
 {
-    size_t pushed = 0;
-    while (pushed < len) {
-        if (!rplidar_tx_push_byte(dev, data[pushed])) {
+    if (!refill_sample_buf(dev)) {
+        return false;
+    }
+
+    const rplidar_sample_t *s = &dev->sample_buf[dev->sample_buf_head];
+
+    /*
+     * Wire layout (5 bytes, already encoded in rplidar_sample_t):
+     *
+     *   byte 0  sync_quality : bits[1:0] = S/!S flags, bits[7:2] = quality
+     *   byte 1  angle_lsb    : bit0 = checkbit(1), bits[7:1] = angle_q6[6:0]
+     *   byte 2  angle_msb    : angle_q6[14:7]
+     *   byte 3  dist_lsb     : distance_q2[7:0]
+     *   byte 4  dist_msb     : distance_q2[15:8]
+     *
+     * get_lidar_samples() is responsible for setting these correctly,
+     * including the startbit and checkbit fields.
+     */
+    uint8_t wire[5];
+    wire[0] = s->sync_quality;
+    wire[1] = s->angle_lsb;
+    wire[2] = s->angle_msb;
+    wire[3] = s->dist_lsb;
+    wire[4] = s->dist_msb;
+
+    queue_bytes(dev, wire, sizeof(wire));
+
+    dev->sample_buf_head++;
+    dev->sample_buf_count--;
+    return true;
+}
+
+/*
+ * Prime the TX FIFO with up to `count` scan nodes at startup or during
+ * refill.  Stops early if the simulation has no data yet.
+ */
+static void prime_scan_nodes(rplidar_dev_t *dev, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        if (!queue_scan_node(dev)) {
             break;
         }
-        pushed++;
     }
-    return pushed;
 }
 
-size_t rplidar_read_tx(fake_rplidar_t *dev, uint8_t *out, size_t max_len)
+
+/* ========================= public API ========================= */
+
+void rplidar_init(rplidar_dev_t *dev)
 {
-    size_t n = 0;
-    while (n < max_len && dev->tx_head != dev->tx_tail) {
-        out[n++] = dev->tx_buf[dev->tx_head];
-        dev->tx_head = (dev->tx_head + 1) % RPLIDAR_TX_BUF_SIZE;
-    }
-    return n;
+    memset(dev, 0, sizeof(*dev));
+    fifo_init(&dev->tx_fifo);
+
+    /* RPLidar A2M8 realistic identity values */
+    dev->model          = 0x28;   /* A2M8                         */
+    dev->firmware_minor = 24;     /* firmware 1.24                */
+    dev->firmware_major = 1;
+    dev->hardware       = 7;      /* hardware revision 7          */
+
+    /* Plausible fixed serial number (16 bytes, hex-printable range) */
+    const uint8_t sn[16] = {
+        0x3A, 0xF2, 0x11, 0x04,
+        0xC7, 0x8B, 0x0E, 0x55,
+        0x29, 0xD0, 0x6A, 0x3C,
+        0xB1, 0x47, 0x90, 0xFE
+    };
+    memcpy(dev->serialnum, sn, sizeof(sn));
+
+    dev->mode          = RPLIDAR_DEV_IDLE;
+    dev->motor_running = false;
+    dev->scan_started  = false;
+
+    dev->sample_buf_count = 0;
+    dev->sample_buf_head  = 0;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Protocol builders                                                           */
-/* -------------------------------------------------------------------------- */
+size_t rplidar_available(const rplidar_dev_t *dev)
+{
+    return fifo_available(&dev->tx_fifo);
+}
 
-static void rplidar_make_descriptor(
-    uint8_t out[7],
-    uint32_t response_length,
-    uint8_t send_mode,
-    uint8_t data_type)
+size_t rplidar_read(rplidar_dev_t *dev, uint8_t *dst, size_t len)
 {
     /*
-     * Matches what the ArduPilot driver memcmp's against:
-     *   scan:        A5 5A 05 00 00 40 81
-     *   device info: A5 5A 14 00 00 00 04
-     *   health:      A5 5A 03 00 00 00 06
+     * If we are scanning and the TX FIFO is running low, pull more samples
+     * from the simulation before handing bytes to the caller.  The threshold
+     * (128 bytes = ~25 nodes) gives enough headroom to avoid underruns at
+     * typical UART baud rates.
      */
-    out[0] = 0xA5;
-    out[1] = 0x5A;
-    out[2] = (uint8_t)(response_length & 0xFF);
-    out[3] = (uint8_t)((response_length >> 8) & 0xFF);
-    out[4] = (uint8_t)((response_length >> 16) & 0xFF);
-    out[5] = send_mode;
-    out[6] = data_type;
-}
-
-static void rplidar_build_device_info_payload(const fake_rplidar_t *dev, uint8_t out[20])
-{
-    out[0] = dev->model;
-    out[1] = dev->firmware_minor;
-    out[2] = dev->firmware_major;
-    out[3] = dev->hardware;
-    memcpy(&out[4], dev->serial_number, 16);
-}
-
-static void rplidar_build_health_payload(const fake_rplidar_t *dev, uint8_t out[3])
-{
-    out[0] = dev->health_status;
-    out[1] = (uint8_t)(dev->health_error_code & 0xFF);
-    out[2] = (uint8_t)((dev->health_error_code >> 8) & 0xFF);
-}
-
-/* -------------------------------------------------------------------------- */
-/* Fake scan data                                                              */
-/* -------------------------------------------------------------------------- */
-
-static void rplidar_build_scan_sample(fake_rplidar_t *dev, uint8_t out[5])
-{
-    /*
-     * Standard 5-byte scan sample shape expected by the driver:
-     *   byte0: quality[7:2], not_startbit[1], startbit[0]
-     *   byte1: angle_q6 low 7 bits in [7:1], checkbit in [0]
-     *   byte2: angle_q6 high 8 bits
-     *   byte3: distance_q2 low 8 bits
-     *   byte4: distance_q2 high 8 bits
-     */
-
-    double angle_deg = dev->scan_angle_deg;
-
-    /* fake environment */
-    double distance_m = 3.0 + 1.5 * sin((angle_deg * 2.0) * M_PI / 180.0);
-    if (distance_m < 0.2) {
-        distance_m = 0.2;
+    if (dev->mode == RPLIDAR_DEV_SCANNING && fifo_available(&dev->tx_fifo) < 128) {
+        prime_scan_nodes(dev, RPLIDAR_SAMPLE_BATCH);
     }
 
-    uint8_t quality = 15;
-    uint8_t startbit = dev->new_scan_flag ? 1 : 0;
-    uint8_t not_startbit = startbit ? 0 : 1;
-    uint8_t checkbit = 1;
-
-    int angle_q6_i = (int)((fmod(angle_deg, 360.0)) * 64.0);
-    if (angle_q6_i < 0) {
-        angle_q6_i += (360 * 64);
-    }
-
-    int distance_q2_i = (int)(distance_m * 4000.0);
-
-    uint16_t angle_q6 = clamp_u16_from_int(angle_q6_i);
-    uint16_t distance_q2 = clamp_u16_from_int(distance_q2_i);
-
-    out[0] = (uint8_t)(((quality & 0x3F) << 2) |
-                       ((not_startbit & 0x1) << 1) |
-                       (startbit & 0x1));
-    out[1] = (uint8_t)(((angle_q6 & 0x7F) << 1) |
-                       (checkbit & 0x1));
-    out[2] = (uint8_t)((angle_q6 >> 7) & 0xFF);
-    out[3] = (uint8_t)(distance_q2 & 0xFF);
-    out[4] = (uint8_t)((distance_q2 >> 8) & 0xFF);
-
-    dev->scan_angle_deg += dev->scan_angle_step_deg;
-    if (dev->scan_angle_deg >= 360.0) {
-        dev->scan_angle_deg -= 360.0;
-        dev->new_scan_flag = true;
-    } else {
-        dev->new_scan_flag = false;
-    }
+    return fifo_read(&dev->tx_fifo, dst, len);
 }
 
-/* -------------------------------------------------------------------------- */
-/* Command handlers                                                            */
-/* -------------------------------------------------------------------------- */
-
-static void rplidar_handle_reset(fake_rplidar_t *dev)
+size_t rplidar_write(rplidar_dev_t *dev, const uint8_t *src, size_t len)
 {
-    dev->state = RPLIDAR_STATE_RESETTING;
-    dev->scan_angle_deg = 0.0;
-    dev->new_scan_flag = true;
+    size_t consumed = 0;
 
-    rplidar_tx_push_bytes(dev, dev->reset_banner, sizeof(dev->reset_banner));
-
-    dev->state = RPLIDAR_STATE_IDLE;
-}
-
-static void rplidar_handle_stop(fake_rplidar_t *dev)
-{
-    dev->state = RPLIDAR_STATE_IDLE;
-}
-
-static void rplidar_handle_get_device_info(fake_rplidar_t *dev)
-{
-    uint8_t descriptor[7];
-    uint8_t payload[20];
-
-    rplidar_make_descriptor(descriptor, 20, 0x00, 0x04);
-    rplidar_build_device_info_payload(dev, payload);
-
-    rplidar_tx_push_bytes(dev, descriptor, sizeof(descriptor));
-    rplidar_tx_push_bytes(dev, payload, sizeof(payload));
-}
-
-static void rplidar_handle_get_device_health(fake_rplidar_t *dev)
-{
-    uint8_t descriptor[7];
-    uint8_t payload[3];
-
-    rplidar_make_descriptor(descriptor, 3, 0x00, 0x06);
-    rplidar_build_health_payload(dev, payload);
-
-    rplidar_tx_push_bytes(dev, descriptor, sizeof(descriptor));
-    rplidar_tx_push_bytes(dev, payload, sizeof(payload));
-}
-
-static void rplidar_handle_scan(fake_rplidar_t *dev, uint64_t now_us)
-{
-    uint8_t descriptor[7];
-
-    rplidar_make_descriptor(descriptor, 5, 0x40, 0x81);
-    rplidar_tx_push_bytes(dev, descriptor, sizeof(descriptor));
-
-    dev->state = RPLIDAR_STATE_STREAMING_SCAN;
-    dev->last_sample_time_us = now_us;
-}
-
-static void rplidar_handle_command(fake_rplidar_t *dev, uint8_t cmd, uint64_t now_us)
-{
-    switch (cmd) {
-    case RPLIDAR_CMD_RESET:
-        rplidar_handle_reset(dev);
-        break;
-    case RPLIDAR_CMD_STOP:
-        rplidar_handle_stop(dev);
-        break;
-    case RPLIDAR_CMD_GET_DEVICE_INFO:
-        rplidar_handle_get_device_info(dev);
-        break;
-    case RPLIDAR_CMD_GET_DEVICE_HEALTH:
-        rplidar_handle_get_device_health(dev);
-        break;
-    case RPLIDAR_CMD_SCAN:
-    case RPLIDAR_CMD_FORCE_SCAN:
-        rplidar_handle_scan(dev, now_us);
-        break;
-    case RPLIDAR_CMD_EXPRESS_SCAN:
-        /* not implemented */
-        break;
-    default:
-        break;
-    }
-}
-
-/* -------------------------------------------------------------------------- */
-/* RX parsing                                                                   */
-/* -------------------------------------------------------------------------- */
-
-static void rplidar_process_rx(fake_rplidar_t *dev, uint64_t now_us)
-{
-    while (dev->rx_len >= 2) {
-        /* resync to preamble */
-        if (dev->rx_buf[0] != RPLIDAR_PREAMBLE) {
-            memmove(&dev->rx_buf[0], &dev->rx_buf[1], dev->rx_len - 1);
-            dev->rx_len--;
+    while (consumed + 2 <= len) {
+        if (src[consumed] != RPLIDAR_PREAMBLE) {
+            consumed++;
             continue;
         }
 
-        uint8_t cmd = dev->rx_buf[1];
+        uint8_t cmd = src[consumed + 1];
+        consumed += 2;
 
         switch (cmd) {
-        case RPLIDAR_CMD_STOP:
-        case RPLIDAR_CMD_SCAN:
-        case RPLIDAR_CMD_FORCE_SCAN:
+
         case RPLIDAR_CMD_RESET:
-        case RPLIDAR_CMD_GET_DEVICE_INFO:
-        case RPLIDAR_CMD_GET_DEVICE_HEALTH:
-            /* 2-byte command */
-            memmove(&dev->rx_buf[0], &dev->rx_buf[2], dev->rx_len - 2);
-            dev->rx_len -= 2;
-            rplidar_handle_command(dev, cmd, now_us);
+            dev->mode             = RPLIDAR_DEV_RESETTING;
+            dev->motor_running    = false;
+            dev->scan_started     = false;
+            dev->sample_buf_count = 0;
+            dev->sample_buf_head  = 0;
+            queue_reset_banner(dev);
             break;
 
-        case RPLIDAR_CMD_EXPRESS_SCAN:
-            /* Real protocol has payload; ignored for now. Consume 2 bytes only. */
-            memmove(&dev->rx_buf[0], &dev->rx_buf[2], dev->rx_len - 2);
-            dev->rx_len -= 2;
-            rplidar_handle_command(dev, cmd, now_us);
+        case RPLIDAR_CMD_GET_DEVICE_INFO:
+            dev->mode = RPLIDAR_DEV_READY;
+            queue_device_info(dev);
+            break;
+
+        case RPLIDAR_CMD_GET_DEVICE_HEALTH:
+            queue_health(dev, 0x00, 0x0000);   /* status OK, no error */
+            break;
+
+        case RPLIDAR_CMD_SCAN:
+        case RPLIDAR_CMD_FORCE_SCAN:
+            dev->mode             = RPLIDAR_DEV_SCANNING;
+            dev->motor_running    = true;
+            dev->scan_started     = true;
+            dev->sample_buf_count = 0;
+            dev->sample_buf_head  = 0;
+            queue_scan_descriptor(dev);
+            prime_scan_nodes(dev, RPLIDAR_SAMPLE_BATCH);
+            break;
+
+        case RPLIDAR_CMD_STOP:
+            dev->mode          = RPLIDAR_DEV_READY;
+            dev->scan_started  = false;
+            dev->motor_running = false;
             break;
 
         default:
-            /* unknown command, drop preamble and resync */
-            memmove(&dev->rx_buf[0], &dev->rx_buf[1], dev->rx_len - 1);
-            dev->rx_len--;
+            /* Silently ignore unrecognised commands. */
             break;
         }
     }
+
+    return consumed;
 }
-
-size_t rplidar_receive(fake_rplidar_t *dev, const uint8_t *data, size_t len, uint64_t now_us)
-{
-    size_t room = RPLIDAR_RX_BUF_SIZE - dev->rx_len;
-    size_t n = min_size(room, len);
-
-    if (n > 0) {
-        memcpy(&dev->rx_buf[dev->rx_len], data, n);
-        dev->rx_len += n;
-        rplidar_process_rx(dev, now_us);
-    }
-
-    return n;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Periodic ticking                                                             */
-/* -------------------------------------------------------------------------- */
-
-void rplidar_tick(fake_rplidar_t *dev, uint64_t now_us)
-{
-    if (dev->state != RPLIDAR_STATE_STREAMING_SCAN) {
-        return;
-    }
-
-    while ((now_us - dev->last_sample_time_us) >= dev->sample_period_us) {
-        uint8_t sample[5];
-        dev->last_sample_time_us += dev->sample_period_us;
-        rplidar_build_scan_sample(dev, sample);
-        rplidar_tx_push_bytes(dev, sample, sizeof(sample));
-    }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Initialization                                                               */
-/* -------------------------------------------------------------------------- */
-
-void rplidar_init(fake_rplidar_t *dev, double sample_rate_hz)
-{
-    memset(dev, 0, sizeof(*dev));
-
-    dev->state = RPLIDAR_STATE_IDLE;
-
-    /* fake A2 identity */
-    dev->model = 0x28;            /* A2 */
-    dev->firmware_minor = 0x00;
-    dev->firmware_major = 0x01;
-    dev->hardware = 0x10;
-
-    {
-        const uint8_t serial[16] = {
-            0x12, 0x34, 0x56, 0x78,
-            0x9A, 0xBC, 0xDE, 0xF0,
-            0x11, 0x22, 0x33, 0x44,
-            0x55, 0x66, 0x77, 0x88
-        };
-        memcpy(dev->serial_number, serial, sizeof(serial));
-    }
-
-    dev->health_status = 0x00;
-    dev->health_error_code = 0x0000;
-
-    {
-        const char *banner = "RPLIDAR A2 RESET BANNER FAKE DATA...........................";
-        size_t banner_len = strlen(banner);
-        memset(dev->reset_banner, '.', sizeof(dev->reset_banner));
-        memcpy(dev->reset_banner, banner, min_size(sizeof(dev->reset_banner), banner_len));
-        dev->reset_banner[0] = 'R';  /* make sure driver sees 'R' */
-    }
-
-    dev->scan_angle_deg = 0.0;
-    dev->scan_angle_step_deg = 1.0;
-    dev->new_scan_flag = true;
-
-    if (sample_rate_hz <= 0.0) {
-        sample_rate_hz = 400.0;
-    }
-    dev->sample_period_us = (uint64_t)(1000000.0 / sample_rate_hz);
-    dev->last_sample_time_us = 0;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Example test harness                                                         */
-/* -------------------------------------------------------------------------- */
-
-#ifdef RPLIDAR_FAKE_TEST_MAIN
-
-static void dump_hex(const uint8_t *buf, size_t len, const char *label)
-{
-    size_t i;
-    printf("%s (%zu bytes): ", label, len);
-    for (i = 0; i < len; i++) {
-        printf("%02X ", buf[i]);
-    }
-    printf("\n");
-}
-
-int main(void)
-{
-    fake_rplidar_t dev;
-    uint8_t out[512];
-    uint64_t now_us = 0;
-
-    rplidar_init(&dev, 20.0);
-
-    /* RESET */
-    {
-        const uint8_t cmd[] = {0xA5, 0x40};
-        rplidar_receive(&dev, cmd, sizeof(cmd), now_us);
-        size_t n = rplidar_read_tx(&dev, out, sizeof(out));
-        dump_hex(out, n, "after RESET");
-    }
-
-    /* GET_DEVICE_INFO */
-    {
-        const uint8_t cmd[] = {0xA5, 0x50};
-        rplidar_receive(&dev, cmd, sizeof(cmd), now_us);
-        size_t n = rplidar_read_tx(&dev, out, sizeof(out));
-        dump_hex(out, n, "after GET_DEVICE_INFO");
-    }
-
-    /* GET_DEVICE_HEALTH */
-    {
-        const uint8_t cmd[] = {0xA5, 0x52};
-        rplidar_receive(&dev, cmd, sizeof(cmd), now_us);
-        size_t n = rplidar_read_tx(&dev, out, sizeof(out));
-        dump_hex(out, n, "after GET_DEVICE_HEALTH");
-    }
-
-    /* SCAN */
-    {
-        const uint8_t cmd[] = {0xA5, 0x20};
-        rplidar_receive(&dev, cmd, sizeof(cmd), now_us);
-        size_t n = rplidar_read_tx(&dev, out, sizeof(out));
-        dump_hex(out, n, "after SCAN descriptor");
-    }
-
-    /* stream some fake scan data */
-    for (int i = 0; i < 5; i++) {
-        now_us += 100000; /* 100 ms */
-        rplidar_tick(&dev, now_us);
-        size_t n = rplidar_read_tx(&dev, out, sizeof(out));
-        dump_hex(out, n, "scan burst");
-    }
-
-    /* STOP */
-    {
-        const uint8_t cmd[] = {0xA5, 0x25};
-        rplidar_receive(&dev, cmd, sizeof(cmd), now_us);
-        size_t n = rplidar_read_tx(&dev, out, sizeof(out));
-        dump_hex(out, n, "after STOP");
-    }
-
-    return 0;
-}
-
-#endif

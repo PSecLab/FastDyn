@@ -87,11 +87,52 @@ I wrote two virtuals to help with the initialization which is selecting the type
 
 #### c. Look at how the driver backend communicates with the device and what format the data is in.
 
-[RPLidarA2 High-Fidelity State Machine / Model](https://chatgpt.com/share/69b44219-844c-800c-9eff-41df606279d8)
+[RPLidarA2 High-Fidelity State Machine / Model](https://chatgpt.com/share/69c80ef4-db98-8330-a8ed-f8ff76dde0af)
 
 #### d. Design a service in the backend which can mimic the way the actual sensor acts.
 
 In our case the lidar rotates at a constant speed and adds readings from each angle to a buffer. When the buffer is full, it would overwrite the oldest data.
 
-#### d. Now, that you have a model, you can map hook points in the driver to our model.
+In my case every time we read we will just get all of the most recent distances and format 400 samples.
+
+The `gz.msgs.LaserScan` message has 400 samples and a min and max range of 0.15 and 16.0 respectively. The lidar will publish at 10hz so we will have to make sure to publish at that rate. I made this addition to the sdf to add our custom lidar:
+
+```xml
+      <sensor name='gpu_lidar' type='gpu_lidar'>
+          <pose>0 0 0.4 0 0 0</pose>
+          <topic>lidar</topic>
+          <update_rate>10</update_rate>
+
+          <ray>
+              <scan>
+                  <horizontal>
+                      <samples>400</samples>
+                      <resolution>1</resolution>
+                      <min_angle>-3.14159</min_angle>
+                      <max_angle>3.14159</max_angle>
+                  </horizontal>
+
+                  <vertical>
+                      <samples>1</samples>
+                      <resolution>0.01</resolution>
+                      <min_angle>0</min_angle>
+                      <max_angle>0</max_angle>
+                  </vertical>
+              </scan>
+
+              <range>
+                  <min>0.15</min>
+                  <max>16.0</max>
+                  <resolution>0.01</resolution>
+              </range>
+          </ray>
+
+          <always_on>1</always_on>
+          <visualize>true</visualize>
+      </sensor>
+```
+
+We can make a service that returns a variable number of samples as an array of tuples for angle and distance. The service will be called `get_lidar_scan` and will return the most recent scan from the lidar.
+
+#### e. Now, that you have a model, you can map hook points in the driver to our model.
 
