@@ -14,7 +14,7 @@
 0x809ab28 gcs_send_text 
 0x809aae0 gcs_send_text 
 0x80a2654 gcs_send_banner_once *
-0x8054d14 gcs_read *
+0x8054d14 uart_read *
 0x8054d34 gcs_bytes_available *
 0x809be48 gcs_send_mavlink_message *
 0x816c67a raise_periodic_irq 66
