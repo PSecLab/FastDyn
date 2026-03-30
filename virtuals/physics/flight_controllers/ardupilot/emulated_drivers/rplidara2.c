@@ -309,23 +309,16 @@ void rplidar_init(rplidar_dev_t *dev)
     dev->sample_buf_head  = 0;
 }
 
-size_t rplidar_available(const rplidar_dev_t *dev)
+size_t rplidar_available(rplidar_dev_t *dev)
 {
+    if (dev->mode == RPLIDAR_DEV_SCANNING && fifo_available(&dev->tx_fifo) < 128) {
+        prime_scan_nodes((rplidar_dev_t *)dev, RPLIDAR_SAMPLE_BATCH);
+    }
     return fifo_available(&dev->tx_fifo);
 }
 
 size_t rplidar_read(rplidar_dev_t *dev, uint8_t *dst, size_t len)
 {
-    /*
-     * If we are scanning and the TX FIFO is running low, pull more samples
-     * from the simulation before handing bytes to the caller.  The threshold
-     * (128 bytes = ~25 nodes) gives enough headroom to avoid underruns at
-     * typical UART baud rates.
-     */
-    if (dev->mode == RPLIDAR_DEV_SCANNING && fifo_available(&dev->tx_fifo) < 128) {
-        prime_scan_nodes(dev, RPLIDAR_SAMPLE_BATCH);
-    }
-
     return fifo_read(&dev->tx_fifo, dst, len);
 }
 

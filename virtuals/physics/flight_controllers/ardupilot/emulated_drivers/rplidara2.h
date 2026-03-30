@@ -93,7 +93,7 @@ void rplidar_init(rplidar_dev_t *dev);
 /*
  * Returns the number of bytes currently queued and ready to be read.
  */
-size_t rplidar_available(const rplidar_dev_t *dev);
+size_t rplidar_available(rplidar_dev_t *dev);
 
 /**
  * @brief Read up to len bytes from the device TX FIFO into dst.

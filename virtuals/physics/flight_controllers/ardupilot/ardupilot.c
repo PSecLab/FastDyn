@@ -1036,6 +1036,7 @@ void chibiOS_tick_handler(unsigned int cpu_index, void *udata)
 static uint32_t gcs_uarts[8] = {0};
 static uint32_t lidar_uart = 0;
 static rplidar_dev_t rplidar_device;
+static bool rplidar_initialized = false;
 
 /**
  * @brief Record UART used by GCS
@@ -1127,6 +1128,7 @@ void record_lidar_uart(unsigned int cpu_index, void *udata)
     uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
     lidar_uart = uart_num;
     rplidar_init(&rplidar_device);
+    rplidar_initialized = true;
     printf("Lidar using UART at address 0x%X\n", uart_num);
 }
 
@@ -1135,9 +1137,9 @@ void record_lidar_uart(unsigned int cpu_index, void *udata)
  *
  * Called like this from virtuals.txt:
  *
- * <address/symbol> uart_read *
+ * <address/symbol> gcs_read *
  */
-void uart_read(unsigned int cpu_index, void *udata)
+void gcs_read(unsigned int cpu_index, void *udata)
 {
     // gcs
     if (!ring_buffer_initialized)
@@ -1151,14 +1153,6 @@ void uart_read(unsigned int cpu_index, void *udata)
     }
 
     uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
-
-
-    // lidar (found from virtual at 0x080ab09a)
-    if (uart_num == lidar_uart)
-    {
-
-        // rplidar_read(&rplidar_device, &byte, 1);
-    }
 
     int gcs_uart = 0;
 
@@ -1195,7 +1189,7 @@ void uart_read(unsigned int cpu_index, void *udata)
  *
  * <address/symbol> gcs_bytes_available *
  */
-void gcs_bytes_available(unsigned int cpu_index, void *udata)
+void uart_bytes_available(unsigned int cpu_index, void *udata)
 {
     if (!ring_buffer_initialized)
     {
@@ -1209,6 +1203,22 @@ void gcs_bytes_available(unsigned int cpu_index, void *udata)
 
     uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
     int gcs_uart = 0;
+
+    if (uart_num == lidar_uart)
+    {
+        if (rplidar_initialized)
+        {
+            size_t bytes_available = rplidar_available(&rplidar_device);
+            qemu_set_register((uint32_t)bytes_available, ARM_V7M_R0);
+        }
+        else
+        {
+            qemu_set_register(0, ARM_V7M_R0);
+        }
+        uint32_t lr = qemu_get_register(ARM_V7M_LR);
+        qemu_set_register(lr, ARM_V7M_PC);
+        return;
+    }
 
     for (int i = 0; i < 8; i++)
     {
@@ -1231,6 +1241,74 @@ void gcs_bytes_available(unsigned int cpu_index, void *udata)
     size_t available = bytes_available(&ring_buffer);
 
     qemu_set_register((uint32_t)available, ARM_V7M_R0);
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+void uart_write(unsigned int cpu_index, void *udata)
+{
+    uint32_t uart_num = (uint32_t)qemu_get_register(ARM_V7M_R0);
+    uint32_t buffer_addr = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    uint32_t size = (uint32_t)qemu_get_register(ARM_V7M_R2);
+
+    if (uart_num == lidar_uart)
+    {
+        if (!rplidar_initialized)
+        {
+            fprintf(stderr, "RPLidar UART write called before initialization\n");
+            return;
+        }
+        uint8_t *buffer = malloc(size);
+        if (!buffer)
+        {
+            fprintf(stderr, "Failed to allocate buffer for UART write\n");
+            qemu_set_register(0, ARM_V7M_R0);
+            goto end;
+        }
+        qemu_plugin_read_memory(buffer_addr, buffer, size);
+        size_t bytes_written = rplidar_write(&rplidar_device, buffer, size);
+        qemu_set_register(bytes_written, ARM_V7M_R0);
+        free(buffer);
+    }
+end:
+    uint32_t lr = qemu_get_register(ARM_V7M_LR);
+    qemu_set_register(lr, ARM_V7M_PC);
+}
+
+void lidar_read(unsigned int cpu_index, void *udata)
+{
+    if (!rplidar_initialized)
+    {
+        fprintf(stderr, "RPLidar read called before initialization\n");
+        qemu_set_register((uint32_t)(0), ARM_V7M_R0);
+        goto end;
+    }
+
+    uint32_t buffer_addr = (uint32_t)qemu_get_register(ARM_V7M_R1);
+    uint32_t size = (uint32_t)qemu_get_register(ARM_V7M_R2);
+
+    uint8_t *buffer = malloc(size);
+    if (!buffer)
+    {
+        fprintf(stderr, "Failed to allocate buffer for Lidar read\n");
+        qemu_set_register((uint32_t)(0), ARM_V7M_R0);
+        goto end;
+    }
+
+    size_t bytes_read = rplidar_read(&rplidar_device, buffer, size);
+    if (bytes_read > 0)
+    {
+        qemu_plugin_write_memory(buffer_addr, buffer, bytes_read);
+        qemu_set_register(bytes_read, ARM_V7M_R0);
+    }
+    else
+    {
+        qemu_set_register((uint32_t)(0), ARM_V7M_R0);
+    }
+
+    free(buffer);
+
+end:
     uint32_t lr = qemu_get_register(ARM_V7M_LR);
     qemu_set_register(lr, ARM_V7M_PC);
 }
@@ -1887,8 +1965,11 @@ int ardupilot_init_virtuals(int argc, char **argv)
     virtual_register("gcs_send_mavlink_message", gcs_send_mavlink_message);
     virtual_register("gcs_send_text", gcs_send_text);
     virtual_register("gcs_send_banner_once", gcs_send_banner_once);
-    virtual_register("uart_read", uart_read);
-    virtual_register("gcs_bytes_available", gcs_bytes_available);
+    virtual_register("gcs_read", gcs_read);
+
+    // GP UART (includes GCS and Lidar)
+    virtual_register("uart_bytes_available", uart_bytes_available);
+    virtual_register("uart_write", uart_write);
 
     // GPS
     virtual_register("gps_get_type_mavlink", gps_get_type_mavlink);
@@ -1897,6 +1978,7 @@ int ardupilot_init_virtuals(int argc, char **argv)
     virtual_register("proximity_get_type", proximity_get_type);
     virtual_register("proximity_set_type_param", proximity_set_type_param);
     virtual_register("record_lidar_uart", record_lidar_uart);
+    virtual_register("lidar_read", lidar_read);
 
     // File System (flight logs)
     virtual_register("ap_fs_open", ap_fs_open);
