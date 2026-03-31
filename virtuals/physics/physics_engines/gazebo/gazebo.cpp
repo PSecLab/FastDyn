@@ -449,8 +449,9 @@ static inline float index_to_angle(int index)
 {
     const float angle_min = -M_PI;
     const float step = 0.015747318295739349f;
+    float raw_angle = (angle_min + index * step);
 
-    return angle_min + index * step;
+    return raw_angle;
 }
 
 static int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples) {
@@ -465,7 +466,8 @@ static int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples) {
         return 0;
     }
 
-    if (response == "None") {
+    std::string resp_str = response.data();
+    if (resp_str == "None") {
         return 0;
     }
     // response is a string of comma-separated values: "index:range1,range2,..."
@@ -488,7 +490,7 @@ static int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples) {
         float angle_deg = index_to_angle((start_index + count) % 400) * 180.0f / M_PI; // convert to degrees
         int idx = (start_index + count) % 400;
         uint8_t start_flag = (idx == 0) ? 1 : 0;
-        samples[count] = make_rplidar_sample(angle_deg, range, 10, start_flag);
+        samples[count] = make_rplidar_sample(angle_deg, range, 60, start_flag);
         count++;
     }
     return 1;
