@@ -14,4 +14,3 @@ build
 .cflags
 # API key and build configuration (contains local paths)
 .fastdyn.env
-build_config.env
