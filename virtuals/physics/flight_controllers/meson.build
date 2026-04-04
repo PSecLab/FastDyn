@@ -1,5 +1,7 @@
-ardupilot_inc = include_directories('./ardupilot/', '.')
-local_include = [local_include, ardupilot_inc]
+flight_controller_inc = include_directories('.')
+local_include = [local_include, flight_controller_inc]
 
-srcs += files('fc.c', './ardupilot/ardupilot.c', './ardupilot/gcs_receiver.c', './ardupilot/mavlink_lib.c')
+subdir('ardupilot')
+
+srcs += files('fc.c')
 

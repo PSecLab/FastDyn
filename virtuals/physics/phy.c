@@ -1,4 +1,5 @@
 #include "phy.h"
+#include <config.h>
 #include <stdio.h>
 #include <string.h>
 #include "physics_engines/gazebo/gazebo.h"
@@ -18,6 +19,7 @@ static phy_backend_entry_t backends[] = {
 int phy_select_backend(const char *name)
 {
     if (!name) {
+        fprintf(stderr, "phy_select_backend: name cannot be NULL\n");
         return 0;
     }
 
@@ -86,12 +88,44 @@ int phy_get_joint_state(double *motor_0_pos, double *motor_2_pos)
     return active_backend->get_joint_state(motor_0_pos, motor_2_pos);
 }
 
+int phy_get_altimeter_reading(double *altitude)
+{
+    if (!active_backend || !active_backend->get_altimeter_reading) {
+        return 0;
+    }
+
+    return active_backend->get_altimeter_reading(altitude);
+}
+
+int phy_get_lidar_samples(rplidar_sample_t *samples, size_t num_samples)
+{
+    if (!active_backend || !active_backend->get_lidar_samples) {
+        return 0;
+    }
+
+    return active_backend->get_lidar_samples(samples, num_samples);
+}
+
 int phy_init(int argc, char **argv) {
     // FIX: Hacky
-#if FMU
+#if ENABLE_FMU
     fmu_init(argc, argv);
 #endif
+
+#if ENABLE_FLIGHT_CONTROLLERS
+    printf("Initializing flight controllers\n");
     fc_init(argc, argv);
+#endif
+
+#if ENABLE_LIBGZ
+    // virtual_gz_altimeter_init(argc, argv);
+    // TODO: Add a flag to determine which physics engine
+    int result = phy_select_backend("gazebo");
+    if (result == 0) {
+        fprintf(stderr, "Failed to select Gazebo backend\n");
+        return 0;
+    }
+#endif
 
     if (!active_backend || !active_backend->init) {
         return 0;

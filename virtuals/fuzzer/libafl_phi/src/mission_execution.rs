@@ -3,25 +3,24 @@ use baby_fuzzer::gz_state_parser::{
     get_raw_hf_status,
     extract_block_from_gz_data,
     get_sim_time,
+    apply_noise
 };
 
 use crate::cpexp_input::TargetInput;
 use crate::CVG;
 
 use libafl::executors::ExitKind;
-use libafl::inputs::HasTargetBytes;
+use libafl::inputs::{HasTargetBytes, Input};
 use std::process::{Command, Stdio, Child};
 use std::fs::File;
 use std::io::Write;
 use gz_transport::Node;
 use gz_msgs::clock::Clock;
 
-// ------------------------------
-// Input your paths here...
-const RUN_SERVICES_PATH: &str = "/root/fire/fuzz_testing/FastDyn/courbet/gazebo/";
-const QEMU_BUILD_PATH: &str = "/root/fire/fuzz_testing/qemu/build";
-const MAV_C2_PATH: &str = "/root/fire/fuzz_testing/FastDyn/courbet/mavlink/";
-// ------------------------------
+const RUN_SERVICES_DIR: &str = "../../physics/flight_controllers/courbet/gazebo";
+const QEMU_BUILD_DIR: &str = "../../../../qemu/build";
+const MAV_C2_DIR: &str = "../../physics/flight_controllers/courbet/mavlink";
+const FASTDYN_DIR: &str = "../../..";
 
 /**
  * Assigning each value in file to corresponding index in CVG array.
@@ -46,7 +45,6 @@ fn deserialize_coverage(path: &str) {
     }
 }
 
-
 /*
     Steps:
     1. Apply inputs
@@ -60,10 +58,19 @@ fn deserialize_coverage(path: &str) {
         - Timeout (sim time from /clock) = ExitKind::Timeout
 */
 
-pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -> ExitKind {
+pub fn execute_mission(
+    input: &TargetInput,
+    param_names: String,
+    cps_name: &str,
+    mission_file_name: &str,
+    timeout: f64,
+    param_input_delay: f64,
+    noise_time: f64,
+    headless: bool
+) -> ExitKind {
 
     // 1. Apply inputs
-    // println!("execute_mission received inputs: {:?}", input);
+    println!("execute_mission received inputs: {:?}", input);
     let raw_paramater_values = input.get_param_bytes().target_bytes().clone();
     let raw_env_config = input.get_env_config();
 
@@ -73,55 +80,76 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
     let _ = bin_param_file.sync_all().unwrap();
     drop(bin_param_file);
 
-    // TODO: Apply environment input
-
     // 2. Start Courbet services
-    let spawn_services = Command::new("./run_and_attach_services.sh")
-        .current_dir(RUN_SERVICES_PATH)
-        .arg("rover")
-        .stdout(Stdio::null())
+    let mut service_binding = Command::new("./run_and_attach_services.sh");
+    let mut services_command = service_binding
+        .current_dir(RUN_SERVICES_DIR)
+        .arg(cps_name);
+    if headless {
+        services_command.arg("headless");
+    }
+
+    let spawn_services = services_command
+        // .stdout(Stdio::null())
         .spawn();
     if spawn_services.is_err() {
         panic!("Error: Failed to start services: {}", spawn_services.err().unwrap());
     }
 
+    // Let services spin up
     std::thread::sleep(std::time::Duration::from_secs(3));
 
-    let mut spawn_c2 = Command::new("python3")
-        .current_dir(MAV_C2_PATH)
+    let init_file_name: &str;
+    if cps_name == "rover" {
+        init_file_name = "rover_init.param";
+    } else if cps_name == "plane" {
+        init_file_name = "plane_init.parm";
+    } else {
+        panic!("Error: Invalid CPS name: {}", cps_name);
+    }
+
+    let mut py_binding = Command::new("python3");
+    let mut c2_command = py_binding
+        .current_dir(MAV_C2_DIR)
         .arg("ardu_mav_c2.py")
-        .arg("rover_init.param")
-        .arg("rover_rollover_obtuse.txt")
+        .arg(init_file_name)
+        .arg(mission_file_name)
         .arg(param_names)
-        .arg("/tmp/mutations.bin")
-        // .stdout(Stdio::null())
-        .spawn();
+        .arg(param_input_delay.to_string())
+        .arg("/tmp/mutations.bin");
+    if headless {
+        c2_command.arg("headless");
+    }
+
+    let mut spawn_c2 = c2_command.spawn();
     if spawn_c2.is_err() {
         panic!("Error: Failed to start ardu_mav_c2.py: {}", spawn_c2.err().unwrap());
     }
 
+    // Let mavlink C2 spin up
     std::thread::sleep(std::time::Duration::from_secs(3));
 
+    // let script_name: String = format!("../{}v462.sh", cps_name);
+    // let spawn_fd = Command::new("bash")
+    //     .current_dir(QEMU_BUILD_DIR)
+    //     .arg(script_name)
+    //     // .stdout(Stdio::null())
+    //     .spawn();
+    let script_name: String = format!("fastdyn run -c configs/{}462.toml", cps_name);
     let spawn_fd = Command::new("bash")
-        .current_dir(QEMU_BUILD_PATH)
-        .arg("../roverv462.sh")
-        .stdout(Stdio::null())
+        .current_dir(FASTDYN_DIR)
+        .arg("-c")
+        .arg(script_name)
+        // .stdout(Stdio::null())
         .spawn();
     if spawn_fd.is_err() {
         panic!("Error: Failed to start FastDyn QEMU: {}", spawn_fd.err().unwrap());
     }
 
-    /*
-        BUG: In the middle of the fuzzing campaign, at line 49 of run_and_attach_services.sh, a segfault sometimes occurs:
-        ./run_and_attach_services.sh: line 49: 2748144 Segmentation fault      ./services "$MODEL_NAME"
-        
-        Temporary fix: the calls to the gazebo services will fail if this segfault occurs. When that happens,
-        we will just return with ExitKind::Ok and let the fuzzer continue. 
-     */
-
     // 3. Monitor for end states in order of priority
-    let mut exit_kind: ExitKind;
     let mut node: Node = Node::new().unwrap();
+    let mut exit_kind: ExitKind;
+    let mut noise_applied: bool = false;
     loop {
 
         // Check for hard fault
@@ -147,6 +175,9 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
             if sim_time >= timeout {
                 exit_kind = ExitKind::Timeout;
                 break;
+            } else if !noise_applied && sim_time >= noise_time {
+                apply_noise(raw_env_config.clone(), &mut node, sim_time);
+                noise_applied = true;
             }
         }
 
@@ -167,13 +198,18 @@ pub fn execute_mission(input: &TargetInput, param_names: String, timeout: f64) -
     }
 
     // Just use kill script to force everything dead
-    let mut kill = Command::new("/root/fire/fuzz_testing/FastDyn/virtuals/fuzzer/libafl_phi/kill.sh")
+    let mut kill = Command::new("./kill.sh")
         .spawn()
         .expect("Failed to spawn kill.sh");
-    kill.wait();
+    let _ = kill.wait();
 
-    // TODO: Add deserialization of coverage here.
-    deserialize_coverage("/root/fire/fuzz_testing/FastDyn/virtuals/fuzzer/libafl_phi/covg.csv");
+    // Clean up zombies
+    let _ = spawn_services.unwrap().wait();
+    let _ = spawn_c2.unwrap().wait();
+    let _ = spawn_fd.unwrap().wait();
+
+    let cvg_path = format!("{}/fastdyn_work/cvg.bin", FASTDYN_DIR);
+    deserialize_coverage(&cvg_path);
 
     println!("Mission execution finished with exit kind: {:?}", exit_kind);
     exit_kind

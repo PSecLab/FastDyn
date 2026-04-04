@@ -2,7 +2,7 @@
 #ifndef ALTIMETER_HARNESS_H
 #define ALTIMETER_HARNESS_H
 
-#define FMU_GUID "{87821592-780e-4fca-bc1c-39b0f3e35505}"
+#define FMU_GUID "{5b373f65-0748-4d40-9e3d-3359d4e5f1bc}"
 #define MODEL_IDENTIFIER "Altimeter"
 
 /* --- PARAMETERS --- */

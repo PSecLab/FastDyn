@@ -311,7 +311,6 @@ where
 
             let (_, corpus_id) =
                 fuzzer.evaluate_filtered(state, executor, manager, &new_input)?;
-            
 
             // Tell the optimizer as best as we can...
             // It will not be super accurate since the bytes are randomly mutated

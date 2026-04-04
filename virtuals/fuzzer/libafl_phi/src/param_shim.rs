@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::fs;
 use std::collections::HashMap;
+use std::fs;
+use std::env;
 use serde_json::Value;
 use crate::ParamInput;
-
-const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct ChatMessage {
@@ -33,6 +32,9 @@ struct ChatResponse {
 pub fn ask_openai(api_key: &str, prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::new();
 
+    let openai_url = env::var("OPENAI_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
+
     let body = ChatRequest {
         model: "gpt-4.1-mini".to_string(),
         messages: vec![ChatMessage {
@@ -42,7 +44,7 @@ pub fn ask_openai(api_key: &str, prompt: &str) -> Result<String, Box<dyn std::er
     };
 
     let res = client
-        .post(OPENAI_URL)
+        .post(&openai_url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&body)

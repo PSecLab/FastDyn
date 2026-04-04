@@ -1,6 +1,6 @@
 if get_option('enable_fmu')
-subdir('fmu')
+  subdir('fmu')
 endif
 if get_option('enable_libgz')
-subdir('gazebo')
+  subdir('gazebo')
 endif

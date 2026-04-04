@@ -19,4 +19,5 @@ option('DEBUG_PRINT', type: 'boolean', value: false, description: 'Enable Debugg
 option('enable_phy', type: 'boolean', value: false, description: 'Enable Physics Engine')
 option('enable_sundials', type: 'boolean', value: false, description: 'Enable SUNDIALS solver support')
 option('enable_fmu', type: 'boolean', value: false, description: 'Enable FMU engine')
+option('enable_flight_controllers', type: 'boolean', value: false, description: 'Enable Flight controllers engine')
 option('enable_libgz', type: 'boolean', value: false, description: 'Enable gazebo lib support')

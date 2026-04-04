@@ -5,6 +5,7 @@
 #include <gz/transport.hh>
 #include <gz/msgs/model.pb.h>
 #include <gz/msgs/magnetometer.pb.h>
+#include <gz/msgs/altimeter.pb.h>
 #include <gz/msgs/imu.pb.h>
 #include <gz/msgs/clock.pb.h>
 #include <gz/msgs/navsat.pb.h>
@@ -12,6 +13,7 @@
 #include <gz/msgs/pose.pb.h>
 #include <gz/msgs/pose_v.pb.h>
 #include <gz/msgs/any.pb.h>
+#include <gz/msgs/laserscan.pb.h>
 #include <gz/msgs/uint32.pb.h>
 #include <boost/circular_buffer.hpp>
 #include <iostream>
@@ -282,6 +284,9 @@ private:
 
     double dt = 0.01; // assuming 100 Hz update rate
     gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
+    // std::cerr << "NEW READING:" << std::endl;
+    // std::cerr << "\tCorrected mag: " << m_corr.X() << ", " << m_corr.Y() << ", " << m_corr.Z() << std::endl;
+    // std::cerr << "\tNoisy mag: " << noisy_mag_corr.X() << ", " << noisy_mag_corr.Y() << ", " << noisy_mag_corr.Z() << std::endl;
     gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
 
     gz::msgs::Magnetometer latest_msg_corr_ = raw; // timestamp/frame_id 유지
@@ -345,6 +350,72 @@ private:
   }
 
   gz::msgs::Magnetometer latest_msg_;
+  std::mutex mutex_;
+};
+
+/**
+ * @brief Service handler for /get_laser_scan
+ *
+ * This class subscribes to the /lidar topic (of type gz::msgs::LaserScan) and provides
+ * responses to the /get_laser_scan service. Argument to the service call is the number
+ * of samples to return. There are 400 samples in each full scan so the subscribe will continuously
+ * update the latest_msg_ with the most recent scan, and the service call will keep track of the
+ * index of the next sample to return, looping back to the beginning when it reaches the end. We will use
+ * a mutex to protect access to latest_msg_ and the sample index since they are shared between the subscribe callback and the service handler.
+ */
+class GetLaserScanService
+{public:
+  GetLaserScanService(gz::transport::Node &node,
+                      const std::string &topic_name,
+                      const std::string &service_name)
+  {
+    if (topic_name == "NONE")
+      return;
+    node.Subscribe(topic_name, &GetLaserScanService::OnLaserScanMsg, this);
+    node.Advertise(service_name, &GetLaserScanService::OnServiceRequest, this);
+  }
+private:
+  void OnLaserScanMsg(const gz::msgs::LaserScan &msg)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_msg_ = msg;
+    auto ranges = latest_msg_.ranges();
+    for (int i = 0; i < 400; ++i) {
+      latest_scan_[i] = ranges.Get(i);
+    }
+    if (!have_scan_) {
+      have_scan_ = true;
+    }
+  }
+
+  bool OnServiceRequest(const gz::msgs::UInt32 &req,
+                        gz::msgs::StringMsg &rep)
+  {
+    if (!have_scan_) {
+      rep.set_data("None");
+      return true;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string scan_data;
+    int num_samples = req.data();
+    scan_data += std::to_string(sample_index_); // include starting index in the response
+    std::string delimiter = ":";
+    for (int i = 0; i < num_samples; ++i) {
+      int index = (sample_index_ + i) % 400; // loop back to the beginning if we reach the end
+      scan_data += std::to_string(latest_scan_[index]) + delimiter;
+      if (i == 0) {
+        delimiter = ",";
+      }
+    }
+    sample_index_ = (sample_index_ + num_samples) % 400; // update sample index for next call
+    rep.set_data(scan_data);
+    return true;
+  }
+
+  double latest_scan_[400];
+  gz::msgs::LaserScan latest_msg_;
+  bool have_scan_ = false;
+  int sample_index_ = 0;
   std::mutex mutex_;
 };
 
@@ -416,6 +487,8 @@ bool OnSetNoiseScaleRequest(const gz::msgs::StringMsg &req,
   double white_scale = std::stod(token);
   std::getline(ss, token, ',');
   double drift_scale = std::stod(token);
+
+  // printf("got payload: %s\n", payload.c_str());
 
   if (sensor_type == "gyro") {
     gyro_noise_model.white_scale = white_scale;
@@ -1075,6 +1148,8 @@ int main(int argc, char **argv)
   std::string mag_topic = "/world/runway/model/r1_rover/link/base_link/sensor/magnetometer_sensor/magnetometer";
   std::string joint_states_topic = "/joint_states";
   std::string pose_topic = "/model/r1_rover/pose";
+  std::string altimeter_topic = "NONE";
+  std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
@@ -1082,15 +1157,18 @@ int main(int argc, char **argv)
   } else if (model_name == "iris") {
     navsat_topic = "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    pose_topic = "/model/iris_with_ardupilot/pose";
     joint_states_topic = "NONE";
   } else if (model_name == "bicopter") {
     navsat_topic = "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    pose_topic = "/model/bicopter_with_ardupilot/pose";
     joint_states_topic = "NONE";
   } else if (model_name == "vtail_plane") {
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/skywalker_x8/pose";
+    imu_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/imu_sensor/imu";
     // pose_topic = "/world/runway/dynamic_pose/info";
     // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
     // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
@@ -1108,6 +1186,11 @@ int main(int argc, char **argv)
     mag_topic =    "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
   }
+
+  if (model_name == "r1_rover") {
+    altimeter_topic = "/world/runway/altitude";
+  }
+
   GenericSensorService<gz::msgs::NavSat> navSatService(
     node,
     navsat_topic,
@@ -1120,6 +1203,12 @@ int main(int argc, char **argv)
   //   "/get_mag_reading"
   // );
 
+  GenericSensorService<gz::msgs::Altimeter> altimeterService(
+    node,
+    altimeter_topic,
+    "/get_altimeter_reading"
+  );
+
   GetMagReadingService magService(
     node,
     mag_topic,
@@ -1131,6 +1220,18 @@ int main(int argc, char **argv)
     node,
     joint_states_topic,
     "/get_joint_state"
+  );
+
+  // GenericSensorService<gz::msgs::LaserScan> laserScanService(
+  //   node,
+  //   "/lidar",
+  //   "/get_laser_scan"
+  // );
+
+  GetLaserScanService laserScanService(
+    node,
+    "/lidar",
+    "/get_laser_scan"
   );
 
   HFService hfService(
@@ -1149,7 +1250,6 @@ int main(int argc, char **argv)
 
   // std::string pose_topic = "/model/r1_rover/pose";
   // std::string pose_topic = "/model/gs_drone/pose";
-  std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
   std::string clock_topic = "/world/runway/clock";
 
   MultiSensorService multiSensorService(

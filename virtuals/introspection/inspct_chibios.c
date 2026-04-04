@@ -26,6 +26,9 @@ typedef struct {
     uint32_t owner;
 } ChibiOSThreadState;
 
+static ChibiOSThreadState all_threads[64];
+static size_t all_threads_count = 0;
+
 /* Try both possible DWARF struct names for the thread descriptor */
 static const char *const thread_struct_names[] = { "ch_thread", "thread_t", NULL };
 
@@ -88,6 +91,48 @@ void inspct_chibios_trace_switch(unsigned int cpu_idx, void *arg) {
            in_task.name[0] ? in_task.name : "(null)",
            (unsigned)in_task.priority,
            ntp, otp);
+
+    // if new name add to all_threads
+    bool found = false;
+    for (size_t i = 0; i < all_threads_count; i++) {
+        if (all_threads[i].thread_addr == in_task.thread_addr) {
+            found = true;
+            if (strcmp(all_threads[i].name, in_task.name) != 0) {
+                // append the name change to a file
+                FILE *f = fopen("/root/rooney/FastDyn/threads_copter.txt", "a");
+                if (f) {
+                    fprintf(f, "Thread 0x%08X renamed: %s -> %s\n",
+                            in_task.thread_addr,
+                            all_threads[i].name[0] ? all_threads[i].name : "(null)",
+                            in_task.name[0] ? in_task.name : "(null)");
+                    fclose(f);
+                }
+            }
+            // if priority changed, log it
+            if (all_threads[i].priority != in_task.priority) {
+                FILE *f = fopen("/root/rooney/FastDyn/threads_copter.txt", "a");
+                if (f) {
+                    fprintf(f, "Thread %s priority changed: %u -> %u\n",
+                            in_task.name[0] ? in_task.name : "(null)",
+                            (unsigned)all_threads[i].priority,
+                            (unsigned)in_task.priority);
+                    fclose(f);
+                }
+            }
+
+            all_threads[i] = in_task;
+            break;
+        }
+    }
+    if (!found && all_threads_count < sizeof(all_threads) / sizeof(all_threads[0])) {
+        all_threads[all_threads_count++] = in_task;
+        // append the name to a file
+        FILE *f = fopen("/root/rooney/FastDyn/threads_copter.txt", "a");
+        if (f) {
+            fprintf(f, "New thread: %s, Prio: %u\n", in_task.name[0] ? in_task.name : "(null)", (unsigned)in_task.priority);
+            fclose(f);
+        }
+    }
 
     uint32_t ch_system_addr = inspct_get_symbol("ch_system");
     if (ch_system_addr != 0)
@@ -182,7 +227,7 @@ void inspct_chibios_dump_ready_list(uint32_t ch_system_addr) {
 
 
 int inspct_chibios_init(int argc, char ** argv){
-	int status =0; 
+	int status =0;
 	virtual_register("__port_switch_Hook", inspct_chibios_trace_switch);
     virtual_register("__trace_switch_Hook", inspct_chibios_trace_switch);
     virtual_register("__thd_object_init_Hook", inspct_chibios_thd_object_init);

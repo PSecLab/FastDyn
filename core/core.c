@@ -45,7 +45,7 @@ int isdigit(int c);
 #endif
 
 #include <virtuals.h>  // For lookup_callback function
-#include <virtuals/fuzz.h>
+#include <virtuals/fuzz.h> // Coverage handling whether built with fuzzer or not
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -59,9 +59,10 @@ static _Atomic uint64_t g_icount = 0;
 
 static const char * runtime;
 
+static int coverage = 0;
+
 AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
-int coverage;
 
 twintrace_mode_t twintrace_mode = TT_OFF;
 const char *twintrace_bin_path = NULL;
@@ -410,8 +411,6 @@ void qemu_set_register(uint32_t value, int reg) {
 	}
 }
 
-#define LOG_BUFFER_SIZE (UINT16_MAX + 1)
-
 // cb_registry_len moved to virtuals.c
 
 
@@ -659,10 +658,9 @@ static const access_t *find_access_by_pc(const access_t *list,
 
 
 static int init = 0;
-AddressList cc_list;
-LoggerEntry cc_entry;
-LookupResult cc_ret;
-static int tracer_ready =0;
+AddressList core_cc_list;
+LoggerEntry core_cc_entry;
+LookupResult core_cc_ret;
 char gpio_memory[0x400];
 
 static void tb_exec_cb(unsigned int cpu_index, void *udata)
@@ -708,22 +706,21 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
 
 		//Highest priority: Logger
-		if (coverage) {
-			if (i == 0) {
+        if (coverage) {
+            if (i == 0) {
 #if DEBUG
-					printf("Instrumenting: 0x%lx with %ld instructions.\n", qemu_plugin_insn_vaddr(insn), n);
-					for (int iter = 0; iter <n; iter++) {
-							printf("	0x%lx \n", qemu_plugin_insn_vaddr(qemu_plugin_tb_get_insn(tb, iter)));
-					}
+                    printf("Instrumenting: 0x%lx with %ld instructions.\n", qemu_plugin_insn_vaddr(insn), n);
+                    for (int iter = 0; iter <n; iter++) {
+                            printf("	0x%lx \n", qemu_plugin_insn_vaddr(qemu_plugin_tb_get_insn(tb, iter)));
+                    }
 #endif
-					while(!tracer_ready);
-					qemu_plugin_u64 entry_tmp;
-					entry_tmp.offset = (size_t)&cc_ret.list->log_buf;
+                    qemu_plugin_u64 entry_tmp;
+                    entry_tmp.offset = (size_t)&core_cc_ret.list->log_buf;
 
-					//LOG PC
-					qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOG_REG, entry_tmp, cc_ret.entry->reg);
-			}
-		}
+                    //LOG PC
+                    qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOG_REG, entry_tmp, core_cc_ret.entry->reg);
+            }
+        }
 		LookupResult ret = lookup_addr(qemu_plugin_insn_vaddr(insn));
 		if (ret.list) {
 			qemu_plugin_u64 entry_tmp;
@@ -827,51 +824,65 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 #include <pthread.h>
 #include <immintrin.h>
 
-// ---------------------------
-// Configuration / defaults
-// ---------------------------
-#define DEFAULT_PATH "/tmp/cvg"
-#define DEFAULT_DUMP_PATH "trace_log.bin"
-#define BUF_SIZE (64 * 1024) //0x10000
-#define WORD_SIZE sizeof(uint32_t)
-#define NUM_WORDS (BUF_SIZE / WORD_SIZE)
-#define INITIAL_CAPACITY 536870912 // Initial size for our dynamic array of observed values
+static pthread_t thread;
+static int tracer_ready =0;
 
-// ---------------------------
-// Globals
-// ---------------------------
-
-void* tracer(void* arg) {
-	cc_list.count =1;
-	cc_ret.entry = &cc_entry;
-    cc_ret.list = &cc_list;
-	cc_ret.entry->reg = 15;
-	cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
+static void* tracer(void* arg) {
+	core_cc_list.count =1;
+	core_cc_ret.entry = &core_cc_entry;
+    core_cc_ret.list = &core_cc_list;
+	core_cc_ret.entry->reg = 15;
+	core_cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
 	uint16_t tracer_index =0;
 
 	tracer_ready=1;
 
 	//Maybe make read atomic
 	while(true) {
-		while((uint16_t) (cc_list.log_buf.index - tracer_index)) {
-            uint32_t value = cc_list.log_buf.buffer[tracer_index/4];
+		while((uint16_t) (core_cc_list.log_buf.index - tracer_index)) {
+            uint32_t value = core_cc_list.log_buf.buffer[tracer_index/4];
             fuzz_add_observed_value(value);
 
 			tracer_index +=4;//32bit PC
 		}
 	}
+
+    return NULL;
+}
+
+#define MAX_EXIT_HOOKS 32
+
+typedef void (*exit_cb_t)(void);
+
+static exit_cb_t g_exit_hooks[MAX_EXIT_HOOKS];
+static size_t g_exit_hook_count = 0;
+
+static void core_exit_dispatch()
+{
+    for (size_t i = 0; i < g_exit_hook_count; i++) {
+        if (g_exit_hooks[i]) {
+            g_exit_hooks[i]();
+        }
+    }
+}
+
+/* Public registration API */
+void core_register_exit_hook(void (*cb)(void))
+{
+    if (g_exit_hook_count >= MAX_EXIT_HOOKS)
+        return;  // Or assert if you prefer
+
+    g_exit_hooks[g_exit_hook_count] = (exit_cb_t)cb;
+    g_exit_hook_count++;
 }
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
 	printf("FastDyn Exit.\n");
-	if (coverage) {
-        fuzz_dump_bbl();
-	}
+	core_exit_dispatch();
 }
 
 // lookup_callback function moved to virtuals.c
-
 
 bool find_rule_by_address(unsigned long long addr, rule_t **out_rule) {
     for (size_t i = 0; i < rules_count; i++) {
@@ -1020,7 +1031,6 @@ static void print_rules(void) {
     }
 }
 #endif
-static pthread_t thread;
 static int core_parse_arguments(int argc, char ** argv) {
 
 	//parse args for introspection
@@ -1046,19 +1056,16 @@ static int core_parse_arguments(int argc, char ** argv) {
         accesses = parse_access_file(filename, &count);
     }
 
-	//Filename should really be value
     filename = utils_get_arg("coverage", argc, argv);
     if (!arg_is_disabled(filename) &&
         (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
-
         coverage = 1;
         if (pthread_create(&thread, NULL, tracer, NULL) != 0) {
             perror("Failed to create thread");
             exit(1);
         }
-        fuzz_bbl_init();
-    } else {
-        coverage = 0;
+
+        while (!tracer_ready);
     }
 
     //parse args for twintrace

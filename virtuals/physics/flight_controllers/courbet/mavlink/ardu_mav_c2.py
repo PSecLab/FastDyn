@@ -11,8 +11,6 @@ MAVPROXY_CMD = [
     "mavproxy.py",
     "--master=udpout:127.0.0.1:14551",
     "--out=udpout:127.0.0.1:14552",
-    "--map",
-    "--console",
 ]
 
 MISSION_IN_PROGRESS = 3
@@ -33,10 +31,11 @@ def cleanup(master_fd, proc):
     os.close(master_fd)
 
 # Read from the master fd until the specified key is found or timeout occurs
-def read_until(master_fd, proc, key, timeout=sys.maxsize):
+def read_until(master_fd, proc, key, timeout=sys.maxsize, file=None):
 
     start_time = time.perf_counter()
     timeout_time = start_time + timeout
+    down_counter = 0
 
     try:
 
@@ -55,6 +54,12 @@ def read_until(master_fd, proc, key, timeout=sys.maxsize):
                 if key in line:
                     print("Found key:", key)
                     break
+                elif "no link" in line:
+                    down_counter += 1
+                    print("No link message received. Count:", down_counter)
+                    if down_counter >= 3:
+                        print("Link down threshold reached. Exiting.")
+                        sys.exit(1)
 
             except OSError:
                 break
@@ -70,8 +75,10 @@ def send(master_fd, cmd):
 def main():
 
     usage = "Usage: python3 ardu_mav_c2.py /path/to/init/params.txt"
-    usage += " /path/to/mission.txt/ comma,separated,parameter,names /path/to/param/bytes.bin"
-    if len(sys.argv) < 2:
+    usage += " /path/to/mission.txt/ comma,separated,parameter,names param_input_delay"
+    usage += " /path/to/param/bytes.bin [headless]"
+
+    if len(sys.argv) < 5:
         print(usage)
         exit(1)
     
@@ -89,10 +96,24 @@ def main():
     if len(param_name_list) == 0:
         print("No parameter names provided.")
         exit(1)
+    if len(param_name_list) == 1 and param_name_list[0] == "":
+        param_name_list = []
 
-    param_bytes_path = sys.argv[4]
+    param_input_delay = float(sys.argv[4])
+    if param_input_delay < 0:
+        print("Parameter input delay must be non-negative.")
+        exit(1)
+
+    param_bytes_path = sys.argv[5]
     if not os.path.isfile(param_bytes_path):
         print(f"Set parameter file {param_bytes_path} does not exist.")
+        exit(1)
+
+    if not len(sys.argv) > 6:
+        MAVPROXY_CMD.append("--map")
+        MAVPROXY_CMD.append("--console")
+    elif sys.argv[6] != "headless":
+        print("Invalid sixth argument. Use 'headless' or leave empty.")
         exit(1)
     
     master_fd, slave_fd = pty.openpty()
@@ -134,29 +155,7 @@ def main():
     read_until(master_fd, proc, f"waypoints in")
     send(master_fd, "mode auto")
 
-    # Start sending over the mutated parameters
-    bin_file = open(param_bytes_path, "rb")
-    for param in param_name_list:
-        bytes = bin_file.read(4).ljust(4, b'\x00')
-        print("Bytes for param", param, ":", bytes)
-        param_set(mav, param, struct.unpack("f", bytes)[0])
-        time.sleep(0.5)
-
     send(master_fd, "arm throttle")
-    # read_until(master_fd, proc, "Throttle armed")
-    
-    # while True:
-    #     mav_msg = mav.recv_match(type='MISSION_CURRENT', blocking=True)
-    #     if mav_msg and mav_msg.mission_state == MISSION_IN_PROGRESS:
-    #         break
-
-    # # Start sending over the mutated parameters
-    # bin_file = open(param_bytes_path, "rb")
-    # for param in param_name_list:
-    #     bytes = bin_file.read(4).ljust(4, b'\x00')
-    #     print("Bytes for param", param, ":", bytes)
-    #     param_set(mav, param, struct.unpack("f", bytes)[0])
-    #     time.sleep(0.5)
 
     # Check if arming check failed.
     # If so, we'll report a timeout in mission executor.
@@ -165,6 +164,16 @@ def main():
         print("Arming check failed:", mav_msg.text)
         cleanup(master_fd, proc)
         sys.exit(1)
+
+    # Wait for the post-arm delay and send parameters
+    time.sleep(param_input_delay)
+    if len(param_name_list) > 0:
+        bin_file = open(param_bytes_path, "rb")
+        for param in param_name_list:
+            bytes = bin_file.read(4).ljust(4, b'\x00')
+            print(f"Bytes for param {param}: {bytes}")
+            param_set(mav, param, struct.unpack("f", bytes)[0])
+            time.sleep(0.5)
 
     # Monitor mavlink until mission complete
     mission_success = False
@@ -178,7 +187,6 @@ def main():
             elif mav_msg.mission_state != MISSION_IN_PROGRESS:
                 # Something bad happened
                 break
-
 
     print("Terminating MAVProxy...")
     cleanup(master_fd, proc)

@@ -5,9 +5,11 @@
 extern "C" {
 #endif
 
-#include "phy.h"
+#include "../../phy.h"
 
 extern phy_backend_t gazebo_backend;
+
+int virtual_gz_altimeter_init(int argc, char **argv);
 
 #ifdef __cplusplus
 }

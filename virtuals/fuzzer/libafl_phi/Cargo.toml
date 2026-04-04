@@ -23,17 +23,19 @@ opt-level = 3
 debug = true
 
 [dependencies]
-banquo = { path = "/home/michael-rooney/banquo/banquo" }
-banquo-parser = { path = "/home/michael-rooney/banquo/banquo-parser" }
+# banquo = { path = "/root/fire/cp_exp/banquo/banquo" }
+# banquo-parser = { path = "/root/fire/cp_exp/banquo/banquo-parser" }
+banquo = { path = "../../../../banquo/banquo" }
+banquo-parser = { path = "../../../../banquo/banquo-parser" }
 csv = "1.4.0"
 env_logger = "0.11.7"
 gz-msgs = "0.9.0"
 gz-transport = "0.9.0"
 
-# libafl = { path = "../../../crates/libafl", features = ["tui_monitor"] }
-# libafl_bolts = { path = "../../../crates/libafl_bolts" }
-libafl = { path = "/home/michael-rooney/LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
-libafl_bolts = { path = "/home/michael-rooney/LibAFL-0.15.4/crates/libafl_bolts" }
+# libafl = { path = "../../../../LibAFL-0.15.4/crates/libafl", features = ["tui_monitor"] }
+# libafl_bolts = { path = "../../../../LibAFL-0.15.4/crates/libafl_bolts" }
+libafl = { version = "0.15.4", features = ["tui_monitor"] }
+libafl_bolts = "0.15.4"
 
 log = { version = "0.4.22", features = ["release_max_level_info"] }
 ordered-float = "5.1.0"
