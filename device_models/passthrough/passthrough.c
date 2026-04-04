@@ -26,16 +26,6 @@ static uint64_t passthrough_read(void *opaque, hwaddr address, unsigned size, ui
         utils_die("HW handle not initialized");
     }
 
-    // Nov 9 logic
-    //In case of a read to STA register when start_buffering is set, just simply send 0x00045200 to continue the while loop
-    // if ((address == 0x40012C34) && (start_buffering) && ((pc == 0x08003170) | (pc == 0x08003176))){
-    //     // return 0x00045000;
-    //     total_comes+=1;
-    //     printf("I am still being used %d\n", total_comes);
-    //     pthread_mutex_unlock(&hw_mutex);
-    //     return 282624;
-    // }
-
     int status = hw_read32(hw, address, &value_read);
 
     pthread_mutex_unlock(&hw_mutex);
@@ -55,47 +45,6 @@ static void passthrough_write(void *opaque, hwaddr address, uint64_t value, unsi
         pthread_mutex_unlock(&hw_mutex);
         utils_die("HW handle not initialized");
     }
-
-    // Nov 9 Logic
-    // start buffering as soon as we see a write to the control register
-    // if ((address == 0x40012C2C) && (value == 0x91)) {
-    //     start_buffering = true;
-    //     buffer_address   = buffer_base;   // reset
-    // }
-
-    // //buffer the data till we reach max size of 512B
-    // if ((address == 0x40012C80) && start_buffering) {             //this address is FIFO Register address
-    //     address = buffer_address;
-    //     buffer_address = buffer_address + 4;
-    // }
-
-    // if ((buffer_address == buffer_limit) && start_buffering) {
-    //     total_comes+=1;
-    //     // if (total_comes==2){utils_die("die");}
-    //     start_buffering = false;
-    //     hw_board_halt(hw);          //halt the board
-    //     // printf("The current value of pc %lx\n", hw_read_reg(hw,15));
-    //     uint64_t lr_val = hw_read_reg(hw,14);   //read lr
-    //     hw_write_reg(hw,15, lr_val | 1);//update pc
-    //     hw_board_step(hw);  //move to next instruction in server firmware
-    //     // printf("The current value of lr %lx\n", hw_read_reg(hw,14));
-    //     // printf("The current value of pc %lx\n", hw_read_reg(hw,15));
-    //     // // while(1);
-    //     hw_board_run(hw);   //run the board
-    //     uint32_t value_read2;
-    //     int read_status = hw_read32(hw, 0x20000800, &value_read2);
-    //     while((value_read2 != 24223)){    //wait for the stop condition
-    //         if (value_read2 == 105) {
-    //             while(1){//stuck in the loop in case of failure signal from the server firmware
-    //                 printf("Current signal value from the server firmware:: %x\n", value_read2);
-    //             }
-    //         }
-    //         printf("Current signal value from the server firmware:: %x\n", value_read2);
-    //         read_status = hw_read32(hw, 0x20000800, &value_read2);
-    //     }
-    // }
-
-
 
     int status;
     if (size ==1) {
@@ -137,25 +86,42 @@ static void* dev_thread_fn(void* arg) {
 				dev_debug("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));
                 dev_debug("Register%d: 0x%lx\n", 15, hw_read_reg(hw, 15));
 				pthread_mutex_unlock(&hw_mutex);
+                printf("the irq is %d\n", firing_line);
 				qemu_plugin_raise_irq(firing_line + 16, false);
 		} else {
 			pthread_mutex_unlock(&hw_mutex);
-			// usleep(40000);
-            sleep(5);
+			usleep(40000);
+            // sleep(5);
 		}
     }
 
     return NULL;
 }
 
+// static int passthrough_serve(int line) {
+// 	pthread_mutex_lock(&hw_mutex);
+// 	hw_write_reg(hw, 1, line);
+// 	hw_board_run(hw);
+// 	irq_pending =0;
+// 	pthread_cond_signal(&irq_cv);
+// 	pthread_mutex_unlock(&hw_mutex);
+// 	return 0;
+// }
+
 static int passthrough_serve(int line) {
-	pthread_mutex_lock(&hw_mutex);
-	hw_write_reg(hw, 1, line);
-	hw_board_run(hw);
-	irq_pending =0;
-	pthread_cond_signal(&irq_cv);
-	pthread_mutex_unlock(&hw_mutex);
-	return 0;
+    (void)line; // Ignore QEMU's exception number to avoid offset mismatch
+
+    pthread_mutex_lock(&hw_mutex);
+
+    // Write the exact ID the board gave us back into r1 to satisfy the cmp instruction
+    hw_write_reg(hw, 1, irq_pending);
+
+    hw_board_run(hw);
+    irq_pending = 0;
+    pthread_cond_signal(&irq_cv);
+    pthread_mutex_unlock(&hw_mutex);
+
+    return 0;
 }
 
 static int passthrough_interrupt(int line) {

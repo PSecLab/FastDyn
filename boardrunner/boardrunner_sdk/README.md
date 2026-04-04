@@ -58,9 +58,23 @@ cmake -S . -B build \
 cmake --build build -j
 ```
 
+### Build Configuration File (`build_config.env`)
+
+When using `fastdyn llm --compile`, the build paths are read from a
+`build_config.env` file in this directory. Fill it in before using the compile flag:
+
+```bash
+# boardrunner/boardrunner_sdk/build_config.env
+FASTDYN_INCLUDE_DIR=/path/to/FastDyn/include
+QEMU_INCLUDE_DIR=/path/to/qemu/include
+```
+
+This file is gitignored because it contains machine-specific paths.
+
 ## Writing a Model
 Your model code lives in:
     - model/*.c (one file per model)
+
 
 Models typically include the VIO umbrella header:
 ```c

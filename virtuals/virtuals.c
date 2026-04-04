@@ -566,8 +566,10 @@ int virtuals_init(int argc, char **argv, const char *schema_path) {
 		// Initialize subcomponents, each compnoent can fail independently so no reason to stop initiliaztion if one fails
 		if ((status = inspct_init(argc, argv, schema_path)) < 0)
 				utils_warn("Introspection failed");
+        #if ENABLE_LIBGZ
 		if ((status = phy_init(argc, argv)) < 0)
 				utils_warn("Physics Engine failed");
+        #endif
 #if ENABLE_LIBFUZZ
 		if ((status = fuzz_init(argc, argv)) < 0)
 				utils_warn("Fuzzer Failed");

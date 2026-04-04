@@ -9,3 +9,6 @@ click==8.0.3
 dotenv==0.9.9
 pyelftools==0.32
 capstone==5.0.7
+openai>=1.0.0
+python-dotenv>=1.0.0
+pytest>=7.0.0

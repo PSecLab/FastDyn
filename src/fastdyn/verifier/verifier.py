@@ -20,6 +20,13 @@ class DiffLog:
         self.diff_state_data = None
         self.platform_name = None
 
+        # Raw structured data for prompt_gen.py to format with LLM instructions.
+        # Verifier stores facts here; prompt generation adds interpretation.
+        self.raw_state = None      # dict with rmw_hw, rmw_em, wp_hw_str, wp_em_str
+        self.raw_entropy = None    # dict with entropy_hw, entropy_em, warnings list
+        self.diff_runtime_trace = None
+        self.isr_analysis_data = None
+
 #This function will compare the automata for the given automatas...
 #Will only compare the automata for the peripheral of interest.
 def verify_automata(automata1, automata2, peripheral):
@@ -33,8 +40,15 @@ def verify_automata(automata1, automata2, peripheral):
         sys.exit(0)
 
     if not os.path.exists(periph_em):
-        fastdyn_log.error(f"Peripheral {peripheral} does not exist under the {automata2} directory!")
-        sys.exit(0)
+        fastdyn_log.warning(f"Peripheral {peripheral} not in emulation directory. Emulation crashed early.")
+        differential_data.not_match = True
+        differential_data.diff_init_data = "CRITICAL ERROR: No initialization trace generated because emulation crashed before or during initialization."
+        differential_data.diff_loop_pattern_data = "CRITICAL ERROR: Emulation crashed."
+        differential_data.diff_state_data = "CRITICAL ERROR: Emulation crashed early. Check your model code for infinite loops, bad memory accesses, or missing behaviors causing the firmware to halt/panic."
+        differential_data.diff_entropy_data = "CRITICAL ERROR: Emulation crashed."
+        differential_data.diff_runtime_trace = "CRITICAL ERROR: Emulation crashed. This peripheral was never accessed in emulation."
+        differential_data.isr_analysis_data = "CRITICAL ERROR: Emulation crashed."
+        return True, differential_data
 
     #parse platform name
     differential_data.platform_name = parse_summary_file(os.path.join(automata1, 'summary.txt')).get('Platform')
@@ -80,12 +94,21 @@ def diff_isr_analysis(diff_data, periph_hw, periph_em):
     isr_hw = parse_irq_file(isr_hw_path, periph_hw)
     isr_sw = parse_irq_file(isr_em_path, periph_hw)
 
-    if len(isr_hw) != len(isr_sw):
-        fastdyn_log.warn("Number of ISRs by the emulated device model does not match with the hardware")
+    if len(isr_hw) > 0 and len(isr_sw) == 0:
+        fastdyn_log.warn("Hardware fired ISRs, but emulation fired none. Hard mismatch.")
+        diff_data.not_match = True
+    elif len(isr_hw) == 0 and len(isr_sw) > 0:
+        fastdyn_log.warn("Emulation fired ISRs, but hardware fired none. Hard mismatch.")
+        diff_data.not_match = True
     else:
-        for isr_iter in range(len(isr_hw)):
+        if len(isr_hw) != len(isr_sw):
+            fastdyn_log.warn(f"Number of ISRs by the emulated device model ({len(isr_sw)}) does not match with the hardware ({len(isr_hw)}) - Warning only (timing artifact expected)")
+        
+        # Compare available iterations but cleanly ignore exact mismatches to prevent infinite LLM retry loops
+        min_len = min(len(isr_hw), len(isr_sw))
+        for isr_iter in range(min_len):
             if isr_hw[isr_iter] != isr_sw[isr_iter]:
-                fastdyn_log.warn(f"Hardware ISR Loop by the emulated device model does not match with the hardware access ISR Loop")
+                fastdyn_log.warn(f"ISR Loop iteration {isr_iter} by the emulated device model does not match exactly with hardware - Warning only")
 
     diff_data.isr_analysis_data = f'''
     Hardware ISR Analysis
@@ -123,24 +146,42 @@ def diff_stateful_analysis(diff_data, periph_hw, periph_em):
     state_hw_path = os.path.join(periph_hw, 'state.txt')
     state_em_path = os.path.join(periph_em, 'state.txt')
 
-    state_hw = parse_state_file(state_hw_path, periph_hw)
-    state_em = parse_state_file(state_em_path, periph_em)
+    rmw_hw, wp_hw = parse_state_file(state_hw_path, periph_hw)
+    rmw_em, wp_em = parse_state_file(state_em_path, periph_em)
 
-    if state_hw != state_em:
+    if rmw_hw != rmw_em:
         fastdyn_log.warn(f"Number of RMW pattern registers do not match in the emulated model with the hardware")
+
+    # Format Write-Poll pairs as human-readable strings
+    wp_hw_str = ', '.join(f'Polling Loop on {dst} (preceded by write to {src})' for src, dst in wp_hw) if wp_hw else 'None detected'
+    wp_em_str = ', '.join(f'Polling Loop on {dst} (preceded by write to {src})' for src, dst in wp_em) if wp_em else 'None detected'
+
+    # Store raw data for prompt_gen.py to format with LLM-specific instructions
+    diff_data.raw_state = {
+        'rmw_hw': rmw_hw,
+        'rmw_em': rmw_em,
+        'wp_hw_str': wp_hw_str,
+        'wp_em_str': wp_em_str,
+    }
 
     diff_data.diff_state_data = f'''
     Read-Modify-Write (RMW) pattern detected in the hardware on registers::
-    {state_hw}
+    {rmw_hw}
 
     Read-Modify-Write (RMW) pattern detected in the emulated model on registers::
-    {state_em}
+    {rmw_em}
+
+    Polling detection (firmware polls a register expecting a bit change)::
+    {wp_hw_str}
+
+    Polling detection in emulated model::
+    {wp_em_str}
     '''
 
 
 def diff_loop_pattern(diff_data, periph_hw, periph_em):
     loop_pattern_files_hw = [f for f in os.listdir(periph_hw) if f.startswith('loop_pattern')]
-    loop_pattern_files_em = [f for f in os.listdir(periph_hw) if f.startswith('loop_pattern')]
+    loop_pattern_files_em = [f for f in os.listdir(periph_em) if f.startswith('loop_pattern')]
 
     if len(loop_pattern_files_hw) != len(loop_pattern_files_em):
         fastdyn_log.warn("Number of loop pattern files by the hardware does not match with the emulator")
@@ -181,29 +222,86 @@ def diff_entropy_calculate(diff_data, periph_hw, periph_em):
     entropy_hw = parse_entropy_file(entropy_hw_path, periph_hw)
     entropy_em = parse_entropy_file(entropy_em_path, periph_em)
 
-    if len(entropy_hw.keys())!=len(entropy_em.keys()):
-        fastdyn_log.warn("Number of registers used by the emulator does not match with the hardware!")
-        diff_data.not_match = True
-    else:
-        for reg in entropy_hw:
-            try:
-                if entropy_hw[reg][1] == entropy_em[reg][1]:
-                    if entropy_hw[reg][0].lower() == 'high':
-                        diff_data.data_registers.append(entropy_hw[reg])
-                    continue
-                else:
-                    fastdyn_log.warn(f'Entropy does not match!')
-                    diff_data.not_match = True
-            except Error as e:
-                fastdyn_log.warn(f'Register {reg} does not exist in the emulated data!')
+    # ── Per-register entropy mismatch analysis ──────────────────────────────
+    entropy_warnings = []
+    all_regs = sorted(set(list(entropy_hw.keys()) + list(entropy_em.keys())))
 
-    #Collecting the entropy in case we need in future
+    for reg in all_regs:
+        hw_entry = entropy_hw.get(reg)
+        em_entry = entropy_em.get(reg)
+
+        if hw_entry and not em_entry:
+            # Register exists in hardware but not in emulation at all
+            entropy_warnings.append(
+                f"  [WARNING] {reg}: present in hardware (entropy={hw_entry[0]}, {hw_entry[1]}) "
+                f"but NOT accessed in emulated model — the model may be stuck before "
+                f"reaching this register."
+            )
+            diff_data.not_match = True
+        elif em_entry and not hw_entry:
+            entropy_warnings.append(
+                f"  [WARNING] {reg}: accessed in emulated model but NOT in hardware trace."
+            )
+            diff_data.not_match = True
+        elif hw_entry and em_entry:
+            hw_level, hw_val = hw_entry[0], float(hw_entry[1])
+            em_level, em_val = em_entry[0], float(em_entry[1])
+
+            # Track data registers (HIGH entropy = externally-driven values
+            # like UART DR, SPI DR, etc.)
+            is_data_reg = (hw_level.lower() == 'high' or em_level.lower() == 'high')
+            if hw_level.lower() == 'high':
+                diff_data.data_registers.append(hw_entry)
+
+            # Skip mismatch warnings for data registers: their entropy
+            # depends on external input (e.g., what the user types on
+            # a UART console), not on model correctness.  Different
+            # input across captures makes entropy comparison meaningless.
+            if is_data_reg:
+                continue
+
+            if hw_val > 0 and em_val == 0:
+                # Duration-independent: HW register value changes but model
+                # returns the exact same value every time — strong signal.
+                entropy_warnings.append(
+                    f"{reg}: hardware entropy={hw_level} ({hw_val}) but emulated "
+                    f"entropy=LOW (0.00). The model always returns the same value for "
+                    f"this register, but hardware shows it changing. This strongly "
+                    f"suggests the model is missing self-clearing bits, auto-"
+                    f"transitioning state, or is stuck in a polling loop."
+                )
+                diff_data.not_match = True
+            elif hw_level.lower() != em_level.lower():
+                # Compare entropy LEVEL categories (LOW/MEDIUM/HIGH) not raw
+                # values.  Level categories are more robust to capture-duration
+                # differences than numeric thresholds: a 5s vs 10s recording
+                # may shift the magnitude but rarely changes the category.
+                entropy_warnings.append(
+                    f"{reg}: entropy level mismatch — hardware={hw_level} ({hw_val}), "
+                    f"emulated={em_level} ({em_val}). Different entropy levels suggest "
+                    f"the register's dynamic behavior is not modeled correctly."
+                )
+                diff_data.not_match = True
+
+    warnings_str = '\n'.join(entropy_warnings) if entropy_warnings else '    No significant entropy mismatches.'
+
+    # Store raw data for prompt_gen.py to format with LLM-specific instructions
+    diff_data.raw_entropy = {
+        'entropy_hw': entropy_hw,
+        'entropy_em': entropy_em,
+        'warnings': entropy_warnings,
+    }
+
+    # Factual diff report
     diff_data.diff_entropy_data = f'''
     Hardware Entropy::
     {entropy_hw}
 
     Emulated Model Entropy::
     {entropy_em}
+
+    ### Entropy Mismatch Details
+{warnings_str}
     '''
 
 
@@ -281,21 +379,28 @@ def parse_loop_pattern_file(path, periph_name, data_registers):
     return loop_data
 
 def parse_state_file(path, periph_name):
-    pattern = re.compile(
+    rmw_pattern = re.compile(
         r'-\s*Read-Modify-Write\s*\(RMW\)\s*pattern\s*detected\s*on\s*register:\s*([A-Za-z0-9_]+)'
     )
-    state_data = []
+    # Capture Write-Poll patterns: "WRITE to <REG>, followed by polling <REG>"
+    wp_pattern = re.compile(
+        r'-\s*Write-Poll\s*pattern\s*detected:\s*WRITE\s+to\s+([A-Za-z0-9_]+),\s*followed\s+by\s+polling\s+([A-Za-z0-9_]+)'
+    )
+    rmw_registers = []
+    write_poll_pairs = []
 
     if not os.path.exists(path):
         fastdyn_log.error(f'State Analysis file does not exist under the {periph_name} directory: {path}')
-        return state_data
+        return rmw_registers, write_poll_pairs
 
     with open(path, 'r') as file:
         for line in file:
-            if match := pattern.search(line):
-                state_data.append(match.group(1))   #just track the register names
+            if match := rmw_pattern.search(line):
+                rmw_registers.append(match.group(1))
+            elif match := wp_pattern.search(line):
+                write_poll_pairs.append((match.group(1), match.group(2)))
 
-    return state_data
+    return rmw_registers, write_poll_pairs
 
 import os
 import re
