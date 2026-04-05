@@ -4,6 +4,7 @@
 #include <boardrunner/pty.h>
 #include <boardrunner/spi.h>
 #include <boardrunner/dma.h>
+#include <boardrunner/signals.h>
 #include <boardrunner/i2c.h>
 #include <boardrunner/net.h>
 #include <boardrunner/fileio.h>

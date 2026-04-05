@@ -14,3 +14,14 @@ build
 .cflags
 # API key and build configuration (contains local paths)
 .fastdyn.env
+
+# Local Codex workspace metadata
+.codex
+.codex/
+
+# Standalone BoardRunner SDK API test build trees
+boardrunner/boardrunner_sdk/build_api_tests/
+boardrunner/boardrunner_sdk/build_api_tests_standalone/
+
+# LLM outputs
+fastdyn_llm_history

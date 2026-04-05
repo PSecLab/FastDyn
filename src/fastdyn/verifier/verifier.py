@@ -285,6 +285,9 @@ def diff_entropy_calculate(diff_data, periph_hw, periph_em):
 
     warnings_str = '\n'.join(entropy_warnings) if entropy_warnings else '    No significant entropy mismatches.'
 
+    for w in entropy_warnings:
+        fastdyn_log.warn(f"Entropy mismatch: {w.strip()}")
+
     # Store raw data for prompt_gen.py to format with LLM-specific instructions
     diff_data.raw_entropy = {
         'entropy_hw': entropy_hw,
@@ -518,7 +521,6 @@ def parse_runtime_trace(path, periph_name, data_registers):
 def parse_summary_file(filepath: str) -> Dict[str, str]:
     """Parses the key-value pairs from the summary.txt file, cleaning prefixes like '-'."""
     summary_data = {}
-    print(summary_data)
     if not os.path.exists(filepath):
         return summary_data
     try:

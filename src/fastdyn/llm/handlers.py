@@ -1,4 +1,5 @@
 import os
+import glob
 import logging
 from fastdyn.llm.response_parser import (
     extract_c_code,
@@ -18,6 +19,24 @@ from fastdyn.llm.compiler import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def llm_history_next(history_dir: str) -> int:
+    """Return the next iteration number for the LLM history directory.
+
+    Scans for existing NNN_prompt.txt files and returns max(N) + 1, or 1 if none exist.
+    """
+    os.makedirs(history_dir, exist_ok=True)
+    existing = glob.glob(os.path.join(history_dir, "*_prompt.txt"))
+    if not existing:
+        return 1
+    nums = []
+    for f in existing:
+        base = os.path.basename(f)
+        prefix = base.split("_prompt.txt")[0]
+        if prefix.isdigit():
+            nums.append(int(prefix))
+    return max(nums) + 1 if nums else 1
 
 
 def handle_initial_prompt(response_text, output_path, work_dir):

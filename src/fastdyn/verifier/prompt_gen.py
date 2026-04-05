@@ -1,5 +1,4 @@
 import os
-import sys
 import glob
 from typing import Dict
 import logging
@@ -12,9 +11,6 @@ from .. import fastdyn_log as fastdyn_log_conf
 
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
-user_obserability_prompt = "NOTE AND REQUIREMENT: We need this model to be observable/user interactive."
-non_user_obserability_prompt = "NOTE AND REQUIREMENT: We DON'T need this model to be observable/user interactive."
-runtime_trace_request = "If you need, ask the user and user can give you complete complete runtime mmio trace for the peripheral model, it is compressed and contains all the transitions."
 
 
 # ── Critical framework rules that must appear in every generated prompt ──────
@@ -77,7 +73,7 @@ static void my_callback() { ... }
 You must implement a dynamic, stateful model. The trace data is EVIDENCE for
 reverse-engineering the register logic — it is NOT a lookup table to copy from.
 
-- DO NOT generate "record-and-replay" code that hardcodes return values from the
+- Never emit "record-and-replay" code that hardcodes return values from the
   trace (e.g., `if (addr == X && count == N) return Y;`). Such code only works
   for the exact execution that was recorded and breaks on any other run.
 - DO maintain a state struct whose fields represent register values.
@@ -87,6 +83,94 @@ reverse-engineering the register logic — it is NOT a lookup table to copy from
 - DO keep the logic minimal — only implement behavior the trace evidence supports.
   Do not invent complex state machines, timers, or hardware features beyond what
   the trace implies.
+
+### 4. Initialization and ConfigSection
+The `_init` function receives a `ConfigSection* model_info` pointer that contains
+the peripheral's configuration from the platform description (base address, IRQ
+numbers, bus connections, etc.). Use it when calling bus-init APIs like
+`api_i2c_init_bus(model_info)` or `api_spi_init_bus(model_info)`. Do not
+hardcode values that can be read from the configuration.
+"""
+
+observability_guidance = """\
+## Observability & Host I/O
+If the peripheral's firmware-level behavior implies interaction with an external \
+entity (e.g., receiving characters on a serial line, toggling user-visible outputs, \
+reading sensor data from an external bus), the model MUST expose that interaction to \
+the host using the appropriate I/O API from the list above (PTY for serial streams, \
+FIFO for generic byte pipes, TAP for network frames, I2C/SPI buses for attached \
+devices, etc.). Infer which API to use from the register semantics and trace \
+patterns — do not ask the user. The goal is to make the emulated peripheral \
+observable and interactive from the host side wherever the real hardware would \
+have been observable and interactive to a user or external system.
+"""
+
+inter_peripheral_guidance = """\
+## Inter-Peripheral Communication
+If the peripheral interacts with other hardware blocks at runtime (e.g., triggering \
+a DMA transfer after a conversion completes, raising a signal line that another \
+peripheral listens on, or sharing an IRQ), express that relationship using the \
+framework's inter-peripheral APIs (`api_dma_request`, `api_dma_register_stream`, \
+`api_signal_set`, `api_signal_register`, etc.) from the API list above.
+
+Do NOT invent direct function calls into another peripheral model's private code. \
+All cross-peripheral interaction MUST go through the shared APIs so that models \
+remain independently replaceable.
+"""
+
+context_peripheral_instructions = """\
+### How to Use Context Peripheral Data
+- Do **not** generate a device model for context peripherals.
+- Use their trace data only to understand how the target model interacts with \
+them at runtime (e.g., which stream IDs are used, when a DMA request is \
+triggered, what IRQ line is shared).
+- If the target model drives or is driven by a context peripheral, express that \
+relationship using the inter-peripheral APIs described above.
+"""
+
+host_io_section = """\
+## Host-Side I/O Setup (if needed)
+After generating the model, provide the exact host command(s) required to create \
+and manage any virtual I/O endpoint the model connects to (e.g., a pseudo-terminal, \
+a named pipe, a TAP interface). List commands in run order. If no external command \
+is required for the peripheral to function, output exactly: \
+No host-side setup required.
+"""
+
+api_missing_note = """\
+### Missing API Policy (HARD BLOCKER)
+If the model requires an API that is not listed above, you MUST stop and NOT \
+generate the device model. Instead:
+1. Clearly name the missing API and explain why it is required for this model.
+2. Propose a precise signature for the missing API in the following format:
+   - **Name**: `api_<domain>_<action>` (e.g., `api_can_send_frame`)
+   - **Inputs**: list each parameter with its C type and a one-line description
+   - **Output**: return type and meaning
+   - **Description**: one paragraph explaining what the API does and when the \
+model would call it
+3. STOP here. Do not generate the model. Do not attempt workarounds or \
+placeholder implementations. The user will add the API to the framework and \
+re-run generation.
+
+Do NOT generate partial or placeholder models when a required API is missing — \
+this creates cascading failures in the emulation pipeline.
+"""
+
+slave_bug_blocker = """\
+### Slave Device Bug Detection (HARD BLOCKER)
+If your analysis of the trace mismatches indicates that the root cause is NOT in \
+this model but in an attached slave device (e.g., an I2C/SPI slave returning \
+wrong data, not ACK-ing correctly, or mishandling a protocol sequence):
+1. Do NOT generate SEARCH/REPLACE corrections for the master model — applying \
+   patches to the wrong model will introduce new bugs and complicate debugging.
+2. State clearly which slave device you suspect and why (cite specific trace \
+   evidence: register values, entropy mismatches, protocol violations).
+3. Ask the user to provide the slave model source code so you can examine and \
+   correct it alongside the master model.
+
+The slave model will have the following callback interface that MUST NOT be changed:
+- For I2C slaves: `slave_i2c_event`, `slave_i2c_send`, `slave_i2c_recv`
+- For SPI slaves: `slave_spi_set_cs`, `slave_spi_transfer`
 """
 
 
@@ -99,12 +183,13 @@ Rules for SEARCH/REPLACE blocks:
 3. Do not use abbreviations, placeholders, or comments like `// ... rest of function` in the SEARCH block.
 4. Output multiple blocks if you need to make changes in different parts of the file.
 5. Wrap each SEARCH/REPLACE block in a standard text markdown block (text ... ) so it can be easily parsed.
+6. **NEVER leave the REPLACE section empty.** The parser requires at least one line of content between `=======` and `>>>>>>> REPLACE`. To delete a block of code entirely, replace it with a single comment line, for example `/* removed */`. Do NOT produce an empty REPLACE section — this will cause a parse error.
 Use this exact format:
 // FILE: target_filename.c
 <<<<<<< SEARCH
 [exact old code to find]
 =======
-[new code to replace it with]
+[new code to replace it with — must never be empty; use /* removed */ to delete]
 >>>>>>> REPLACE
 """
 
@@ -139,7 +224,7 @@ qemu_api_list = """
 - `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
 - `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
 - `void dev_debug(char *str)`: Any debug messages must be logged using this function.
-- `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for the pseudo-terminal device /tmp/usart1_pty
+- `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for a host-side pseudo-terminal device. The actual PTY path is determined by the framework at runtime.
 - `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
 - `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
 - `I2CBus api_i2c_init_bus(ConfigSection* model_info)`: Initializes an I2C bus from a configuration section and returns the I2CBus struct by value.
@@ -153,6 +238,8 @@ qemu_api_list = """
 - `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
 - `void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque)`: Called by a DMA model. Takes a `stream_id`, a `handler` callback, and an `opaque` data pointer. Registers the handler to be called when a peripheral triggers a request for that stream.
 - `void api_dma_request(int stream_id)`: Called by a peripheral model (e.g., ADC). Takes a `stream_id` to trigger. This function looks up the corresponding handler (registered via `api_dma_register_stream`).
+- `void api_signal_register(int signal_id, signal_handler_t handler, void *opaque)`: Called by a sink peripheral model (for example EXTI). Registers a callback for a logical signal line such as EXTI line 13.
+- `void api_signal_set(int signal_id, bool level)`: Called by a source peripheral model (for example GPIO). Publishes the logical level for a signal line. The API is level-based; edge detection belongs in the receiving model.
 - `int api_fifo_open(const char *path)`: Creates and opens a named pipe (FIFO) at the specified path using O_RDWR to prevent EOF when the external writer disconnects.
 - `int api_fifo_write(int fd, const void *data, int len)`: Writes a data buffer of a specified length to the FIFO file descriptor.
 - `int api_fifo_read_nonblock(int fd, uint8_t *out_byte)`: Reads a single byte from the FIFO in non-blocking mode. Returns 1 if a byte was read, 0 if the buffer is empty.
@@ -206,6 +293,14 @@ typedef struct {
 
 // --- End of DMA Info
 
+// --- Start of Signals API Info
+
+#define MAX_SIGNALS 128
+
+typedef void (*signal_handler_t)(void *opaque, int signal_id, bool level);
+
+// --- End of Signals API Info
+
 // --- Network Backend APIs (Linux TAP) ---
 // 1. Init TAP interface (NON-BLOCKING). Returns fd.
 int api_tap_init(const char *dev_name);
@@ -215,16 +310,16 @@ int api_tap_send(int fd, const uint8_t *buf, int len);
 int api_tap_recv_nonblock(int fd, uint8_t *buf, int max_len);
 """
 
-def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir, model_sources, user_obs=''):
+def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir, model_sources, **kwargs):
     fastdyn_log.info("Generating Prompt for LLM")
-    global qemu_api_list
+    if 'user_obs' in kwargs:
+        pass  # Deprecated — observability is now always inferred via observability_guidance
 
     final_prompt = generate_prompt_multiple(
         analysis_dir=analysis_dir,
         model_name=model_name,
         peripherals=peripherals,
         qemu_api_list=qemu_api_list,
-        user_obs = user_obs,
         model_sources=model_sources
     )
 
@@ -244,12 +339,12 @@ def initial_prompt_gen(analysis_dir, peripheral, out_dir):
 
     final_prompt = generate_prompt(peripheral_path)
 
-    output_path = os.path.join(out_dir, "initial_prompt.txt")
-    with open(output_path, "w") as f:
-        f.write(final_prompt + "\n")
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    output_path = Path(out_dir) / "initial_prompt.txt"
+    output_path.write_text(final_prompt + "\n", encoding="utf-8")
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
-    return output_path
+    return str(output_path)
 
 
 
@@ -261,6 +356,11 @@ def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path, show_
     platform_name = diff_obj.platform_name
     peripheral_name = peripheral
     device_model = ''
+    if not show_prompt:
+        fastdyn_log.warning(
+            "show_prompt=False: model source will be hidden from LLM. "
+            "SEARCH/REPLACE corrections will likely fail."
+        )
     model_filename = os.path.basename(device_model_path)
 
     if show_prompt:
@@ -270,7 +370,7 @@ def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path, show_
 
     # Build the state data with LLM-facing instructions appended
     state_data_with_instructions = diff_obj.diff_state_data
-    if state_data_with_instructions:
+    if state_data_with_instructions and not state_data_with_instructions.strip().startswith("[NO DATA"):
         state_data_with_instructions += "\n" + polling_interpretation_instructions
 
     final_prompt = f'''
@@ -303,29 +403,17 @@ You **must** use the following APIs to construct the device model. Pay close att
 {qemu_api_list.strip()}
 ```
 
-### NOTE
-If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
-
-If you need more info about the firmware, dont generate the device model.
-
-{runtime_trace_request}
-
-If you believe the issue is not in the model but the device (slave) attached to it, stop and ask the user for the slave model and observe the slave model first and correct the slave model as well if it has issues, don't generate the master model!
-The slave model will just have following supporting functions and not any more registration functions which **MUST NOT** be changed
-//In case of an I2C slave
-- STM32F4_event
-- STM32F4_send
-- STM32F4_receive
-
-//In case of a SPI slave
-- STM32F4_set_cs
-- STM32F4_transfer
+{api_missing_note}
 
 {framework_rules}
 
-## Host-Side I/O Setup (if needed)
-If the model needs host I/O, output the exact host command(s). If none, output exactly:
-No host-side setup required.
+{observability_guidance}
+
+{inter_peripheral_guidance}
+
+{slave_bug_blocker}
+
+{host_io_section}
 
 ## Trace Log Schema:
 The logs below are formatted as arrays containing the following fields: [Operation, Peripheral, Register, Memory Address, Register Value, Program Counter (PC)]. Pay close attention to the Register Value differences between Hardware and the Emulated Model.
@@ -365,9 +453,11 @@ This file measures the randomness of values read from registers. High entropy su
 This file contains all the accesses information for the data registers
 {diff_obj.diff_runtime_trace}
 
-# ISR Analysis data (`isr_analysis.txt`):
-This file contains the information about the irqs
+## ISR Analysis (`isr_analysis.txt`)
+This file contains information about IRQs.
+```
 {diff_obj.isr_analysis_data}
+```
 
 --- END OF ANALYSIS DATA ---
 
@@ -383,23 +473,23 @@ A bulleted list of the important registers mentioned in the traces and their inf
 
 {search_replace_prompting}
 '''
-    output_path = os.path.join(out_dir, "revised_prompt.txt")
-    with open(output_path, "w") as f:
-        f.write(final_prompt + "\n")
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    output_path = Path(out_dir) / "revised_prompt.txt"
+    output_path.write_text(final_prompt + "\n", encoding="utf-8")
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
-    return output_path
+    return str(output_path)
 
 def read_file_content(filepath: str) -> str:
     """Reads the entire content of a file, returning a helpful message if not found."""
     if not os.path.exists(filepath):
-        return f"File not found: {os.path.basename(filepath)}"
+        return f"[NO DATA — file not found: {os.path.basename(filepath)}]"
     try:
         with open(filepath, 'r') as f:
             content = f.read().strip()
-            return content if content else "File is empty."
+            return content if content else "[NO DATA — file is empty]"
     except Exception as e:
-        return f"Error reading file: {e}"
+        return f"[NO DATA — read error: {e}]"
 
 def parse_summary_file(filepath: str) -> Dict[str, str]:
     """Parses the key-value pairs from the summary.txt file."""
@@ -422,9 +512,10 @@ def generate_prompt(peripheral_directory: str) -> str:
     Generates a detailed prompt for an LLM based on analysis files in a directory.
     """
     if not os.path.isdir(peripheral_directory):
-        print(f"[ERROR] Analysis directory not found: {peripheral_directory}")
-        print(f"[ERROR] Please ensure you have run the analysis script first.")
-        sys.exit(1)
+        raise FileNotFoundError(
+            f"Analysis directory not found: {peripheral_directory}. "
+            f"Ensure you have run the analysis script first."
+        )
 
     peripheral_name = os.path.basename(peripheral_directory)
 
@@ -440,7 +531,7 @@ def generate_prompt(peripheral_directory: str) -> str:
     state_data = read_file_content(os.path.join(peripheral_directory, "state.txt"))
     entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
     loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
-    isr_analysis_data = read_file_content(isr_analysis) if os.path.exists(isr_analysis) else None
+    isr_analysis_data = read_file_content(isr_analysis)
 
     loop_data_list = []
     if not loop_files:
@@ -457,19 +548,21 @@ Take this prompt independent from previous prompt history.
 You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
 Your task is to analyze the following summary of MMIO trace data and generate a complete C device model.
 
-## Available  APIs
+## Available APIs
 You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
 ```c
 {qemu_api_list.strip()}
 ```
 
-### NOTE
-If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
+{api_missing_note}
 
 {framework_rules}
 
-## Commands:
-After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
+{observability_guidance}
+
+{inter_peripheral_guidance}
+
+{host_io_section}
 
 --- START OF ANALYSIS DATA ---
 
@@ -503,9 +596,11 @@ This file measures the randomness of values read from registers. High entropy su
 {entropy_data}
 ```
 
-# ISR Analysis data (`isr_analysis.txt`):
-This file contiains the information about the irqs
+## ISR Analysis (`isr_analysis.txt`)
+This file contains information about IRQs.
+```
 {isr_analysis_data}
+```
 
 --- END OF ANALYSIS DATA ---
 
@@ -536,7 +631,7 @@ uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size
 
 // This function will emulate all device writes
 void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
-        // Example: GPIOG->BSRR = value; // Set PG13 high
+        // Example: s->control_reg = value; // Update control register from firmware write
         // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
 }}
 
@@ -547,7 +642,7 @@ void {peripheral_name.lower()}_init(ConfigSection* model_info) {{
 """
     return prompt.strip()
 
-def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path, reference_model_path):
+def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path, reference_model_path, slave_type="i2c"):
     '''
     based on the slave firmware code and the existing reference code, generate a C model for the slave.
     '''
@@ -559,44 +654,98 @@ def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path
     with open(reference_model_path, 'r') as f:
         reference_model = f.read().strip()
 
+    if slave_type == "spi":
+        slave_callbacks = """\
+    These are the slave's registered callbacks — the ONLY entry points the framework calls on the slave.
+    Do not rename them or add new registration functions.
+    - `slave_spi_set_cs`
+    - `slave_spi_transfer`
+"""
+    else:
+        slave_callbacks = """\
+    These are the slave's registered callbacks — the ONLY entry points the framework calls on the slave.
+    Do not rename them or add new registration functions.
+    - `slave_i2c_event`
+    - `slave_i2c_send`
+    - `slave_i2c_recv`
+"""
+
     slave_gen_prompt = f"""
-    Take this prompt independent from previous prompt history.
+Take this prompt independent from previous prompt history.
 
-    You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
-    Your task is to analyze the following firmware of the {peripheral_name} slave and a reference c model.
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
+Your task is to analyze the following firmware of the {peripheral_name} slave and a reference c model.
 
-    ## Available  APIs
-    The slave model will just have following supporting functions and not any more registration functions which **MUST NOT** be changed
-    //In case of an I2C slave
-    - STM32F4_event
-    - STM32F4_send
-    - STM32F4_receive
+## Available APIs
+You **must** use only the following APIs. Pay close attention to signatures.
+```c
+{qemu_api_list.strip()}
+```
 
-    //In case of a SPI slave
-    - STM32F4_set_cs
-    - STM32F4_transfer
+{api_missing_note}
 
-    ### NOTE
-    If a required API is missing from the registry, stop and do not generate the model. Ask the user to provide the API by specifying its inputs, outputs, and description. Then ask whether to generate the device model with this API or attempt it without using a workaround. If no workaround is possible, indicate that the API is critical for the device model.
+## Slave Callback Interface
+{slave_callbacks}
 
-    {framework_rules}
+{framework_rules}
 
-    ## Commands:
-    After generating the model, provide the host command required to create and manage the virtual I/O endpoint (e.g., a pseudo-terminal at a fixed path) that the device model will connect to. This command should be run in a separate terminal. If no external command is required for the peripheral to function, skip this section.
+{observability_guidance}
 
-    ## Slave Firmware
-    {slave_firmware}
+{inter_peripheral_guidance}
 
-    ## Slave Model Reference Code
-    {reference_model}
-    """
+{host_io_section}
 
-    output_path = os.path.join(out_dir, "slave_model_prompt.txt")
-    with open(output_path, "w") as f:
-        f.write(slave_gen_prompt + "\n")
+## Slave Firmware
+{slave_firmware}
+
+## Slave Model Reference Code
+{reference_model}
+
+## Expected Slave Model Structure
+Your generated slave model MUST follow this structural pattern:
+```c
+// 1. State struct with register array and protocol state
+typedef struct {{
+    uint8_t regs[256];
+    bool    expect_reg_addr;   // I2C: next byte is register pointer
+    uint8_t reg_ptr;           // current register pointer
+    bool    inited;
+}} <name>_state_t;
+
+static <name>_state_t g_state;
+
+// 2. Defaults loader (called on init and soft-reset)
+static void load_defaults(<name>_state_t *s) {{ ... }}
+
+// 3. Lazy init guard
+static void lazy_init(void) {{ ... }}
+
+// 4. The REQUIRED callback symbols (do NOT rename):
+//    I2C: slave_i2c_event, slave_i2c_send, slave_i2c_recv
+//    SPI: slave_spi_set_cs, slave_spi_transfer
+
+// 5. Optional name-based aliases: <name>_send, <name>_receive, etc.
+```
+
+## Required Output Format
+
+### 1. High-Level Summary
+A concise, one-paragraph summary of this slave device's purpose and protocol behavior.
+
+### 2. Register Map
+A bulleted list of the slave's internal registers and their functions, inferred from the firmware and reference model.
+
+### 3. C Slave Model Source Code
+The complete, self-contained C source file. Including `<device.h>` and `<boardrunner/vio.h>` gives you access to all APIs listed above.
+The code must compile as a shared library (`gcc -shared -fPIC -O2 -o slave.so <file>.c`).
+"""
+
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    output_path = Path(out_dir) / "slave_model_prompt.txt"
+    output_path.write_text(slave_gen_prompt + "\n", encoding="utf-8")
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
-    return output_path
+    return str(output_path)
 
 def _resolve_roles(peripherals, model_name, model_sources=None):
     """
@@ -635,7 +784,7 @@ def _resolve_roles(peripherals, model_name, model_sources=None):
 
     return roles, sources
 
-def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list, user_obs, model_sources):
+def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list, model_sources):
     """
     Generates a detailed prompt for an LLM based on analysis files in a directory.
     `peripherals` can be a tuple/list (Click multiple=True) or a single string.
@@ -650,14 +799,6 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
         roles, sources = _resolve_roles(peripherals, model_name, model_sources)
     except ValueError as e:
         raise click.UsageError(str(e))
-
-    # user_obs = 'REQ'
-    if user_obs == 'REQ':
-        usr_prompt = user_obserability_prompt
-    elif user_obs == 'NOT-REQ':
-        usr_prompt = non_user_obserability_prompt
-    else:
-        usr_prompt = ''
 
     # Parse summary once (it lives in analysis_dir/summary.txt per your layout)
     summary_path = os.path.join(analysis_dir, "summary.txt")
@@ -674,7 +815,7 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
         entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
 
         isr_path = os.path.join(peripheral_directory, "isr_analysis.txt")
-        isr_analysis_data = read_file_content(isr_path) if os.path.exists(isr_path) else "No ISR analysis file was found."
+        isr_analysis_data = read_file_content(isr_path)
 
         loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
         if not loop_files:
@@ -746,7 +887,6 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     for peripherals in a QEMU-based framework.
     You have read the reference manual for {platform_name} with deep familiarity with \
     {", ".join(peripherals)}.
-    {usr_prompt}
 
     ## Your Task
     Generate a **single, complete C device model** for: `{model_name}`
@@ -755,14 +895,6 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     One of these is the **target** (`{model_name}`) — the model you are generating.
     The others are **context peripherals** — provided only because `{model_name}` has a \
     runtime dependency on them (e.g., it triggers DMA, shares a bus, raises an IRQ to another block).
-
-    ### How to Use Context Peripheral Data
-    - Do **not** generate a device model for context peripherals.
-    - Use their trace data only to understand how `{model_name}` interacts with them at runtime \
-    (e.g., which stream IDs are used, when a DMA request is triggered, what IRQ line is shared).
-    - If `{model_name}` drives or is driven by a context peripheral, express that relationship \
-    using the inter-peripheral APIs listed below (e.g., `api_dma_request`, \
-    `api_dma_register_stream`).
 
     ### Dependency Check
     Before generating code, briefly state:
@@ -773,7 +905,6 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     If you cannot infer a meaningful relationship from the trace data, and the context peripheral \
     data provides no useful information for modeling `{model_name}`, state that clearly and \
     **ignore** the context peripheral — do not let it block code generation.
-    Only stop and ask if a relationship clearly exists but the required API is missing from the list.
 
     ## Available APIs
     You **must** use only the following APIs. Pay close attention to signatures.
@@ -781,17 +912,17 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     {qemu_api_list.strip()}
     ```
 
-    ### API Note
-    If a required API is missing, stop and ask the user to provide it (inputs, outputs, description). \
-    Then ask whether to proceed with a workaround or wait for the API. If no workaround exists, \
-    state that it is critical.
+    {api_missing_note}
 
     {framework_rules}
 
-    ## Host-Side I/O Setup (if needed)
-    Output the exact host command(s) needed, inferred strictly from the available APIs \
-    (e.g., PTY→serial, TAP→network, FIFO→pipe). List commands in run order. \
-    If none needed, write exactly: No host-side setup required.
+    {observability_guidance}
+
+    {inter_peripheral_guidance}
+
+    {context_peripheral_instructions}
+
+    {host_io_section}
 
     --- START OF ANALYSIS DATA ---
 
@@ -873,8 +1004,6 @@ def iteration_prompt_gen_multiple_periph(
     - All peripheral diffs (labeled MISMATCH or PASSING)
     - Instruction for LLM to output SEARCH/REPLACE blocks per file
     """
-    global qemu_api_list
-
     if isinstance(peripherals, str):
         peripherals = [peripherals]
     else:
@@ -912,6 +1041,10 @@ def iteration_prompt_gen_multiple_periph(
                 source = source[:max_model_chars] + "\n/* ... truncated ... */"
         else:
             source = "/* model source hidden */"
+            fastdyn_log.warning(
+                f"show_prompt=False: model source for '{model_name}' will be hidden. "
+                "SEARCH/REPLACE corrections will likely fail."
+            )
 
         model_source_blocks.append(
             f"## Model: `{model_name}`  |  File: `{filename}`\n"
@@ -927,7 +1060,7 @@ def iteration_prompt_gen_multiple_periph(
         status = "MISMATCH" if not_match else "PASSING"
 
         state_data_section = diff_obj.diff_state_data
-        if state_data_section and state_data_section.strip() not in ("", "File is empty.", "File not found: state.txt"):
+        if state_data_section and not state_data_section.strip().startswith("[NO DATA"):
             state_data_section += "\n" + polling_interpretation_instructions
 
         peripheral_diff_blocks.append(textwrap.dedent(f"""\
@@ -960,6 +1093,7 @@ def iteration_prompt_gen_multiple_periph(
 ```
 
         ### ISR Analysis
+        This file contains information about IRQs.
 ```
         {diff_obj.isr_analysis_data}
 ```
@@ -1000,15 +1134,17 @@ a DMA model failure). Reason across all models before deciding where the fix bel
     {qemu_api_list.strip()}
 ```
 
-    ### NOTE
-    If a required API is missing, stop and ask the user to provide its \
-signature and semantics.
+    {api_missing_note}
 
     {framework_rules}
 
-    ## Host-Side I/O Setup (if needed)
-    If any model needs host I/O, output exact host command(s). \
-If none, output exactly: No host-side setup required.
+    {observability_guidance}
+
+    {inter_peripheral_guidance}
+
+    {context_peripheral_instructions}
+
+    {host_io_section}
 
     ## Trace Log Schema
     Arrays of: [Operation, Peripheral, Register, Address, Value, PC].

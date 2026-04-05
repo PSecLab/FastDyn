@@ -20,6 +20,7 @@ from .utils import parse_config as parse_helper
 from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 import fastdyn.targets.qemu_target as qemu_target
+from fastdyn.llm.handlers import llm_history_next
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
 
@@ -758,6 +759,17 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
 
     log.info("Read prompt from %s (%d characters)", prompt_path, len(prompt_text))
 
+    # -- Persistent LLM history -----------------------------------------------
+    # Saved in fastdyn_llm_history/ next to the work directory, never deleted.
+    # Each invocation gets a new NNN prefix; retries within the same run get
+    # separate response files (NNN_response_1.txt, NNN_response_2.txt, ...).
+    history_dir = os.path.join(os.path.dirname(work_dir), "fastdyn_llm_history")
+    history_iter = llm_history_next(history_dir)
+    history_prefix = os.path.join(history_dir, f"{history_iter:03d}")
+    with open(f"{history_prefix}_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+    log.info("LLM history prompt saved to %s_prompt.txt (iteration %d)", history_prefix, history_iter)
+
     # -- Validate output file for revised prompts ----------------------------
     if prompt_type == "revised":
         for out_path in output:
@@ -811,6 +823,12 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         with open(response_path, "w", encoding="utf-8") as f:
             f.write(response_text)
         log.info("Raw LLM response saved to %s", response_path)
+
+        # Persist to history (one file per attempt so retries are all kept)
+        history_response_path = f"{history_prefix}_response_{attempt}.txt"
+        with open(history_response_path, "w", encoding="utf-8") as f:
+            f.write(response_text)
+        log.info("LLM history response saved to %s", history_response_path)
 
         previous_response = response_text
 
