@@ -38,14 +38,29 @@ const STL_FORMULAS_PATH: &str = "stl_formulas.txt";
 
 #[derive(Deserialize)]
 struct State {
+    // clock
     time: f64,
+
+    // pose
     x: f64,
     y: f64,
     z: f64,
     roll: f64,
     pitch: f64,
-    roll_rate: f64,
-    lateral_accel: f64,
+    yaw: f64,
+
+    // navsat
+    lin_velo_x: f64,
+    lin_velo_y: f64,
+    lin_velo_z: f64,
+
+    // imu
+    ang_velo_x: f64,
+    ang_velo_y: f64,
+    ang_velo_z: f64,
+    lin_accel_x: f64,
+    lin_accel_y: f64,
+    lin_accel_z: f64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -225,18 +240,34 @@ where
             z: f64,
             roll: f64,
             pitch: f64,
-            roll_rate: f64,
-            lateral_accel: f64,
+            yaw: f64,
+            lin_velo_x: f64,
+            lin_velo_y: f64,
+            lin_velo_z: f64,
+            ang_velo_x: f64,
+            ang_velo_y: f64,
+            ang_velo_z: f64,
+            lin_accel_x: f64,
+            lin_accel_y: f64,
+            lin_accel_z: f64,
         ) -> HashMap<String, f64> {
             HashMap::from([
                 ("time".to_string(), sim_time),
                 ("x".to_string(), x), 
                 ("y".to_string(), y), 
                 ("z".to_string(), z),
-                ("roll".to_string(), roll),
-                ("pitch".to_string(), pitch),
-                ("roll_rate".to_string(), roll_rate),
-                ("lateral_accel".to_string(), lateral_accel),
+                ("roll".to_string(), roll), 
+                ("pitch".to_string(), pitch), 
+                ("yaw".to_string(), yaw),
+                ("lin_velo_x".to_string(), lin_velo_x),
+                ("lin_velo_y".to_string(), lin_velo_y),
+                ("lin_velo_z".to_string(), lin_velo_z),
+                ("ang_velo_x".to_string(), ang_velo_x),
+                ("ang_velo_y".to_string(), ang_velo_y),
+                ("ang_velo_z".to_string(), ang_velo_z),
+                ("lin_accel_x".to_string(), lin_accel_x),
+                ("lin_accel_y".to_string(), lin_accel_y),
+                ("lin_accel_z".to_string(), lin_accel_z),
             ])
         }
 
@@ -269,7 +300,14 @@ where
         let mut trace: Trace<HashMap<String, f64>> = Trace::new();
         for result in csv_reader.deserialize() {
             let state: State = result.unwrap();
-            trace.insert(state.time, create_state(state.time, state.x, state.y, state.z, state.roll, state.pitch, state.roll_rate, state.lateral_accel));
+            trace.insert(state.time, create_state(
+                state.time, 
+                state.x, state.y, state.z, 
+                state.roll, state.pitch, state.yaw,
+                state.lin_velo_x, state.lin_velo_y, state.lin_velo_z,
+                state.ang_velo_x, state.ang_velo_y, state.ang_velo_z,
+                state.lin_accel_x, state.lin_accel_y, state.lin_accel_z,
+            ));
         }
 
         // Finally, evaluate the trace against all STL formulas that were

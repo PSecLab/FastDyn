@@ -210,7 +210,7 @@ pub fn extract_block_from_gz_data(gz_data: &str, block_name: &str) -> String {
 pub fn get_nested_pose(extracted_pose_block: String, pose_name: &str) -> Pose {
 
     let pose_proto: Pose_V = parse_from_str::<Pose_V>(&extracted_pose_block).unwrap();
-    for (_i, pose) in pose_proto.pose.iter().enumerate() {
+    for (_, pose) in pose_proto.pose.iter().enumerate() {
         if pose.name == pose_name {
             return pose.clone();
         }
