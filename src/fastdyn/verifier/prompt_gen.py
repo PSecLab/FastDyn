@@ -45,18 +45,45 @@ The trace data shows these absolute addresses directly (e.g., `address = 0x40022
 Use them to infer each peripheral's base address and register layout.
 
 ### 2. Callback Function Signatures
-Any function pointer registered with a framework API **MUST exactly match** the
-expected signature. In particular:
 
-- **All callback-based APIs** in this framework pass a `void *opaque` (or `void *data`)
-  argument to the registered callback. Your callback functions **MUST** accept this
-  parameter. Do NOT use empty parameter lists `()` in C — that is NOT the same as
-  `(void)` and causes undefined behavior when the framework passes an argument.
+#### 2a. MMIO read/write callbacks (`_read` / `_write`)
+The framework passes the pointer returned by `_init` as the `opaque` argument to
+every subsequent `_read` and `_write` call. Your `_init` **MUST return a pointer to
+your state struct** so the framework can wire it up correctly:
+
+```c
+static MyPeriphState g_state;
+
+void* myperiph_init(ConfigSection* model_info) {
+    memset(&g_state, 0, sizeof(g_state));
+    // ... initialization ...
+    return &g_state;   // REQUIRED — framework stores this and passes it as opaque
+}
+
+uint64_t myperiph_read(void *opaque, hwaddr addr, unsigned size) {
+    MyPeriphState *s = (MyPeriphState *)opaque;  // valid: framework set this from init
+    hwaddr offset = addr - MY_BASE;
+    // ...
+}
+
+void myperiph_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
+    MyPeriphState *s = (MyPeriphState *)opaque;
+    hwaddr offset = addr - MY_BASE;
+    // ...
+}
+```
+
+#### 2b. Inter-peripheral / timer callbacks
+Any function pointer registered with a framework API such as `api_signal_register`,
+`api_dma_register_stream`, or `qemu_plugin_timer_new_ns` **MUST exactly match** the
+expected signature, and those callbacks DO receive a valid `opaque` pointer (the one
+you passed at registration time). Your callback functions **MUST** accept the `opaque`
+parameter and cast it to access your state:
 
 ```c
 // CORRECT — matches the expected void (*)(void *) signature:
 static void my_callback(void *opaque) {
-    MyState *s = (MyState *)opaque;
+    MyPeriphState *s = (MyPeriphState *)opaque;  // valid: you registered &g_state
     // ...
 }
 
@@ -66,8 +93,9 @@ static void my_callback() { ... }
 
 - **Never cast function pointers** to hide type mismatches. If the compiler warns
   about an incompatible function pointer, fix the function signature instead.
-- This applies to ALL framework callbacks: timer callbacks, inter-peripheral request
-  handlers, and any other API that accepts a function pointer and an opaque/data pointer.
+- This applies to ALL inter-peripheral / timer callbacks: timer callbacks, signal
+  handlers, DMA request handlers, and any other API that accepts a function pointer
+  and an opaque/data pointer.
 
 ### 3. Stateful Emulation over Trace Memorization
 You must implement a dynamic, stateful model. The trace data is EVIDENCE for
@@ -623,24 +651,64 @@ The C source code for MMIO read and write callback for {peripheral_name} emulati
 // Inferred Register Functions:
 // ... add registers here ...
 
-// This function will emulation all device reads
+static {peripheral_name}State g_{peripheral_name.lower()};
+
+// This function will emulate all device reads
 uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
-    // Example: return device->register; // Return some register value from device
-	// ... {peripheral_name.lower()} reads, the retuned value will be emulation of device ...
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+    // ... return register value based on offset ...
 }}
 
 // This function will emulate all device writes
 void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
-        // Example: s->control_reg = value; // Update control register from firmware write
-        // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+    // ... update register state based on offset and value ...
 }}
 
-void {peripheral_name.lower()}_init(ConfigSection* model_info) {{
-		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
+// MUST return pointer to state — framework passes it as opaque to _read/_write
+void* {peripheral_name.lower()}_init(ConfigSection* model_info) {{
+    memset(&g_{peripheral_name.lower()}, 0, sizeof(g_{peripheral_name.lower()}));
+    // ... initialize state from model_info (bus inits, etc.) ...
+    return &g_{peripheral_name.lower()};
 }}
 ```
 """
     return prompt.strip()
+
+def _strip_commented_out_blocks(source: str, min_run: int = 10) -> str:
+    """Remove large contiguous blocks of //-commented lines from C source.
+
+    Inline comments that appear alongside active code are left intact.
+    Only runs of `min_run` or more consecutive lines where every non-blank
+    line starts with '//' are removed — these are almost always dead code
+    blocks that were commented out, not useful documentation.
+    """
+    lines = source.splitlines()
+    result = []
+    i = 0
+    while i < len(lines):
+        # Scan forward to measure the length of a //-only run starting at i
+        j = i
+        while j < len(lines):
+            stripped = lines[j].strip()
+            if stripped == '' or stripped.startswith('//'):
+                j += 1
+            else:
+                break
+        run_len = j - i
+        if run_len >= min_run:
+            # Drop the block; skip to end of run
+            i = j
+        else:
+            result.extend(lines[i:j])
+            i = j
+            if i < len(lines):
+                result.append(lines[i])
+                i += 1
+    return '\n'.join(result)
+
 
 def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path, reference_model_path, slave_type="i2c"):
     '''
@@ -649,7 +717,7 @@ def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path
     fastdyn_log.info("Generating Prompt for LLM")
 
     with open(slave_firmware_path, 'r') as f:
-        slave_firmware = f.read().strip()
+        slave_firmware = _strip_commented_out_blocks(f.read().strip())
 
     with open(reference_model_path, 'r') as f:
         reference_model = f.read().strip()
@@ -741,7 +809,7 @@ The code must compile as a shared library (`gcc -shared -fPIC -O2 -o slave.so <f
 """
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    output_path = Path(out_dir) / "slave_model_prompt.txt"
+    output_path = Path(out_dir) / "initial_prompt.txt"
     output_path.write_text(slave_gen_prompt + "\n", encoding="utf-8")
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
@@ -956,15 +1024,19 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     // Device Model for {model_name}
 
     uint64_t {model_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
+        MyState *s = (MyState *)opaque;  // valid: framework passes return value of _init
         // ...
     }}
 
     void {model_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
+        MyState *s = (MyState *)opaque;
         // ...
     }}
 
-    void {model_name.lower()}_init(ConfigSection* model_info) {{
+    // MUST return &g_state — framework stores this and passes it as opaque to _read/_write
+    void* {model_name.lower()}_init(ConfigSection* model_info) {{
         // ...
+        return &g_{model_name.lower()};
     }}
     ```
     """)
@@ -1031,9 +1103,12 @@ def iteration_prompt_gen_multiple_periph(
         return None
 
     # ── 2. Build model source blocks ─────────────────────────────────────────
+    # Iterate all -d entries so every provided model is embedded and patchable,
+    # not just the -mname ones. This handles cases like slave models (BME280)
+    # or signal-connected peripherals (GPIOD) that have no trace data but are
+    # still relevant for the LLM to reason about and potentially correct.
     model_source_blocks = []
-    for model_name in model_names:
-        path = model_to_path[model_name]
+    for model_name, path in model_to_path.items():
         filename = os.path.basename(path)
         if show_prompt:
             source = Path(path).read_text(encoding="utf-8", errors="replace")
@@ -1101,8 +1176,8 @@ def iteration_prompt_gen_multiple_periph(
 
     # ── 4. Build file target reference ───────────────────────────────────────
     file_reference = "\n    ".join(
-        f"- `{model_name}` → `{os.path.basename(model_to_path[model_name])}`"
-        for model_name in model_names
+        f"- `{model_name}` → `{os.path.basename(path)}`"
+        for model_name, path in model_to_path.items()
     )
 
     mismatch_list = [p for p, (nm, _) in peripheral_results.items() if nm]

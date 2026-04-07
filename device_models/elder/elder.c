@@ -28,7 +28,7 @@ static uint64_t elder_read(void *opaque, hwaddr address, unsigned size, uint64_t
 		for (int j=0; j<devices[i].config->range_count; j++) {
 			if (address >= ranges[j].start && address < ranges[j].end) {
 				// Good case, my scroll worked
-				return devices[i].model.read(NULL, address, size, pc);
+				return devices[i].model.read(devices[i].model.opaque, address, size, pc);
 			}
 		}
     }
@@ -44,14 +44,14 @@ static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned s
 		for (int j=0; j<devices[i].config->range_count; j++) {
 			if (address >= ranges[j].start && address < ranges[j].end) {
 				// Good case, my scroll worked
-				devices[i].model.write(NULL, address, value, size, pc);
+				devices[i].model.write(devices[i].model.opaque, address, value, size, pc);
 				return;
 			}
 		}
     }
 }
 
-static int elder_init(ConfigSection* model_info);
+static void* elder_init(ConfigSection* model_info);
 // The public definition of the elder device model
 DeviceModel elder_model_def = {
     .name = "elder",
@@ -60,7 +60,7 @@ DeviceModel elder_model_def = {
     .init = elder_init,
 };
 
-static int elder_init(ConfigSection* model_info) {
+static void* elder_init(ConfigSection* model_info) {
     //Find the overall ranges for all the devices registered as elder
     Range ranges[10];
 	device_count = model_info->device_count;
@@ -94,8 +94,13 @@ static int elder_init(ConfigSection* model_info) {
 	    devices[i].model.init = (DeviceInit)dlsym(devices[i].handle, symbol);
 	    if (!devices[i].model.init) utils_die("Missing init");
 
-		//pass the information related to the model for initialization
-		devices[i].model.init(model_info);	//send the details of complete elder model
+		/* Call init and store the returned state pointer as opaque.
+		 * Models must return a pointer to their state struct (e.g. return &g_state).
+		 * The framework passes this pointer to every subsequent read/write call,
+		 * allowing models to use (MyState *)opaque safely instead of a bare global.
+		 * Old models that return void/NULL will have opaque=NULL and must still
+		 * access state via a file-scope global — both patterns compile correctly. */
+		devices[i].model.opaque = devices[i].model.init(model_info);
 	}
-	return 0;
+	return NULL;  // elder itself has no state to expose as opaque
 }

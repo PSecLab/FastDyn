@@ -197,12 +197,15 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
             work_dir = "fastdyn_work"
 
         #generate the prompt
+        peripheral_str = ", ".join(peripheral)
+        slave_type = "spi" if any("spi" in p.lower() for p in peripheral) else "i2c"
         pg_path = pg.slave_model_gen(
-            peripheral_name=peripheral,
-            platform_name = board,
+            peripheral_name=peripheral_str,
+            platform_name=board,
             out_dir=work_dir,
             slave_firmware_path=firmware_code,
-            reference_model_path=reference_model
+            reference_model_path=reference_model,
+            slave_type=slave_type
         )
 
     else:
