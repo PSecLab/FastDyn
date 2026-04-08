@@ -10,6 +10,31 @@
 
 ---
 
+## Hardware Connections
+
+**Sensor:** BME280 (Bosch environmental sensor — SPI mode. Common breakout boards: Adafruit BME280, SparkFun BME280, or any BME280 module with SPI pads exposed.)
+
+| BME280 pin | NUCLEO-H753ZI pin | Connector | Notes |
+|-----------|-------------------|-----------|-------|
+| VCC / VDD | 3.3V | CN8 pin 7 or CN6 pin 4 | 3.3 V supply only — do not use 5 V |
+| GND | GND | CN8 pin 11 or CN6 pin 6 | |
+| SCK / SCL | **D13** (PA5, SPI1_SCK, AF5) | CN9 pin 2 | Arduino header |
+| SDO / MISO | **D12** (PA6, SPI1_MISO, AF5) | CN9 pin 4 | Arduino header |
+| SDI / MOSI | **D11** (PB5, SPI1_MOSI, AF5) | CN9 pin 6 | Arduino header |
+| CSB / CS | **CN7 pin 17** (PA4, SPI1_NSS, AF5) | Morpho connector | **Not Arduino D10** — firmware uses hardware NSS on PA4 |
+
+> **CS wiring is critical:** the firmware uses `SPI_NSS_HARD_OUTPUT` so the SPI peripheral drives PA4 directly. If you wire CS to Arduino D10 (PD14) instead of CN7 pin 17 (PA4), the sensor will never be selected and all reads will return 0xFF.
+
+**User interaction:** Press the **blue button (PC13)** on the NUCLEO board after power-on to trigger the SPI transaction.
+
+**LED indicators (on-board):**
+| LED | Pin | Meaning |
+|-----|-----|---------|
+| LED1 (green) | PB0 | Chip ID 0x60 received correctly — pass |
+| LED3 (red) | PB14 | Wrong chip ID or transfer error — fail |
+
+---
+
 ## Firmware Check
 
 The firmware achieves the required model goal:
