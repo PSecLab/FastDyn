@@ -65,3 +65,109 @@ For Sundial build of Fastdyn:
 sudo apt-get update
 sudo apt-get install -y libsundials-dev pkg-config
 ```
+
+---
+
+## LLM Integration (ChatGPT API)
+
+FastDyn can send generated prompts directly to the OpenAI ChatGPT API, process the
+response, and write or patch the device model automatically.
+
+### Setup
+
+#### 1. Install Dependencies
+
+The `openai` and `python-dotenv` packages are required. They are included in
+`requirements.txt`, so running `./setup.sh` or `pip install -r requirements.txt`
+will install them.
+
+#### 2. Configure Your API Key
+
+Create a file at `~/.fastdyn.env` with your OpenAI API key:
+
+```bash
+echo 'OPENAI_API_KEY=sk-your-key-here' > ~/.fastdyn.env
+chmod 600 ~/.fastdyn.env
+```
+
+Alternatively, export the environment variable directly:
+
+```bash
+export OPENAI_API_KEY=sk-your-key-here
+```
+
+The tool checks the environment variable first, then falls back to `~/.fastdyn.env`.
+You can also specify a custom env file with `--env-file /path/to/.env`.
+
+#### 3. Configure Build Paths (for `--compile`)
+
+If you want to use the `--compile` flag to automatically compile models, fill in
+the `boardrunner/boardrunner_sdk/build_config.env` file:
+
+```bash
+FASTDYN_INCLUDE_DIR=/path/to/FastDyn/include
+QEMU_INCLUDE_DIR=/path/to/qemu/include
+```
+
+### Usage
+
+```bash
+# Basic: send an initial prompt and extract the model
+fastdyn llm -d fastdyn_work_adc -o boardrunner/boardrunner_sdk/model/model.c
+
+# Use a specific model
+fastdyn llm -d fastdyn_work_adc -o model.c --model gpt-4.1
+
+# With compilation after extraction
+fastdyn llm -d fastdyn_work_adc -o boardrunner/boardrunner_sdk/model/model.c --compile
+
+# Revised prompt (patch mode) with retry
+fastdyn llm -d fastdyn_work -o boardrunner/boardrunner_sdk/model/model.c --max-retries 2
+
+# Disable the conversation-reset line for multi-turn context
+fastdyn llm -d fastdyn_work_adc -o model.c --no-stateless
+```
+
+### Command Reference
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-d` / `--work-dir` | (required) | Work directory with prompt files |
+| `-o` / `--output` | (required) | Model .c file path |
+| `--model` | `gpt-4o` | OpenAI model name |
+| `--env-file` | `~/.fastdyn.env` | Path to .env file with API key |
+| `--temperature` | `0.2` | Sampling temperature |
+| `--stateless` / `--no-stateless` | `--stateless` | Keep or strip the conversation reset line |
+| `--compile` / `--no-compile` | `--no-compile` | Compile model after writing |
+| `--sdk-dir` | `boardrunner/boardrunner_sdk` | Path to boardrunner SDK |
+| `--max-retries` | `1` | Max retry attempts on failure |
+
+### How It Works
+
+1. **Initial prompt** (`initial_prompt.txt`): The tool sends the prompt to ChatGPT,
+   extracts the C code from the fenced code block in the response, and writes it to
+   the output file.
+
+2. **Revised prompt** (`revised_prompt.txt`): The tool sends the prompt to ChatGPT,
+   parses SEARCH/REPLACE blocks from the response, and applies them as patches to
+   the existing model file.
+
+3. **On failure**: If a patch fails or compilation fails, the tool prompts you to
+   send a follow-up request to the LLM with the error context for automatic correction.
+
+4. The raw LLM response is always saved to `<work_dir>/llm_response.txt` for auditing.
+
+---
+
+## Unit Tests
+
+Unit tests live in `tests/unit/`. See `tests/unit/README.md` for conventions and
+detailed instructions.
+
+```bash
+# Run all unit tests
+pytest tests/unit/ -v
+
+# Run a specific test file
+pytest tests/unit/test_patch.py -v
+```

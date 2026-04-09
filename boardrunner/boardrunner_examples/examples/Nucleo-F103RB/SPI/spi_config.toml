@@ -107,13 +107,13 @@ logger_content = """
             # to the 'scroll_config' defined above.
             model   = "elder"
             enabled = true
-            scroll = "boardrunner/boardrunner_sdk/build/spi_model.so"
+            scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
         [[Device.spi.slaves]]
             model = ["elder"]       # attach this device to elder model only
             device = "bme280"
             cs_id = 0               # (Connect this slave to CS Line 0)
-            device_scroll = "boardrunner/boardrunner_sdk/build/spi_slave.so"
+            device_scroll = "boardrunner/boardrunner_sdk/build/slave.so"
 
         [[Device.spi.handlers]]
             model   = "classic"

@@ -88,7 +88,6 @@ uint32_t api_spi_transfer(SPIBus *bus, uint32_t val) {
 
             // Found the active slave. Call its transfer function, if it exists.
             if (current_slave->transfer) {
-                ret_val = current_slave->transfer(val);
                 return current_slave->transfer(val);
             } else {
                 // Slave is active but has no transfer function.

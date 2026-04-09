@@ -64,7 +64,7 @@ bool spi_slave_device_parse(SPIBus* bus, ConfigSection* model_info) {
 
                     char symbol[256];
 
-                    snprintf(symbol, sizeof(symbol), "%s_transfer", curr_slave_config->slave_name);
+                    snprintf(symbol, sizeof(symbol), "slave_spi_transfer");
                     new_slave->transfer = (SlaveTransferFunc)dlsym(scroll_handle, symbol);
                     if (!new_slave->transfer) {
                         fprintf(stderr, "Missing transfer function ('%s') in slave model '%s'\n", symbol, curr_slave_config->scroll_path);
@@ -74,7 +74,7 @@ bool spi_slave_device_parse(SPIBus* bus, ConfigSection* model_info) {
                         return false;
                     }
 
-                    snprintf(symbol, sizeof(symbol), "%s_set_cs", curr_slave_config->slave_name);
+                    snprintf(symbol, sizeof(symbol), "slave_spi_set_cs");
                     new_slave->set_cs = (SlaveSetcsFunc)dlsym(scroll_handle, symbol);
                     if (!new_slave->set_cs) {
                         fprintf(stderr, "Missing set_cs function ('%s') in slave model '%s'\n", symbol, curr_slave_config->scroll_path);
