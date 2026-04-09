@@ -15,9 +15,18 @@
 #include <gz/msgs/any.pb.h>
 #include <gz/msgs/laserscan.pb.h>
 #include <gz/msgs/uint32.pb.h>
+#include <gz/msgs/entity_factory.pb.h>
+#include <gz/msgs/boolean.pb.h>
+#include <gz/math/Quaternion.hh>
 #include <boost/circular_buffer.hpp>
 #include <iostream>
+#include <cmath>
+#include <cctype>
 #include <mutex>
+#include <atomic>
+#include <iomanip>
+#include <sstream>
+#include <functional>
 #include <thread>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -398,13 +407,21 @@ private:
     std::lock_guard<std::mutex> lock(mutex_);
     std::string scan_data;
     int num_samples = req.data();
-    scan_data += std::to_string(sample_index_); // include starting index in the response
-    std::string delimiter = ":";
+    // Format must be "start_index:range0,range1,..." so clients can parse with find(':')
+    // and stoi(start_index). Do NOT concatenate index + first range without ':' or
+    // "185" + "2.93" becomes "1852.93" and start_index is parsed wrong.
+    scan_data += std::to_string(sample_index_);
+    scan_data += ':';
     for (int i = 0; i < num_samples; ++i) {
       int index = (sample_index_ + i) % 400; // loop back to the beginning if we reach the end
-      scan_data += std::to_string(latest_scan_[index]) + delimiter;
-      if (i == 0) {
-        delimiter = ",";
+      if (i > 0) {
+        scan_data += ',';
+      }
+      const double r = latest_scan_[index];
+      if (std::isinf(r) || std::isnan(r)) {
+        scan_data += "inf";
+      } else {
+        scan_data += std::to_string(r);
       }
     }
     sample_index_ = (sample_index_ + num_samples) % 400; // update sample index for next call
@@ -1128,8 +1145,200 @@ private:
   std::mutex mutex_;
 };
 
+/**
+ * @brief Parse /world/<name>/... from a full Gazebo topic path.
+ */
+static std::string WorldNameFromNavsatTopic(const std::string &navsat_topic)
+{
+  const std::string key = "/world/";
+  const std::size_t p = navsat_topic.find(key);
+  if (p == std::string::npos) {
+    return "runway";
+  }
+  const std::size_t start = p + key.size();
+  const std::size_t slash = navsat_topic.find('/', start);
+  if (slash == std::string::npos) {
+    return "runway";
+  }
+  return navsat_topic.substr(start, slash - start);
+}
 
+/**
+ * @brief Parse model scoped name from /model/<name>/pose.
+ */
+static std::string ModelNameFromPoseTopic(const std::string &pose_topic)
+{
+  const std::string pre = "/model/";
+  const std::string suf = "/pose";
+  if (pose_topic.size() <= pre.size() + suf.size()) {
+    return "";
+  }
+  if (pose_topic.compare(0, pre.size(), pre) != 0) {
+    return "";
+  }
+  if (pose_topic.compare(pose_topic.size() - suf.size(), suf.size(), suf) != 0) {
+    return "";
+  }
+  return pose_topic.substr(pre.size(), pose_topic.size() - pre.size() - suf.size());
+}
 
+/**
+ * @brief Advertises /place_box_relative: spawn a box in the sim world at a
+ *        pose relative to the vehicle model (Gazebo EntityFactory relative_to).
+ *
+ * Request body: JSON on gz::msgs::StringMsg::data(), e.g.
+ *   {"x":1,"y":0,"z":0,"sx":0.5,"sy":0.5,"sz":0.5,"roll":0,"pitch":0,"yaw":0}
+ * Optional keys: name (unique model name), relative_to (override frame),
+ * mass (kg), wait (if true, block for gz-sim reply — slows sim; default false),
+ * timeout_ms (only when wait=true).
+ *
+ * Default behavior sends /world/.../create asynchronously so this service returns
+ * immediately and does not block simulation.
+ *
+ * Response: JSON with dispatched, transport_ok, name; if wait=true also gz_result.
+ */
+class PlaceRelativeBoxService
+{
+public:
+  PlaceRelativeBoxService(gz::transport::Node &node,
+                          const std::string &world_name,
+                          const std::string &vehicle_model_name)
+    : node_(node),
+      world_(world_name),
+      vehicle_(vehicle_model_name)
+  {
+    node_.Advertise("/place_box_relative",
+                    &PlaceRelativeBoxService::OnRequest, this);
+  }
+
+private:
+  static bool IsSafeModelToken(const std::string &s)
+  {
+    for (char c : s) {
+      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) {
+        return false;
+      }
+    }
+    return !s.empty();
+  }
+
+  bool OnRequest(const gz::msgs::StringMsg &req, gz::msgs::StringMsg &rep)
+  {
+    try {
+      const json j = json::parse(req.data());
+      const double x = j.value("x", 0.0);
+      const double y = j.value("y", 0.0);
+      const double z = j.value("z", 0.0);
+      const double sx = j.value("sx", 1.0);
+      const double sy = j.value("sy", 1.0);
+      const double sz = j.value("sz", 1.0);
+      const double mass = j.value("mass", 1.0);
+      const double roll = j.value("roll", 0.0);
+      const double pitch = j.value("pitch", 0.0);
+      const double yaw = j.value("yaw", 0.0);
+
+      std::string rel = j.value("relative_to", vehicle_);
+      if (rel.empty()) {
+        rel = vehicle_;
+      }
+
+      std::string box_name = j.value("name", std::string(""));
+      if (!IsSafeModelToken(box_name)) {
+        box_name = "placed_box_" + std::to_string(++counter_);
+      }
+
+      std::ostringstream sdf;
+      sdf << std::setprecision(17);
+      sdf << "<?xml version=\"1.0\" ?><sdf version=\"1.6\">"
+          << "<model name=\"inline_box\">"
+          << "<link name=\"link\">"
+          << "<inertial><mass>" << mass << "</mass></inertial>"
+          << "<visual name=\"v\"><geometry><box><size>"
+          << sx << " " << sy << " " << sz
+          << "</size></box></geometry></visual>"
+          << "<collision name=\"c\"><geometry><box><size>"
+          << sx << " " << sy << " " << sz
+          << "</size></box></geometry></collision>"
+          << "</link></model></sdf>";
+
+      const gz::math::Quaterniond q(roll, pitch, yaw);
+
+      gz::msgs::EntityFactory factory;
+      factory.set_sdf(sdf.str());
+      factory.set_name(box_name);
+      factory.set_allow_renaming(true);
+      factory.set_relative_to(rel);
+      factory.mutable_pose()->mutable_position()->set_x(x);
+      factory.mutable_pose()->mutable_position()->set_y(y);
+      factory.mutable_pose()->mutable_position()->set_z(z);
+      factory.mutable_pose()->mutable_orientation()->set_x(q.X());
+      factory.mutable_pose()->mutable_orientation()->set_y(q.Y());
+      factory.mutable_pose()->mutable_orientation()->set_z(q.Z());
+      factory.mutable_pose()->mutable_orientation()->set_w(q.W());
+
+      const std::string svc = "/world/" + world_ + "/create";
+      const bool wait_for_reply = j.value("wait", false);
+
+      json out;
+      out["name"] = box_name;
+      out["async"] = !wait_for_reply;
+
+      if (wait_for_reply) {
+        gz::msgs::Boolean gz_rep;
+        bool gz_result = false;
+        unsigned int timeout_ms =
+            static_cast<unsigned int>(j.value("timeout_ms", 60000));
+        if (timeout_ms < 1000u) {
+          timeout_ms = 1000u;
+        }
+        const bool executed =
+            node_.Request(svc, factory, timeout_ms, gz_rep, gz_result);
+        out["transport_ok"] = executed;
+        out["gz_result"] = gz_result;
+        out["gz_accepted"] = gz_rep.data();
+        out["create_timeout_ms"] = timeout_ms;
+        if (!executed) {
+          out["error"] = "Timed out or unreachable: " + svc;
+        } else if (!gz_result) {
+          out["error"] = "Gazebo create returned false";
+        }
+      } else {
+        std::function<void(const gz::msgs::Boolean &, bool)> on_create_reply =
+            [box_name](const gz::msgs::Boolean &gz_rep, bool gz_result) {
+              if (DEBUG) {
+                std::cerr << "[place_box_relative] async create \"" << box_name
+                          << "\" gz_result=" << gz_result
+                          << " accepted=" << gz_rep.data() << "\n";
+              } else if (!gz_result) {
+                std::cerr << "[place_box_relative] create failed for \""
+                          << box_name << "\"\n";
+              }
+            };
+        const bool dispatched = node_.Request(svc, factory, on_create_reply);
+        out["dispatched"] = dispatched;
+        out["transport_ok"] = dispatched;
+        if (!dispatched) {
+          out["error"] = "Could not send create request (discovery failed?): " + svc;
+        }
+      }
+
+      rep.set_data(out.dump());
+      return true;
+    } catch (const std::exception &e) {
+      json err;
+      err["transport_ok"] = false;
+      err["gz_result"] = false;
+      err["error"] = e.what();
+      rep.set_data(err.dump());
+      return true;
+    }
+  }
+
+  gz::transport::Node &node_;
+  std::string world_;
+  std::string vehicle_;
+  std::atomic<uint64_t> counter_{0};
+};
 
 int main(int argc, char **argv)
 {
@@ -1190,6 +1399,13 @@ int main(int argc, char **argv)
   if (model_name == "r1_rover") {
     altimeter_topic = "/world/runway/altitude";
   }
+
+  const std::string sim_world_name = WorldNameFromNavsatTopic(navsat_topic);
+  std::string vehicle_scope_name = ModelNameFromPoseTopic(pose_topic);
+  if (vehicle_scope_name.empty()) {
+    vehicle_scope_name = model_name;
+  }
+  PlaceRelativeBoxService placeBoxService(node, sim_world_name, vehicle_scope_name);
 
   GenericSensorService<gz::msgs::NavSat> navSatService(
     node,

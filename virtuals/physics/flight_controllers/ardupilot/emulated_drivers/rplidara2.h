@@ -90,8 +90,11 @@ typedef struct {
  */
 void rplidar_init(rplidar_dev_t *dev);
 
-/*
- * Returns the number of bytes currently queued and ready to be read.
+/**
+ * @brief Returns the number of bytes currently queued and ready to be read.
+ *
+ * @param dev Pointer to the device instance.
+ * @return Number of bytes available for reading.
  */
 size_t rplidar_available(rplidar_dev_t *dev);
 
@@ -108,11 +111,16 @@ size_t rplidar_available(rplidar_dev_t *dev);
  */
 size_t rplidar_read(rplidar_dev_t *dev, uint8_t *dst, size_t len);
 
-/*
- * Feed len bytes of host-to-device command data into the emulator.
+/**
+ * @brief Feed len bytes of host-to-device command data into the emulator.
  * Valid 2-byte commands (preamble 0xA5 + command byte) are acted on
  * immediately; unrecognised commands are silently ignored.
  * Returns the number of bytes consumed.
+ *
+ * @param dev Pointer to the device instance.
+ * @param src Buffer containing command data.
+ * @param len Number of bytes to consume.
+ * @return Number of bytes consumed.
  */
 size_t rplidar_write(rplidar_dev_t *dev, const uint8_t *src, size_t len);
 

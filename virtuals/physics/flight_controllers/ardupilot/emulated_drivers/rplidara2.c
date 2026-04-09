@@ -319,6 +319,14 @@ size_t rplidar_available(rplidar_dev_t *dev)
 
 size_t rplidar_read(rplidar_dev_t *dev, uint8_t *dst, size_t len)
 {
+    /*
+     * Some UART stacks may call read() opportunistically even when they
+     * don't poll available() first. Keep scan data flowing by topping up
+     * here as well when the TX FIFO is running low.
+     */
+    if (dev->mode == RPLIDAR_DEV_SCANNING && fifo_available(&dev->tx_fifo) < 128) {
+        prime_scan_nodes(dev, RPLIDAR_SAMPLE_BATCH);
+    }
     return fifo_read(&dev->tx_fifo, dst, len);
 }
 

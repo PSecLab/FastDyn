@@ -21,28 +21,35 @@
 #include <mutex>
 #include <charconv>
 
+namespace {
+// One transport node per loaded shared object, hidden to this TU.
+gz::transport::Node &shared_gz_node()
+{
+    static gz::transport::Node node;
+    return node;
+}
+} // namespace
+
 template <typename ResponseT>
 bool request_service(const std::string &service_name, ResponseT &response,
                      unsigned int timeout_ms = 5000)
 {
-    gz::transport::Node node;
     gz::msgs::Empty request;
 
     bool result;
-    bool executed = node.Request(service_name, request, timeout_ms, response, result);
+    bool executed = shared_gz_node().Request(service_name, request, timeout_ms, response, result);
 
     return executed && result;
 }
 
 bool request_run_until_time(double run_until_time_s) {
-    gz::transport::Node node;
     gz::msgs::Time request;
     request.set_sec(static_cast<uint32_t>(std::floor(run_until_time_s)));
     request.set_nsec(static_cast<uint32_t>((run_until_time_s - std::floor(run_until_time_s)) * 1e9));
 
     gz::msgs::Boolean response;
     bool result;
-    bool executed = node.Request("/set_run_until_time", request, 5000, response, result);
+    bool executed = shared_gz_node().Request("/set_run_until_time", request, 5000, response, result);
 
     return executed && result && response.data();
 }
@@ -199,8 +206,6 @@ static void quaternion_from_yaw(double yaw, gz::msgs::Quaternion *quat)
 // Set pose service call, returns 0 on success, -1 on failure
 static int set_pose(double yaw_deg)
 {
-    gz::transport::Node node;
-
     gz::msgs::Pose pose_msg;
     pose_msg.set_name("r1_rover");
 
@@ -218,7 +223,7 @@ static int set_pose(double yaw_deg)
     // Boolean response
     gz::msgs::Boolean rep;
     bool result;
-    bool executed = node.Request("/world/runway/set_pose", pose_msg, 5000, rep, result);
+    bool executed = shared_gz_node().Request("/world/runway/set_pose", pose_msg, 5000, rep, result);
 
     if (!executed || !result)
         return 0;
@@ -290,13 +295,12 @@ static int set_servo_pwm(int channel, int pwm) {
         return 0;
     }
 
-    gz::transport::Node node;
     gz::msgs::StringMsg request;
     request.set_data(std::to_string(channel) + "," + std::to_string(pwm));
 
     gz::msgs::Boolean response;
     bool result;
-    bool executed = node.Request("/set_servo", request, 5000, response, result);
+    bool executed = shared_gz_node().Request("/set_servo", request, 5000, response, result);
 
     if (!executed || !result || !response.data()) {
         return 0;
@@ -367,13 +371,12 @@ static int get_imu_batch(imu_batch_t *imu_batch) {
 }
 
 static int set_hardfault_pc(uint32_t pc) {
-    gz::transport::Node node;
     gz::msgs::UInt32 request;
     request.set_data(pc);
 
     gz::msgs::Empty response;
     bool result;
-    bool executed = node.Request("/set_hardfault_pc", request, 5000, response, result);
+    bool executed = shared_gz_node().Request("/set_hardfault_pc", request, 5000, response, result);
     return 1;
 }
 
@@ -384,6 +387,16 @@ static int get_altimeter_reading(double *altitude) {
     }
     *altitude = response.vertical_position();
     return 1;
+}
+
+// [0, 360) degrees; same normalization as make_rplidar_sample uses internally.
+static inline float wrap_360(float angle_deg)
+{
+    angle_deg = fmodf(angle_deg, 360.0f);
+    if (angle_deg < 0.0f) {
+        angle_deg += 360.0f;
+    }
+    return angle_deg;
 }
 
 // angle_deg: any real angle, normalized to [0, 360)
@@ -459,9 +472,8 @@ static int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples) {
     request.set_data(static_cast<int>(num_samples));
 
     gz::msgs::StringMsg response;
-    gz::transport::Node node;
     bool result;
-    bool executed = node.Request("/get_laser_scan", request, 5000, response, result);
+    bool executed = shared_gz_node().Request("/get_laser_scan", request, 5000, response, result);
     if (!executed || !result) {
         return 0;
     }
@@ -488,12 +500,14 @@ static int get_lidar_samples(rplidar_sample_t *samples, size_t num_samples) {
             range = std::stof(range_str);
         }
         float angle_deg = index_to_angle((start_index + count) % 400) * 180.0f / M_PI; // convert to degrees
+        // wrap 360 
+        angle_deg = wrap_360(360.0f - angle_deg);
         int idx = (start_index + count) % 400;
         uint8_t start_flag = (idx == 0) ? 1 : 0;
         samples[count] = make_rplidar_sample(angle_deg, range, 60, start_flag);
         count++;
     }
-    return 1;
+    return static_cast<int>(count);
 }
 
 static int gz_init(void)
