@@ -131,6 +131,63 @@ If generation fails (parse error, compile error), FastDyn automatically retries 
 
 LLM prompt/response pairs are saved permanently in `fastdyn_llm_history/` (sibling of `fastdyn_work`) as `NNN_prompt.txt` / `NNN_response_M.txt`, accumulating across runs for debugging and audit.
 
+**Evaluation metrics (optional):** Add `--evaluate` to the `llm` command to collect per-call API metrics (token counts, cost, latency) to `fastdyn_llm_history/metrics.jsonl`:
+
+```bash
+fastdyn llm \
+  -d fastdyn_work_<name>          \
+  -o path/to/generated/model.c    \
+  --compile                        \
+  --model gpt-5.4                  \
+  --reasoning-effort medium         \
+  --evaluate                        \   # write per-call metrics to metrics.jsonl
+  --max-retries 5                       # retry up to 5 times on failure
+```
+
+Each JSON line in `metrics.jsonl` contains: `model`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `total_tokens`, `latency_seconds`, `call_id`, `iteration`, `attempt`, `type` (initial/revision/followup), and `result` (success/parse_fail/compile_fail).
+
+---
+
+### Ablation Study Flags
+
+The framework provides three flags to isolate the contribution of individual BoardRunner-Learner components. These are intended for controlled evaluation experiments; they are not used during normal operation.
+
+| Flag | Command | What it disables |
+|------|---------|-----------------|
+| `--no-encoder` | `fastdyn generate` | Skips the Encoder (context minimizer). The raw `io.log` trace is fed directly into the LLM prompt instead of the compact automaton with SVD annotations, pattern mining, entropy analysis, and ISR detection. |
+| `--no-vio` | `fastdyn generate` | Strips VIO API definitions from the prompt. Only base QEMU/FastDyn APIs (memory read/write, IRQ raise, timers) are provided. The LLM must synthesize the model without higher-level bus abstractions (I2C, SPI, DMA, signal APIs). |
+| `--no-rca` | `fastdyn verifier` | Disables Root Cause Analysis. On mismatch, writes a generic retry prompt (original prompt + "please fix") as `revised_prompt.txt` instead of the targeted RCA-based correction prompt with mismatch diagnostics. |
+
+**Example ablation commands:**
+
+```bash
+# A1: No Encoder -- raw trace as prompt
+fastdyn generate -hw hardware_log/io.log -b Max78000 \
+  -p UART -mname UART -ms UART -o ./fastdyn_work_a1 \
+  --no-encoder
+
+# A2: No RCA -- generic retry on verification failure
+fastdyn verifier -hw hardware_log/io.log -em io.log \
+  -b Max78000 -p UART -mname UART \
+  -d UART:model.c --no-rca
+# Then send the generic revised_prompt.txt to the LLM as normal:
+fastdyn llm -d fastdyn_work -o model.c --compile \
+  --model gpt-5.4 --reasoning-effort medium \
+  --evaluate --max-retries 5
+
+# A3: No VIO -- stripped API definitions
+fastdyn generate -hw hardware_log/io.log -b Max78000 \
+  -p UART -mname UART -ms UART -o ./fastdyn_work_a3 \
+  --no-vio
+
+# A1+A3 combined: raw trace + no VIO APIs
+fastdyn generate -hw hardware_log/io.log -b Max78000 \
+  -p UART -mname UART -ms UART -o ./fastdyn_work_a1a3 \
+  --no-encoder --no-vio
+```
+
+All ablation flags are compatible with `--evaluate` for metrics collection.
+
 ---
 
 ### Step 3 — Run the firmware with the learned model

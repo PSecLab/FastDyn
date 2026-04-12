@@ -181,8 +181,22 @@ def run(config, map_file, work_dir, svd, persist_work_dir):
          'Required when --model-name does not match or contain any peripheral name. '
          'Example: -ms DMA1 -ms DMAMUX1'
 )
+@click.option(
+    '--no-vio',
+    is_flag=True,
+    default=False,
+    help='Ablation mode: strip VIO API definitions from the generated prompt, '
+         'providing only base QEMU/FastDyn APIs (raw MMIO callbacks).'
+)
+@click.option(
+    '--no-encoder',
+    is_flag=True,
+    default=False,
+    help='Ablation mode: skip the Encoder (context minimizer). Feed the raw I/O trace '
+         'directly to the LLM prompt instead of the compact automaton.'
+)
 def generate(hardware_log, slave_model, reference_model, firmware_code, board, peripheral, model_name,
-             method, n, isr_window, work_dir, svd, model_sources):
+             method, n, isr_window, work_dir, svd, model_sources, no_vio, no_encoder):
     """Generates the LLM Prompt using the hardware log passed by the user."""
     if slave_model:
         if reference_model is None:
@@ -256,52 +270,69 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
         log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
         svd_device = parse_helper.get_svd_device(svd_file)
 
-        #minimize the context -- since all the other peripherals are also part of the model, we dont need to do it multiple times
-        cm_path = cm.minimize_context(
-            out_dir=work_dir,
-            log_file=hardware_log,
-            platform=platform,
-            method=method,
-            peripheral=peripheral[0],
-            n=n,
-            svd_device=svd_device,
-            isr_window=isr_window,
-            cm_dir_name="out_cm"
+        if no_encoder:
+            # Ablation A1: Skip the Encoder entirely. Generate prompt from raw I/O trace.
+            log.info("Ablation mode: --no-encoder enabled. Skipping Encoder, using raw I/O trace.")
+            from fastdyn.verifier.prompt_gen import generate_prompt_no_encoder
+            final_prompt = generate_prompt_no_encoder(
+                hardware_log=hardware_log,
+                peripheral_name=peripheral[0],
+                platform_name=platform,
+                no_vio=no_vio,
             )
+            Path(work_dir).mkdir(parents=True, exist_ok=True)
+            output_path = Path(work_dir) / "initial_prompt.txt"
+            output_path.write_text(final_prompt + "\n", encoding="utf-8")
+            log.info(f"Ablation prompt (no encoder) written to {output_path}")
+        else:
+            #minimize the context -- since all the other peripherals are also part of the model, we dont need to do it multiple times
+            cm_path = cm.minimize_context(
+                out_dir=work_dir,
+                log_file=hardware_log,
+                platform=platform,
+                method=method,
+                peripheral=peripheral[0],
+                n=n,
+                svd_device=svd_device,
+                isr_window=isr_window,
+                cm_dir_name="out_cm"
+                )
 
-        #generate the prompt - we will generate a prompt such that it covers all the peripherals requested by the user
-        #TODO: Refactor and clean later
-        if len(peripheral) > 1:
-            for periph in peripheral:
-                periph_path = os.path.join(cm_path, periph)
-                if not os.path.exists(periph_path):
-                    log.error(f"Requested Peripheral {periph} does not exist!")
-                    sys.exit(1)
-
-            # Validate model_sources if explicitly provided
-            if model_sources:
-                for ms in model_sources:
-                    if ms not in peripheral:
-                        log.error(
-                            f"--model-source '{ms}' is not in the peripheral list {list(peripheral)}. "
-                            f"Only peripherals passed with -p can be used as a model source."
-                        )
+            #generate the prompt - we will generate a prompt such that it covers all the peripherals requested by the user
+            #TODO: Refactor and clean later
+            if len(peripheral) > 1:
+                for periph in peripheral:
+                    periph_path = os.path.join(cm_path, periph)
+                    if not os.path.exists(periph_path):
+                        log.error(f"Requested Peripheral {periph} does not exist!")
                         sys.exit(1)
 
-            pg_path = pg.initial_prompt_gen_multiple_periphs(
-                analysis_dir=cm_path,
-                model_name=model_name,
-                peripherals=peripheral,
-                model_sources=model_sources or None,   # pass None so the function applies its heuristic
-                out_dir=work_dir,
-                user_obs=''
-            )
-        else:
-            pg_path = pg.initial_prompt_gen(
-                analysis_dir=cm_path,
-                peripheral=peripheral[0],
-                out_dir=work_dir
-            )
+                # Validate model_sources if explicitly provided
+                if model_sources:
+                    for ms in model_sources:
+                        if ms not in peripheral:
+                            log.error(
+                                f"--model-source '{ms}' is not in the peripheral list {list(peripheral)}. "
+                                f"Only peripherals passed with -p can be used as a model source."
+                            )
+                            sys.exit(1)
+
+                pg_path = pg.initial_prompt_gen_multiple_periphs(
+                    analysis_dir=cm_path,
+                    model_name=model_name,
+                    peripherals=peripheral,
+                    model_sources=model_sources or None,   # pass None so the function applies its heuristic
+                    out_dir=work_dir,
+                    no_vio=no_vio,
+                    user_obs=''
+                )
+            else:
+                pg_path = pg.initial_prompt_gen(
+                    analysis_dir=cm_path,
+                    peripheral=peripheral[0],
+                    out_dir=work_dir,
+                    no_vio=no_vio
+                )
 
 @cli.command(
     'verifier',
@@ -391,8 +422,15 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
     metavar='PATH',
     help='Optional path to an SVD file or directory.'
 )
+@click.option(
+    '--no-rca',
+    is_flag=True,
+    default=False,
+    help='Ablation mode: on mismatch, generate a generic retry prompt instead of '
+         'the targeted RCA-based revised_prompt.txt.'
+)
 def verifier(hardware_log, emulation_log, device_models, model_names, board,
-             peripheral, method, n, isr_window, work_dir, svd):
+             peripheral, method, n, isr_window, work_dir, svd, no_rca):
     """Verifies the model against hardware and emulation logs."""
     log.info("Running Verifier")
 
@@ -510,17 +548,49 @@ def verifier(hardware_log, emulation_log, device_models, model_names, board,
         )
 
         if not_match:
-            log.warning("Log mismatch! Generating prompt.")
-            pg_path = pg.iteration_prompt_gen(
-                diff_obj=diff_obj,
-                device_model_path=list(model_to_path.values())[0],
-                peripheral=peripheral[0],
-                out_dir=work_dir,
-            )
+            if no_rca:
+                # Ablation A2: generate a generic retry prompt instead of RCA output.
+                # Written as initial_prompt.txt (not revised_prompt.txt) so the llm
+                # command uses full code extraction mode, not SEARCH/REPLACE patching.
+                log.warning("Log mismatch! --no-rca: generating generic retry prompt (no RCA).")
+                import glob as _glob
+                candidates = _glob.glob(os.path.join(os.path.dirname(work_dir), "*", "initial_prompt.txt"))
+                if not candidates:
+                    candidates = _glob.glob(os.path.join(work_dir, "initial_prompt.txt"))
+
+                if candidates:
+                    with open(candidates[0], "r", encoding="utf-8") as f:
+                        original_prompt = f.read()
+                else:
+                    original_prompt = ""
+                    log.warning("Could not find initial_prompt.txt for --no-rca fallback.")
+
+                generic_prompt = (
+                    original_prompt +
+                    "\n\n## Correction Required\n"
+                    "The previously generated model failed verification against the hardware trace. "
+                    "Please review the trace data above carefully and generate a corrected model "
+                    "that faithfully reproduces the observed hardware behavior.\n"
+                )
+                # Write as initial_prompt.txt so llm uses full code extraction (not SEARCH/REPLACE)
+                prompt_path = os.path.join(work_dir, "initial_prompt.txt")
+                with open(prompt_path, "w", encoding="utf-8") as f:
+                    f.write(generic_prompt)
+                log.info("Generic retry prompt (no RCA) written to %s", prompt_path)
+            else:
+                log.warning("Log mismatch! Generating prompt.")
+                pg_path = pg.iteration_prompt_gen(
+                    diff_obj=diff_obj,
+                    device_model_path=list(model_to_path.values())[0],
+                    peripheral=peripheral[0],
+                    out_dir=work_dir,
+                )
         else:
             log.info("Both hardware log and emulation log matched!")
 
     else:
+        if no_rca and not_match:
+            log.warning("Log mismatch! --no-rca: generic retry prompt not yet supported for multi-peripheral mode.")
         pg_path = pg.iteration_prompt_gen_multiple_periph(
             cm_path_hardware=cm_path_hardware,
             cm_path_emulation=cm_path_emulation,
@@ -723,7 +793,13 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
     type=int,
     help='Maximum number of retry attempts on patch or compilation failure.'
 )
-def llm(work_dir, output, model, env_file, temperature, reasoning_effort, stateless, compile, sdk_dir, max_retries):
+@click.option(
+    '--evaluate/--no-evaluate',
+    default=False,
+    show_default=True,
+    help='Enable evaluation metrics logging. Writes per-call metrics to fastdyn_llm_history/metrics.jsonl.'
+)
+def llm(work_dir, output, model, env_file, temperature, reasoning_effort, stateless, compile, sdk_dir, max_retries, evaluate):
     """Sends a prompt to the ChatGPT API and processes the response."""
     from fastdyn.llm.llm_client import LLMClient, LLMClientError, load_api_key
     from fastdyn.llm.response_parser import (
@@ -797,6 +873,27 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         log.error(str(e))
         sys.exit(1)
 
+    # -- Evaluation metrics setup -----------------------------------------------
+    metrics_path = None
+    if evaluate:
+        import json as _json
+        metrics_path = os.path.join(history_dir, "metrics.jsonl")
+        log.info("Evaluation mode enabled. Metrics will be written to %s", metrics_path)
+
+    def _write_metrics(metrics, attempt_num, call_type, extra=None):
+        """Append a metrics JSON line if --evaluate is enabled."""
+        if not evaluate or metrics is None:
+            return
+        entry = metrics.to_dict()
+        entry["iteration"] = history_iter
+        entry["attempt"] = attempt_num
+        entry["type"] = call_type
+        entry["reasoning_effort"] = reasoning_effort
+        if extra:
+            entry.update(extra)
+        with open(metrics_path, "a", encoding="utf-8") as mf:
+            mf.write(_json.dumps(entry) + "\n")
+
     # -- Send prompt and process response -------------------------------------
     attempt = 0
     max_attempts = 1 + max_retries
@@ -809,14 +906,14 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         try:
             if is_retry and previous_response:
                 log.info("Retry attempt %d/%d...", attempt - 1, max_retries)
-                response_text = client.send_followup_prompt(
+                response_text, call_metrics = client.send_followup_prompt(
                     original_prompt=prompt_text,
                     previous_response=previous_response,
                     error_context=error_context,
                     stateless=stateless,
                 )
             else:
-                response_text = client.send_prompt(prompt_text, stateless=stateless)
+                response_text, call_metrics = client.send_prompt(prompt_text, stateless=stateless)
         except LLMClientError as e:
             log.error("LLM request failed: %s", str(e))
             sys.exit(1)
@@ -855,6 +952,8 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
             )
 
         if not success:
+            call_type = "followup" if is_retry else ("revision" if prompt_type == "revised" else "initial")
+            _write_metrics(call_metrics, attempt, call_type, {"result": "parse_fail"})
             if attempt < max_attempts:
                 # Use builtin input() to avoid click.confirm TTY hangs
                 user_reply = input("Send a follow-up request to the LLM with error context? [Y/n]: ").strip().lower()
@@ -872,6 +971,8 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         if compile:
             compile_success, compile_error, is_setup_error = handle_compilation(sdk_dir)
             if not compile_success:
+                call_type = "followup" if is_retry else ("revision" if prompt_type == "revised" else "initial")
+                _write_metrics(call_metrics, attempt, call_type, {"result": "compile_fail"})
                 if is_setup_error:
                     log.error("Aborting LLM loop due to compilation setup error.")
                     sys.exit(1)
@@ -891,6 +992,8 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
                     sys.exit(1)
 
         # If we reach here, everything succeeded
+        call_type = "followup" if is_retry else ("revision" if prompt_type == "revised" else "initial")
+        _write_metrics(call_metrics, attempt, call_type, {"result": "success"})
         log.info("LLM processing completed successfully.")
         break
 

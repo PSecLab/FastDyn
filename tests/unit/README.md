@@ -13,6 +13,8 @@ tests/unit/
   test_response_parser.py   # Tests for LLM response parsing
   test_patch.py             # Tests for SEARCH/REPLACE patch application
   test_llm_client.py        # Tests for LLM client (mocked, no real API calls)
+  test_evaluate_metrics.py  # Tests for --evaluate metrics (LLMCallMetrics, JSONL output)
+  test_ablation_flags.py    # Tests for --no-encoder, --no-vio, --no-rca ablation flags
 ```
 
 ## How to Run
