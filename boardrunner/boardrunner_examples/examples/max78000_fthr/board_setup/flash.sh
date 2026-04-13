@@ -5,7 +5,7 @@
 set -e
 
 # 1. Update Path to Maxim SDK (Based on your log)
-MAXIM_PATH="/home/hammad/work/Softwares/Maxim"
+MAXIM_PATH="/scratch/Softwares/Maxim_Installation/Maxim_Installation_Folder"
 
 # 2. Point to the specific Maxim OpenOCD binary
 # The log shows the tools are in $MAXIM_PATH/Tools/OpenOCD
