@@ -25,6 +25,7 @@ class DiffLog:
         self.raw_state = None      # dict with rmw_hw, rmw_em, wp_hw_str, wp_em_str
         self.raw_entropy = None    # dict with entropy_hw, entropy_em, warnings list
         self.diff_runtime_trace = None
+        self.rare_transitions_data = None
         self.isr_analysis_data = None
 
 #This function will compare the automata for the given automatas...
@@ -47,6 +48,7 @@ def verify_automata(automata1, automata2, peripheral):
         differential_data.diff_state_data = "CRITICAL ERROR: Emulation crashed early. Check your model code for infinite loops, bad memory accesses, or missing behaviors causing the firmware to halt/panic."
         differential_data.diff_entropy_data = "CRITICAL ERROR: Emulation crashed."
         differential_data.diff_runtime_trace = "CRITICAL ERROR: Emulation crashed. This peripheral was never accessed in emulation."
+        differential_data.rare_transitions_data = ""
         differential_data.isr_analysis_data = "CRITICAL ERROR: Emulation crashed."
         return True, differential_data
 
@@ -76,6 +78,14 @@ def verify_automata(automata1, automata2, peripheral):
     #Check the ISR Analysis
     fastdyn_log.info('Performing Verification for the ISRs')
     diff_isr_analysis(differential_data, periph_hw, periph_em)
+
+    # Pass through rare value transitions from the hardware trace (no diff needed)
+    rare_path = os.path.join(periph_hw, 'rare_transitions.txt')
+    if os.path.exists(rare_path):
+        with open(rare_path, 'r') as f:
+            differential_data.rare_transitions_data = f.read()
+    else:
+        differential_data.rare_transitions_data = ''
 
     return differential_data.not_match, differential_data
 

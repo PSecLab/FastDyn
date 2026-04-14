@@ -486,6 +486,12 @@ These files contain the most common repeating sequences of operations during run
 {diff_obj.diff_loop_pattern_data}
 ```
 
+## Rare Value Transitions (`rare_transitions.txt`):
+These are read values from LOW-entropy (status/control) registers that did NOT appear in the dominant loop patterns above. They represent infrequent but important state changes that the model MUST handle correctly. Pay close attention to these values — they reveal how the register behaves in a different operational phase (e.g. data available vs. idle).
+```
+{diff_obj.rare_transitions_data}
+```
+
 ## Stateful Behavior Analysis (`state.txt`):
 This file identifies programming patterns like Read-Modify-Write (RMW), which indicate stateful registers.
 ```
@@ -582,6 +588,7 @@ def generate_prompt(peripheral_directory: str, no_vio: bool = False) -> str:
     init_data = read_file_content(os.path.join(peripheral_directory, "init.txt"))
     state_data = read_file_content(os.path.join(peripheral_directory, "state.txt"))
     entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
+    rare_transitions_data = read_file_content(os.path.join(peripheral_directory, "rare_transitions.txt"))
     loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
     isr_analysis_data = read_file_content(isr_analysis)
 
@@ -637,6 +644,12 @@ This file contains all accesses that occur before the main runtime loop begins.
 These files contain the most common repeating sequences of operations during runtime.
 ```
 {loop_data}
+```
+
+## Rare Value Transitions (`rare_transitions.txt`):
+These are read values from LOW-entropy (status/control) registers that did NOT appear in the dominant loop patterns above. They represent infrequent but important state changes that the model MUST handle correctly. Pay close attention to these values — they reveal how the register behaves in a different operational phase (e.g. data available vs. idle).
+```
+{rare_transitions_data}
 ```
 
 ## Stateful Behavior Analysis (`state.txt`):
@@ -1308,6 +1321,12 @@ def iteration_prompt_gen_multiple_periph(
         ### Detected Runtime Loops
 ```
         {diff_obj.diff_loop_pattern_data}
+```
+
+        ### Rare Value Transitions
+        These are read values from LOW-entropy (status/control) registers that did NOT appear in the dominant loop patterns. They represent infrequent but important state changes that the model MUST handle correctly.
+```
+        {diff_obj.rare_transitions_data}
 ```
 
         ### Stateful Behavior Analysis

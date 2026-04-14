@@ -81,6 +81,17 @@ static void* dev_thread_fn(void* arg) {
 					dev_debug("Register%d: 0x%lx\n", i, hw_read_reg(hw, i));
 				}
 				int firing_line = hw_read_reg(hw, 0);
+
+				if (firing_line < 1 || firing_line > 240) {
+					// Spurious halt (debugger halt on connect, not monitor BKPT).
+					// Resume the board so the monitor firmware can start running.
+					printf("passthrough: spurious halt (r0=%d), resuming board\n", firing_line);
+					hw_board_run(hw);
+					pthread_mutex_unlock(&hw_mutex);
+					usleep(100000);
+					continue;
+				}
+
 				irq_pending = firing_line;
 
 				dev_debug("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));

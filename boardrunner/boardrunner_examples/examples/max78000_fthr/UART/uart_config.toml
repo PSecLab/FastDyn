@@ -66,7 +66,7 @@ finline      = ""
   machine = "cortexm"
   cpu     = "cortex-m4"
 
-  binary = "boardrunner/boardrunner_examples/examples/max78000_fthr/usart/firmware/UART_firmware.elf"
+  binary = "boardrunner/boardrunner_examples/examples/max78000_fthr/UART/firmware/UART.elf"
 
   init_nsvtor = "0x10000000"
 
@@ -109,10 +109,15 @@ finline      = ""
 # Devices (MAX78000)
 # ==============================================================================
 
-# UART0 (Low Power UART)
+# --- Peripheral Definitions ---
+
+# UART0 — Console UART for transmit/receive byte test.
+# The firmware uses MXC_UART_WriteCharacter (TX) and MXC_UART_ReadCharacter (RX)
+# on UART0. No DMA, no interrupts — polling mode only.
 [Device.uart]
   ranges       = [["0x40042000", "0x40042FFF"]]
-  description  = "MAX78000 UART0 peripheral (low power UART)."
+  irq = [['1','100']]
+  description  = "UART: Console UART (TX/RX byte). Firmware uses polling mode via FIFO register. IRQ 14 unused in this example."
   read_priority = "elder"
 
   [[Device.uart.handlers]]
@@ -121,27 +126,43 @@ finline      = ""
   scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
   [[Device.uart.handlers]]
+  model   = "classic"
+  enabled = false
+
+  [[Device.uart.handlers]]
   model   = "passthrough"
   enabled = false
 
-# Everything else: passthrough (hole for UART0 preserved)
+  [[Device.uart.handlers]]
+  model   = "twintrace"
+  enabled = false
+
+# Remaining memory regions passed through to real hardware.
+# Includes:
+#   GCR     (0x40000000) — clock/reset control
+#   GPIO0-2 (0x40008000-0x400805FF) — not used by this firmware
+#   TMR0-3  (0x40010000-0x40013FFF) — MXC_Delay uses a timer
+#   I2C0-2  (0x4001D000-0x4001FFFF) — not used
+#   UART1-2 (0x40043000-0x40044FFF) — not used
+#   SPI1    (0x40046000) — not used
 [Device.passthrough_space]
-  irq = [
-    [0, 20],
-    [21, 25],
-    [41, 41],
-    [53, 53],
-    [69, 69]
-  ]
-
+  irq = [['1','100']]
   ranges = [
-    ["0x40000000", "0x40041FFF"],   # before UART0
-    ["0x40043000", "0xE00FFFFF"],   # after UART0 up to end of peripheral space
-    ["0xE0000000", "0xEFFFFFFF"]    # system space
+    ["0x40000000", "0x40041FFF"],   # all peripherals before UART0
+    ["0x40043000", "0xE00FFFFF"],   # all peripherals after UART0
+    ["0xE0000000", "0xEFFFFFFF"]    # Cortex-M4 system space (NVIC, SysTick, SCB)
   ]
 
-  description = "Memory regions explicitly not handled by any MAX78000 model."
+  description = "Memory regions handled by passthrough. Includes GCR, GPIO, TMR (delay), and all non-modeled peripherals."
+
+  [[Device.passthrough_space.handlers]]
+  model   = "classic"
+  enabled = false
 
   [[Device.passthrough_space.handlers]]
   model   = "passthrough"
   enabled = true
+
+  [[Device.passthrough_space.handlers]]
+  model   = "twintrace"
+  enabled = false

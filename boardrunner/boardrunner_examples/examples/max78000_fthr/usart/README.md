@@ -1,1 +1,0 @@
-A simple USART Communication Firmware, First send characters to the terminal, then waits for the user to type 10 characters and after receiving those, then it sends those chars back and after that it will turn ON the red LED on GPIO2.
