@@ -1,0 +1,233 @@
+### 1. Previous Model Failure Analysis
+The mismatch comes from the model treating `STATUS` RX-ready (`0x140`) as a level derived directly from RX FIFO occupancy and starting the scripted RX stream as soon as the UART becomes ready during init. In the hardware trace, `STATUS` is almost always the idle/TX-ready value `0x50`, with `0x140` appearing only briefly just before firmware reads a received byte. That means the current model exposes RX-ready too early and for too long. The fix is to make RX indication a transient latched status event, not a permanent reflection of unread FIFO data, and to begin the scripted receive stream during runtime TX activity rather than immediately at enable time.
+
+### 2. Register Analysis
+- **`CTRL` @ `0x40042000`**
+  - Main control/configuration register.
+  - Firmware performs RMW on it during init.
+  - Bit `0x1` behaves like UART enable.
+  - Bit `0x8000` participates in the “fully active” config written before the final ready state.
+  - Bit `0x80000` is read-only/latched on reads after final activation: write `0x28C01`, read back `0xA8C01`.
+
+- **`STATUS` @ `0x40042004`**
+  - Polled during runtime.
+  - Dominant idle/TX-ready value is `0x50`.
+  - Rare RX-available indication is `0x140`, seen immediately before firmware reads `FIFO`.
+  - Therefore RX indication should be brief/transient, not continuously asserted while FIFO holds unread data.
+
+- **`CLKDIV` @ `0x40042010`**
+  - Baud/clock divider register.
+  - Firmware writes `0x40` during initialization.
+
+- **`OSR` @ `0x40042014`**
+  - Oversampling register.
+  - Firmware writes `0x5` during initialization.
+
+- **`FIFO` @ `0x40042020`**
+  - TX data register on write.
+  - RX data register on read.
+  - Observed RX byte sequence is `"Hello"` (`0x48 0x65 0x6C 0x6C 0x6F`).
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    bool ready_latched;
+
+    uint64_t rx_timer;
+    bool rx_timer_armed;
+    bool rx_stream_started;
+    size_t rx_script_pos;
+} UARTState;
+=======
+    bool ready_latched;
+    bool rx_status_latched;
+
+    uint64_t rx_timer;
+    bool rx_timer_armed;
+    bool rx_stream_started;
+    size_t rx_script_pos;
+} UARTState;
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+static uint32_t uart_status_value(UARTState *s) {
+    if (!uart_enabled(s)) {
+        return 0;
+    }
+
+    /*
+     * The trace shows a steady idle/TX-ready value of 0x50 and an RX-available
+     * value of 0x140 before firmware reads FIFO. Model this from actual RX FIFO
+     * occupancy rather than as a one-shot STATUS read side effect.
+     */
+    if (s->rx_count != 0) {
+        return UART_STATUS_RX_AVAIL;
+    }
+
+    return UART_STATUS_IDLE_TX;
+}
+=======
+static uint32_t uart_status_value(UARTState *s) {
+    if (!uart_enabled(s)) {
+        return 0;
+    }
+
+    /*
+     * Hardware spends almost all of its time returning 0x50, with 0x140 only
+     * appearing briefly before firmware reads RX data. Model RX-ready as a
+     * transient latched status indication rather than a permanent reflection of
+     * unread FIFO occupancy.
+     */
+    if (s->rx_status_latched) {
+        return UART_STATUS_RX_AVAIL;
+    }
+
+    return UART_STATUS_IDLE_TX;
+}
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    case UART_REG_STATUS:
+        return uart_status_value(s);
+=======
+    case UART_REG_STATUS:
+        value = uart_status_value(s);
+
+        if (value == UART_STATUS_RX_AVAIL) {
+            s->rx_status_latched = false;
+        }
+
+        return value;
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    case UART_REG_FIFO:
+        value = (uint32_t)uart_rx_pop(s);
+
+        if ((s->rx_count == 0) &&
+            s->rx_stream_started &&
+            (s->rx_script_pos < sizeof(g_uart_rx_script))) {
+            uart_schedule_rx_after(s, UART_RX_INTERBYTE_DELAY_NS);
+        }
+
+        return value;
+=======
+    case UART_REG_FIFO:
+        value = (uint32_t)uart_rx_pop(s);
+        s->rx_status_latched = false;
+
+        if ((s->rx_count == 0) &&
+            s->rx_stream_started &&
+            (s->rx_script_pos < sizeof(g_uart_rx_script))) {
+            uart_schedule_rx_after(s, UART_RX_INTERBYTE_DELAY_NS);
+        }
+
+        return value;
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    uart_rx_push(s, g_uart_rx_script[s->rx_script_pos]);
+    s->rx_script_pos++;
+=======
+    uart_rx_push(s, g_uart_rx_script[s->rx_script_pos]);
+    s->rx_script_pos++;
+    s->rx_status_latched = true;
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    case UART_REG_CTRL: {
+        bool was_ready = s->ready_latched;
+
+        /*
+         * Writable state mirrors firmware writes. The trace shows that after
+         * writing 0x28C01, reads return 0xA8C01, so we model 0x80000 as a
+         * latched read-only ready/active bit that appears once the UART is
+         * brought into its fully active configuration.
+         */
+        s->ctrl = value & ~UART_CTRL_READY_RO;
+
+        if ((value & UART_CTRL_ACTIVE_CFG) && (value & UART_CTRL_EN)) {
+            s->ready_latched = true;
+
+            if (!was_ready) {
+                uart_start_rx_stream(s);
+            }
+        } else if (!(value & UART_CTRL_EN)) {
+            s->ready_latched = false;
+            s->rx_head = 0;
+            s->rx_tail = 0;
+            s->rx_count = 0;
+            s->rx_timer_armed = false;
+            s->rx_stream_started = false;
+            s->rx_script_pos = 0;
+        }
+        break;
+    }
+=======
+    case UART_REG_CTRL: {
+        /*
+         * Writable state mirrors firmware writes. The trace shows that after
+         * writing 0x28C01, reads return 0xA8C01, so we model 0x80000 as a
+         * latched read-only ready/active bit that appears once the UART is
+         * brought into its fully active configuration.
+         */
+        s->ctrl = value & ~UART_CTRL_READY_RO;
+
+        if ((value & UART_CTRL_ACTIVE_CFG) && (value & UART_CTRL_EN)) {
+            s->ready_latched = true;
+        } else if (!(value & UART_CTRL_EN)) {
+            s->ready_latched = false;
+            s->rx_status_latched = false;
+            s->rx_head = 0;
+            s->rx_tail = 0;
+            s->rx_count = 0;
+            s->rx_timer_armed = false;
+            s->rx_stream_started = false;
+            s->rx_script_pos = 0;
+        }
+        break;
+    }
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    case UART_REG_FIFO:
+        /*
+         * TX writes should not directly cause RX-ready. Hardware keeps STATUS at
+         * 0x50 after normal transmit activity; RX bytes arrive asynchronously.
+         */
+        s->tx_last = (uint8_t)(value & 0xFF);
+        break;
+=======
+    case UART_REG_FIFO:
+        /*
+         * TX writes should not directly force STATUS to 0x140, but runtime TX
+         * activity is a better point to begin the scripted asynchronous RX
+         * stream than initial enable, which otherwise makes RX-ready appear too
+         * early and too persistently.
+         */
+        s->tx_last = (uint8_t)(value & 0xFF);
+
+        if (!s->rx_stream_started && uart_enabled(s) && s->ready_latched) {
+            uart_start_rx_stream(s);
+        }
+        break;
+>>>>>>> REPLACE
+```
