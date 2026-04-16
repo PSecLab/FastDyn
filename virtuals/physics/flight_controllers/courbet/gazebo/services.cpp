@@ -42,86 +42,330 @@ static bool READY = false;
 using json = nlohmann::json;
 
 struct Vec3NoiseModel {
-  // BASE (reference) noise levels — tune these once
-  gz::math::Vector3d sigma_white_base{0,0,0}; // std-dev of white noise
-  gz::math::Vector3d sigma_rw_base{0,0,0};    // std-dev of random-walk drift
+  // Base noise levels
+  gz::math::Vector3d sigma_white_base{0,0,0};
+  gz::math::Vector3d sigma_rw_base{0,0,0};
 
-  // ======= YOUR TWO KNOBS =======
-  double white_scale = 1.0;  // <-- scales instantaneous noise
-  double drift_scale = 1.0;  // <-- scales long-term drift
-  // ==============================
+  // User knobs
+  double white_scale = 1.0;
+  double drift_scale = 1.0;
 
-  // current bias state (drifting over time)
+  // Deterministic controls
+  uint64_t seed = 0;
+
+  // Time quantization
+  // white_dt: how often white noise changes
+  // drift_dt: how often bias random walk gets a new increment
+  double white_dt = 0.01;
+  double drift_dt = 0.01;
+
+  // Bias state
   gz::math::Vector3d bias{0,0,0};
 
-  std::mt19937 rng{std::random_device{}()};
-  std::normal_distribution<double> N{0.0, 1.0};
+  // Track how far the drift has been integrated
+  int64_t last_drift_tick = -1;
 
-  // === NEW: constructors ===
-
-  // Default constructor (keeps your existing defaults)
   Vec3NoiseModel() = default;
 
-  // Convenience constructor
   Vec3NoiseModel(
       gz::math::Vector3d white_base,
       gz::math::Vector3d rw_base,
       double w_scale = 1.0,
       double d_scale = 1.0,
-      gz::math::Vector3d initial_bias = {0,0,0})
-  : sigma_white_base(white_base),
-    sigma_rw_base(rw_base),
-    white_scale(w_scale),
-    drift_scale(d_scale),
-    bias(initial_bias)
-  {}
+      gz::math::Vector3d initial_bias = {0,0,0},
+      uint64_t deterministic_seed = 0,
+      double white_dt_sec = 0.01,
+      double drift_dt_sec = 0.01)
+      : sigma_white_base(white_base),
+        sigma_rw_base(rw_base),
+        white_scale(w_scale),
+        drift_scale(d_scale),
+        seed(deterministic_seed),
+        white_dt(white_dt_sec),
+        drift_dt(drift_dt_sec),
+        bias(initial_bias),
+        last_drift_tick(-1) {}
 
-  // === existing methods (unchanged) ===
+  void Reset()
+  {
+    bias = {0,0,0};
+    last_drift_tick = -1;
+  }
 
-  gz::math::Vector3d SampleWhite() {
+  void Reset(gz::math::Vector3d initial_bias)
+  {
+    bias = initial_bias;
+    last_drift_tick = -1;
+  }
+
+private:
+  static uint64_t SplitMix64(uint64_t x)
+  {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    x ^= (x >> 31);
+    return x;
+  }
+
+  static double Uniform01(uint64_t key)
+  {
+    return (SplitMix64(key) >> 11) * (1.0 / 9007199254740992.0);
+  }
+
+  static double Normal01(uint64_t key1, uint64_t key2)
+  {
+    double u1 = Uniform01(key1);
+    double u2 = Uniform01(key2);
+    u1 = std::max(u1, 1e-12);
+    return std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
+  }
+
+  static int64_t TimeToTick(double t, double dt)
+  {
+    // Stable floor-based bucket mapping
+    return static_cast<int64_t>(std::floor(t / dt));
+  }
+
+  double NoiseSample(int axis, int stream_id, int64_t tick) const
+  {
+    const uint64_t tick_u = static_cast<uint64_t>(tick);
+
+    const uint64_t base =
+        seed ^
+        (0xD1B54A32D192ED03ULL * (tick_u + 1)) ^
+        (0x94D049BB133111EBULL * static_cast<uint64_t>(axis + 1)) ^
+        (0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(stream_id + 1));
+
+    const uint64_t k1 = base ^ 0xA24BAED4963EE407ULL;
+    const uint64_t k2 = base ^ 0x9FB21C651E98DF25ULL;
+
+    return Normal01(k1, k2);
+  }
+
+  gz::math::Vector3d WhiteAtTime(double simTimeSec) const
+  {
+    const int64_t tick = TimeToTick(simTimeSec, white_dt);
+
     return {
-      (sigma_white_base.X() * white_scale) * N(rng),
-      (sigma_white_base.Y() * white_scale) * N(rng),
-      (sigma_white_base.Z() * white_scale) * N(rng)
+      (sigma_white_base.X() * white_scale) * NoiseSample(0, 0, tick),
+      (sigma_white_base.Y() * white_scale) * NoiseSample(1, 0, tick),
+      (sigma_white_base.Z() * white_scale) * NoiseSample(2, 0, tick)
     };
   }
 
-  void StepBias(double dt) {
-    const double sdt = std::sqrt(dt);
+  void AdvanceBiasToTime(double simTimeSec)
+  {
+    const int64_t target_tick = TimeToTick(simTimeSec, drift_dt);
+    if (target_tick < 0)
+      return;
 
-    bias += gz::math::Vector3d(
-      (sigma_rw_base.X() * drift_scale) * sdt * N(rng),
-      (sigma_rw_base.Y() * drift_scale) * sdt * N(rng),
-      (sigma_rw_base.Z() * drift_scale) * sdt * N(rng)
-    );
+    if (last_drift_tick < 0) {
+      last_drift_tick = -1;
+    }
+
+    for (int64_t tick = last_drift_tick + 1; tick <= target_tick; ++tick) {
+      const double sdt = std::sqrt(drift_dt);
+
+      bias += gz::math::Vector3d(
+        (sigma_rw_base.X() * drift_scale) * sdt * NoiseSample(0, 1, tick),
+        (sigma_rw_base.Y() * drift_scale) * sdt * NoiseSample(1, 1, tick),
+        (sigma_rw_base.Z() * drift_scale) * sdt * NoiseSample(2, 1, tick)
+      );
+    }
+
+    last_drift_tick = target_tick;
   }
 
-  gz::math::Vector3d Apply(const gz::math::Vector3d &trueVal, double dt) {
-    StepBias(dt);
-    return trueVal + bias + SampleWhite();
+public:
+  gz::math::Vector3d Apply(const gz::math::Vector3d &trueVal, double simTimeSec)
+  {
+    AdvanceBiasToTime(simTimeSec);
+    return trueVal + bias + WhiteAtTime(simTimeSec);
   }
 };
 
 Vec3NoiseModel gyro_noise_model(
-    {0.001, 0.001, 0.001},   // sigma_white_base
-    {0.0002, 0.0002, 0.0002},// sigma_rw_base
-    0.0,                     // white_scale
-    0.0                      // drift_scale
+    {0.001, 0.001, 0.001},      // white base
+    {0.0002, 0.0002, 0.0002},   // random walk base
+    1.0,                        // white scale
+    1.0,                        // drift scale
+    {0,0,0},                    // initial bias
+    12345,                      // seed
+    0.01,                       // white_dt (100 Hz)
+    0.01                        // drift_dt (100 Hz)
 );
 
 Vec3NoiseModel accel_noise_model(
     {0.02, 0.02, 0.02},
     {0.01, 0.01, 0.01},
-    0.0,
-    0.0
+    1.0,
+    1.0,
+    {0,0,0},
+    23456,
+    0.01,
+    0.01
 );
 
 Vec3NoiseModel mag_noise_model(
     {0.001, 0.001, 0.001},
     {0.0001, 0.0001, 0.0001},
-    0.0,
-    0.0
+    1.0,
+    1.0,
+    {0,0,0},
+    34567,
+    0.02,   // maybe 50 Hz
+    0.02
 );
+
+class DeterministicNoiseTestService
+{
+public:
+  DeterministicNoiseTestService(gz::transport::Node &node, const std::string &service_name)
+  {
+    node.Advertise(service_name, &DeterministicNoiseTestService::OnRequest, this);
+  }
+private:
+  bool OnRequest(const gz::msgs::Empty &, gz::msgs::StringMsg &response)
+  {
+    // generate 5 noise samples from a base value and then do it again and compare the results
+    std::ostringstream ss;
+    double simTimeSec = 123.456; // fixed time for testing
+    // arrays for storing noisy samples of size [5][3] for gyro, accel, mag
+    gz::math::Vector3d gyro_samples[5];
+    gz::math::Vector3d accel_samples[5];
+    gz::math::Vector3d mag_samples[5];
+
+    for (int i = 0; i < 5; i++) {
+      gz::math::Vector3d trueVal(1.0, 2.0, 3.0);
+      gyro_samples[i] = gyro_noise_model.Apply(trueVal, simTimeSec + i);
+      accel_samples[i] = accel_noise_model.Apply(trueVal, simTimeSec + i);
+      mag_samples[i] = mag_noise_model.Apply(trueVal, simTimeSec + i);
+      ss << std::fixed << std::setprecision(6);
+      ss << "Sample " << i << ", Time:" << simTimeSec + i << ":\n";
+      ss << "  Gyro:  " << gyro_samples[i].X() << ", " << gyro_samples[i].Y() << ", " << gyro_samples[i].Z() << "\n";
+      ss << "  Accel: " << accel_samples[i].X() << ", " << accel_samples[i].Y() << ", " << accel_samples[i].Z() << "\n";
+      ss << "  Mag:   " << mag_samples[i].X() << ", " << mag_samples[i].Y() << ", " << mag_samples[i].Z() << "\n";
+    }
+
+    // reset the noise models to ensure they start from the same state
+    gyro_noise_model.Reset();
+    accel_noise_model.Reset();
+    mag_noise_model.Reset();
+
+    for (int i = 0; i < 5; i++) {
+      gz::math::Vector3d trueVal(1.0, 2.0, 3.0);
+      gz::math::Vector3d gyro_sample_2 = gyro_noise_model.Apply(trueVal, simTimeSec + i);
+      gz::math::Vector3d accel_sample_2 = accel_noise_model.Apply(trueVal, simTimeSec + i);
+      gz::math::Vector3d mag_sample_2 = mag_noise_model.Apply(trueVal, simTimeSec + i);
+      ss << std::fixed << std::setprecision(6);
+      ss << "Sample " << i << ", Time:" << simTimeSec + i << " (second call):\n";
+      ss << "  Gyro:  " << gyro_sample_2.X() << ", " << gyro_sample_2.Y() << ", " << gyro_sample_2.Z() << "\n";
+      ss << "  Accel: " << accel_sample_2.X() << ", " << accel_sample_2.Y() << ", " << accel_sample_2.Z() << "\n";
+      ss << "  Mag:   " << mag_sample_2.X() << ", " << mag_sample_2.Y() << ", " << mag_sample_2.Z() << "\n";
+
+      // Compare with the first sample
+      bool gyro_match = (gyro_samples[i].X() == gyro_sample_2.X()) &&
+                        (gyro_samples[i].Y() == gyro_sample_2.Y()) &&
+                        (gyro_samples[i].Z() == gyro_sample_2.Z());
+      bool accel_match = (accel_samples[i].X() == accel_sample_2.X()) &&
+                         (accel_samples[i].Y() == accel_sample_2.Y()) &&
+                         (accel_samples[i].Z() == accel_sample_2.Z());
+      bool mag_match = (mag_samples[i].X() == mag_sample_2.X()) &&
+                       (mag_samples[i].Y() == mag_sample_2.Y()) &&
+                       (mag_samples[i].Z() == mag_sample_2.Z());
+
+      ss << "  Gyro match: " << (gyro_match ? "YES" : "NO") << "\n";
+      ss << "  Accel match: " << (accel_match ? "YES" : "NO") << "\n";
+      ss << "  Mag match:   " << (mag_match ? "YES" : "NO") << "\n";
+    }
+
+    response.set_data(ss.str());
+    return true;
+  }
+};
+
+// struct Vec3NoiseModel {
+//   // BASE (reference) noise levels — tune these once
+//   gz::math::Vector3d sigma_white_base{0,0,0}; // std-dev of white noise
+//   gz::math::Vector3d sigma_rw_base{0,0,0};    // std-dev of random-walk drift
+
+//   // ======= YOUR TWO KNOBS =======
+//   double white_scale = 1.0;  // <-- scales instantaneous noise
+//   double drift_scale = 1.0;  // <-- scales long-term drift
+//   // ==============================
+
+//   // current bias state (drifting over time)
+//   gz::math::Vector3d bias{0,0,0};
+
+//   std::mt19937 rng{std::random_device{}()};
+//   std::normal_distribution<double> N{0.0, 1.0};
+
+//   // === NEW: constructors ===
+
+//   // Default constructor (keeps your existing defaults)
+//   Vec3NoiseModel() = default;
+
+//   // Convenience constructor
+//   Vec3NoiseModel(
+//       gz::math::Vector3d white_base,
+//       gz::math::Vector3d rw_base,
+//       double w_scale = 1.0,
+//       double d_scale = 1.0,
+//       gz::math::Vector3d initial_bias = {0,0,0})
+//   : sigma_white_base(white_base),
+//     sigma_rw_base(rw_base),
+//     white_scale(w_scale),
+//     drift_scale(d_scale),
+//     bias(initial_bias)
+//   {}
+
+//   // === existing methods (unchanged) ===
+
+//   gz::math::Vector3d SampleWhite() {
+//     return {
+//       (sigma_white_base.X() * white_scale) * N(rng),
+//       (sigma_white_base.Y() * white_scale) * N(rng),
+//       (sigma_white_base.Z() * white_scale) * N(rng)
+//     };
+//   }
+
+//   void StepBias(double dt) {
+//     const double sdt = std::sqrt(dt);
+
+//     bias += gz::math::Vector3d(
+//       (sigma_rw_base.X() * drift_scale) * sdt * N(rng),
+//       (sigma_rw_base.Y() * drift_scale) * sdt * N(rng),
+//       (sigma_rw_base.Z() * drift_scale) * sdt * N(rng)
+//     );
+//   }
+
+//   gz::math::Vector3d Apply(const gz::math::Vector3d &trueVal, double dt) {
+//     StepBias(dt);
+//     return trueVal + bias + SampleWhite();
+//   }
+// };
+
+// Vec3NoiseModel gyro_noise_model(
+//     {0.001, 0.001, 0.001},   // sigma_white_base
+//     {0.0002, 0.0002, 0.0002},// sigma_rw_base
+//     0.0,                     // white_scale
+//     0.0                      // drift_scale
+// );
+
+// Vec3NoiseModel accel_noise_model(
+//     {0.02, 0.02, 0.02},
+//     {0.01, 0.01, 0.01},
+//     0.0,
+//     0.0
+// );
+
+// Vec3NoiseModel mag_noise_model(
+//     {0.001, 0.001, 0.001},
+//     {0.0001, 0.0001, 0.0001},
+//     0.0,
+//     0.0
+// );
 
 typedef struct
 {
@@ -159,9 +403,9 @@ imu_data_t parse_imu_json(const std::string &input)
 
     // add noise to gyros (+)
     // noise from 0 to 0.001 rad/s
-    imu.gyro_x += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
-    imu.gyro_y += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
-    imu.gyro_z += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    // imu.gyro_x += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    // imu.gyro_y += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    // imu.gyro_z += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
 
     // imu.gyro_x  = std::to_string(gyro[0].get<double>());
     // imu.gyro_y  = std::to_string(gyro[1].get<double>());
@@ -291,17 +535,17 @@ private:
     const gz::math::Vector3d tmp = C_ws.Transposed() * m_raw;
     const gz::math::Vector3d m_corr = C_ws * (C_ww * tmp);
 
-    double dt = 0.01; // assuming 100 Hz update rate
-    gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
+    // double dt = 0.01; // assuming 100 Hz update rate
+    // gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
     // std::cerr << "NEW READING:" << std::endl;
     // std::cerr << "\tCorrected mag: " << m_corr.X() << ", " << m_corr.Y() << ", " << m_corr.Z() << std::endl;
     // std::cerr << "\tNoisy mag: " << noisy_mag_corr.X() << ", " << noisy_mag_corr.Y() << ", " << noisy_mag_corr.Z() << std::endl;
-    gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
+    // gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
 
     gz::msgs::Magnetometer latest_msg_corr_ = raw; // timestamp/frame_id 유지
-    latest_msg_corr_.mutable_field_tesla()->set_x(noisy_msg_corr.X());
-    latest_msg_corr_.mutable_field_tesla()->set_y(noisy_msg_corr.Y());
-    latest_msg_corr_.mutable_field_tesla()->set_z(noisy_msg_corr.Z());
+    // latest_msg_corr_.mutable_field_tesla()->set_x(noisy_msg_corr.X());
+    // latest_msg_corr_.mutable_field_tesla()->set_y(noisy_msg_corr.Y());
+    // latest_msg_corr_.mutable_field_tesla()->set_z(noisy_msg_corr.Z());
 
     rep = latest_msg_corr_;
     return true;
@@ -340,14 +584,14 @@ private:
       msg.field_tesla().y(),
       msg.field_tesla().z()
     );
-    double dt = 0.01; // assuming 100 Hz update rate
-    gz::math::Vector3d noisy_mag = mag_noise_model.Apply(true_mag, dt);
+    // double dt = 0.01; // assuming 100 Hz update rate
+    // gz::math::Vector3d noisy_mag = mag_noise_model.Apply(true_mag, dt);
     std::lock_guard<std::mutex> lock(mutex_);
-    gz::msgs::Magnetometer noisy_msg = msg;
-    noisy_msg.mutable_field_tesla()->set_x(noisy_mag.X());
-    noisy_msg.mutable_field_tesla()->set_y(noisy_mag.Y());
-    noisy_msg.mutable_field_tesla()->set_z(noisy_mag.Z());
-    latest_msg_ = noisy_msg;
+    // gz::msgs::Magnetometer noisy_msg = msg;
+    // noisy_msg.mutable_field_tesla()->set_x(noisy_mag.X());
+    // noisy_msg.mutable_field_tesla()->set_y(noisy_mag.Y());
+    // noisy_msg.mutable_field_tesla()->set_z(noisy_mag.Z());
+    latest_msg_ = msg; // for now just return raw without noise
   }
 
   bool OnServiceRequest(const gz::msgs::Empty &,
@@ -820,16 +1064,16 @@ private:
 
             imu_data_t imu = parse_imu_json(response);
             {
-              gz::math::Vector3d true_accel(imu.accel_x, imu.accel_y, imu.accel_z);
-              gz::math::Vector3d true_gyro(imu.gyro_x, imu.gyro_y, imu.gyro_z);
-              gz::math::Vector3d noisy_accel = accel_noise_model.Apply(true_accel, 0.2);
-              gz::math::Vector3d noisy_gyro  = gyro_noise_model.Apply(true_gyro, 0.2);
-              imu.accel_x = noisy_accel.X();
-              imu.accel_y = noisy_accel.Y();
-              imu.accel_z = noisy_accel.Z();
-              imu.gyro_x  = noisy_gyro.X();
-              imu.gyro_y  = noisy_gyro.Y();
-              imu.gyro_z  = noisy_gyro.Z();
+              // gz::math::Vector3d true_accel(imu.accel_x, imu.accel_y, imu.accel_z);
+              // gz::math::Vector3d true_gyro(imu.gyro_x, imu.gyro_y, imu.gyro_z);
+              // gz::math::Vector3d noisy_accel = accel_noise_model.Apply(true_accel, 0.2);
+              // gz::math::Vector3d noisy_gyro  = gyro_noise_model.Apply(true_gyro, 0.2);
+              // imu.accel_x = noisy_accel.X();
+              // imu.accel_y = noisy_accel.Y();
+              // imu.accel_z = noisy_accel.Z();
+              // imu.gyro_x  = noisy_gyro.X();
+              // imu.gyro_y  = noisy_gyro.Y();
+              // imu.gyro_z  = noisy_gyro.Z();
               std::lock_guard<std::mutex> lock(mutex_);
               imu_buffer_.push_back(imu);
             }
@@ -1359,25 +1603,30 @@ int main(int argc, char **argv)
   std::string pose_topic = "/model/r1_rover/pose";
   std::string altimeter_topic = "NONE";
   std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
+  std::string laserscan_topic = "/lidar";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
+    laserscan_topic = "NONE";
   } else if (model_name == "iris") {
     navsat_topic = "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/iris_with_ardupilot/pose";
+    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "bicopter") {
     navsat_topic = "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/bicopter_with_ardupilot/pose";
     joint_states_topic = "NONE";
+    laserscan_topic = "NONE";
   } else if (model_name == "vtail_plane") {
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/skywalker_x8/pose";
     imu_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/imu_sensor/imu";
+    laserscan_topic = "NONE";
     // pose_topic = "/world/runway/dynamic_pose/info";
     // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
     // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
@@ -1385,19 +1634,26 @@ int main(int argc, char **argv)
   } else if (model_name == "skywalker_x8_quad") {
     navsat_topic = "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "blueboat") {
     navsat_topic = "/world/waves/model/blueboat/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/waves/model/blueboat/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "bluerov2") {
     navsat_topic = "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
+    laserscan_topic = "NONE";
   }
 
   if (model_name == "r1_rover") {
     altimeter_topic = "/world/runway/altitude";
+  }
+  else 
+  {
+    altimeter_topic = "NONE";
   }
 
   const std::string sim_world_name = WorldNameFromNavsatTopic(navsat_topic);
@@ -1497,6 +1753,11 @@ int main(int argc, char **argv)
     mag_topic,
     "/get_corrected_mag_reading",
     mag_rpy
+  );
+
+  DeterministicNoiseTestService noiseTestService(
+    node,
+    "/get_deterministic_noise_test"
   );
 
   std::cout << "ArduPilot Services running...\n";

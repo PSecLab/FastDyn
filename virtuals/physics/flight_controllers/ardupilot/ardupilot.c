@@ -1526,10 +1526,12 @@ void ap_fs_open(unsigned int cpu_index, void *udata)
     memset(fname, 0, sizeof(fname));
     qemu_plugin_read_memory(fname_ptr, (uint8_t *)fname, sizeof(fname));
 
-    // printf("Opening file: /root/rooney/FastDyn/courbet/flight_logs/%s\n", fname);
+    printf("Opening file: /root/rooney/FastDyn/virtuals/physics/flight_controllers/courbet/flight_logs/%s\n", fname);
+
+    char base_path[] = "/root/rooney/FastDyn/virtuals/physics/flight_controllers/courbet/flight_logs/";
 
     char path[256];
-    snprintf(path, sizeof(path) + 59, "/home/mhcho/ws/courbet_project/FastDyn/courbet/flight_logs/%s", fname);
+    snprintf(path, sizeof(path) + strlen(base_path), "%s%s", base_path, fname);
 
     int fd = open(path, O_RDWR | O_CREAT, 0666);
     mark_open_flight_log_fd(fd);
