@@ -6,6 +6,7 @@ import time
 from pymavlink import mavutil
 import struct
 import signal
+import socket
 
 MAVPROXY_CMD = [
     "mavproxy.py",
@@ -99,6 +100,61 @@ def main():
     if len(param_name_list) == 1 and param_name_list[0] == "":
         param_name_list = []
 
+    param_name_list = [
+        # "BATT_AMP_OFFSET",
+        # "BATT_AMP_PERVLT",
+        # "COMPASS_DIA2_Z",
+        # "COMPASS_DIA3_Z",
+        # "SCHED_LOOP_RATE",
+        # "SERIAL0_BAUD",
+        # "SERIAL1_BAUD",
+        # "SERIAL2_BAUD",
+        # "SERIAL3_BAUD",
+        # "SERIAL4_BAUD",
+        # "SERIAL5_BAUD",
+        # "SERIAL6_BAUD",
+        # "SERIAL7_BAUD",
+        # "STAT_FLTTIME",
+        # "ARMING_MIS_ITEMS",
+        # "TELEM_DELAY",
+        # "LOG_BITMASK",
+        # "STAT_RUNTIME",
+        # "STAT_RESET",
+        # "ARMING_CHECK",
+        # "FS_OPTIONS",
+        # "INS_ACCSCAL_X",
+        # "INS_ACCSCAL_Y",
+        # "INS_POS2_X",
+        # "INS_POS2_Y",
+        # "INS_POS2_Z",
+        # "COMPASS_DEV_ID2",
+        # "COMPASS_OFS3_X",
+        # "COMPASS_OFS3_Y",
+        # "COMPASS_OFS3_Z",
+        # "COMPASS_OFS_X",
+        # "COMPASS_OFS_Y",
+        # "COMPASS_OFS_Z",
+        # "COMPASS_OFS2_X",
+        # "COMPASS_OFS2_Y",
+        # "COMPASS_OFS2_Z",
+        # "BRD_OPTIONS",
+        "AHRS_TRIM_X",
+        # "AHRS_TRIM_Y",
+        # "AHRS_TRIM_Z",
+        # "INS_ACC2SCAL_Z",
+        # "INS_ACC2OFFS_Z",
+        # "SERVO_ROB_POSMIN",
+        # "BATT_CAPACITY",
+        # "RC_OPTIONS",
+        # "INS_ACC_ID",
+        # "INS_ACC2_ID",
+        # "BATT_ARM_MAH",
+        # "SERVO_VOLZ_MASK",
+        # "INS_GYR_ID",
+        # "BATT_SERIAL_NUM",
+        # "SERVO_ROB_POSMAX",
+    ]
+
     param_input_delay = float(sys.argv[4])
     if param_input_delay < 0:
         print("Parameter input delay must be non-negative.")
@@ -145,6 +201,7 @@ def main():
     read_until(master_fd, proc, f"parameters from {init_param_file_path}")
     
     # Wait for EKF3 active
+    print("Waiting for EKF3 to become active...")
     while True:
         mav_msg = mav.recv_match(type='STATUSTEXT', blocking=True)
         if mav_msg and "EKF3 active" in mav_msg.text:
@@ -165,15 +222,30 @@ def main():
         cleanup(master_fd, proc)
         sys.exit(1)
 
+    SOCKET_PATH = "/tmp/rust_receiver.sock"
+
+    message = "throttle armed"
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(SOCKET_PATH)
+    sock.sendall(message.encode("utf-8"))
+    sock.close()
+
+    print("Python sent one message and exited")
+
     # Wait for the post-arm delay and send parameters
-    time.sleep(param_input_delay)
-    if len(param_name_list) > 0:
-        bin_file = open(param_bytes_path, "rb")
-        for param in param_name_list:
-            bytes = bin_file.read(4).ljust(4, b'\x00')
-            print(f"Bytes for param {param}: {bytes}")
-            param_set(mav, param, struct.unpack("f", bytes)[0])
-            time.sleep(0.5)
+    # time.sleep(param_input_delay)
+    # if len(param_name_list) > 0:
+    #     bin_file = open(param_bytes_path, "rb")
+    #     count = 1
+    #     for param in param_name_list:
+    #         # bytes = bin_file.read(4).ljust(4, b'\x00')
+    #         # print(f"Bytes for param {param}: {bytes}")
+    #         # param_set(mav, param, struct.unpack("f", bytes)[0])
+    #         print(f"{count}: Setting param {param} to 1e15...")
+    #         param_set(mav, param, 1e15)
+    #         time.sleep(0.5)
+    #         count += 1
 
     # Monitor mavlink until mission complete
     mission_success = False
@@ -184,9 +256,15 @@ def main():
             if mav_msg.mission_state == MISSION_COMPLETE:
                 mission_success = True
                 break
-            elif mav_msg.mission_state != MISSION_IN_PROGRESS:
-                # Something bad happened
-                break
+            # elif mav_msg.mission_state != MISSION_IN_PROGRESS:
+            #     # Something bad happened
+            #     break
+
+    # heartbeat_count = 1
+    # while True:
+    #     mav.wait_heartbeat()
+    #     print(f"Heartbeat {heartbeat_count}...")
+    #     heartbeat_count += 1
 
     print("Terminating MAVProxy...")
     cleanup(master_fd, proc)

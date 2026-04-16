@@ -170,22 +170,23 @@ const CORPUS_LOG_PATH: &str = "./corpus";
  * MISSION_TIMEOUT: The maximum simulation time allowed before it is killed
  * POST_ARM_PARAMETER_UPDATE_DELAY: The time to wait after arming the CPS before updating parameter values.
  * NOISE_APPLICATION_SIM_TIME: The simulation time at which noise should be applied to the system's sensors.
- * RECORDING_TIMESTEP: An approximation of how often the CPS's physical state is logged during a simulation
+ * RECORDING_TIMESTEP: An approximation of how often the CPS's physical state is logged during a simulation.
+ *     NOTE: We do not recommend setting this value less than 0.01 to avoid time deviations
  * INITIAL_EXPLORATION_POINTS: The number of inputs to generate and test before the main fuzz loop begins.
  * EXECUTIONS_PER_PHI_STAGE: The number of consecutive optimizer-generated inputs to test during each phi stage.
  * MAX_EXECUTIONS_PER_LAMBDA_STAGE: The maximum number of mutations to make during each lambda stage.
  * HEADLESS_MODE: Run the fuzzing campaign with or without the Gazebo/MAVproxy GUIs. Mainly for debugging.
  */
 const SYSTEM_UNDER_TEST: &str = "plane"; // Choose either "rover" or "plane"
-const MISSION_WAYPOINT_FILE_NAME: &str = "plane_circle_point.txt"; 
-const MISSION_TIMEOUT: f64 = 30.0; // seconds
-const POST_ARM_PARAMETER_UPDATE_DELAY: f64 = 15.0; // seconds
+const MISSION_WAYPOINT_FILE_NAME: &str = "contest_mission.txt"; // "plane_circle_point.txt";
+const MISSION_TIMEOUT: f64 = 360.0; // seconds
+const POST_ARM_PARAMETER_UPDATE_DELAY: f64 = 60.0; // seconds
 const NOISE_APPLICATION_SIM_TIME: f64 = 100.0; // seconds
-const RECORDING_TIMESTEP: f64 = 0.1; // seconds
+const RECORDING_TIMESTEP: f64 = 0.01; // seconds
 const INITIAL_EXPLORATION_POINTS: usize = 10;
 const EXECUTIONS_PER_PHI_STAGE: usize = 10;
 const MAX_EXECUTIONS_PER_LAMBDA_STAGE: usize = 10;
-const HEADLESS_MODE: bool = true; // WARNING: Only set to false if fuzzing outside of a docker container...
+const HEADLESS_MODE: bool = false; // WARNING: Only set to false if fuzzing outside of a docker container...
 
 pub fn main() {
 
@@ -236,7 +237,7 @@ pub fn main() {
     let physical_objective = PhysicalObjective::new(); // Does the input falsify an STL formula (robustness < 0)?
 
     // Modify these lines to adjust feedback/objective metrics
-    let mut feedback = feedback_or!(physical_feedback, coverage_feedback,);
+    let mut feedback = feedback_or!(physical_feedback,); // coverage_feedback,);
     let mut objective = feedback_or!(physical_objective, crash_feedback,);
 
     /**

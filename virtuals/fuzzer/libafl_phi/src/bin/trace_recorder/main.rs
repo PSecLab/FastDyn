@@ -8,7 +8,7 @@ use baby_fuzzer::gz_state_parser::{
 
 use core::panic;
 use std::{env, io::Write};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::BufWriter;
 use protobuf::text_format::parse_from_str;
 use gz_transport::Node;
@@ -19,6 +19,13 @@ use gz_msgs::{
 use std::process::Command;
 use std::thread::sleep;
 use std::f32::consts::PI;
+use std::fs;
+use std::io::Read;
+use std::os::unix::net::UnixListener;
+use std::path::Path;
+use std::thread;
+use std::time::Duration;
+use std::sync::Mutex;
 
 /*
 {"clock": system {
@@ -197,6 +204,8 @@ fn attitude_from_quat(x: f64, y: f64, z: f64, w: f64) -> (f64, f64, f64) {
  */
 fn record_state_at_time(gz_data: &str, file: &File) {
 
+    static TIME: Mutex<Option<f64>> = Mutex::new(None);
+
     // First, extract all the blocks from the raw gz data
     let clock_block: String = extract_block_from_gz_data(gz_data, "clock");
     let pose_v_block: String = extract_block_from_gz_data(gz_data, "pose");
@@ -213,7 +222,19 @@ fn record_state_at_time(gz_data: &str, file: &File) {
     // let magnetometer_proto: Magnetometer = parse_from_str::<Magnetometer>(&magnetometer_block).unwrap();
 
     // Extract data from blocks
-    let sim_time: f64 = get_sim_time(&clock_block);
+    let mut sim_time = get_sim_time(&clock_block);
+
+    let mut time_guard = TIME.lock().unwrap();
+
+    let base_time = match *time_guard {
+        Some(t) => t,
+        None => {
+            *time_guard = Some(sim_time);
+            sim_time
+        }
+    };
+
+    sim_time -= base_time;
 
     // Pose: position coords
     let x_pos = pose_proto.position.x;
@@ -255,13 +276,13 @@ fn record_state_at_time(gz_data: &str, file: &File) {
     writer.flush().unwrap();
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 5 {
         println!("Usage: {} execution_num time_step sim_time_limit trace_log_dir", args[0]);
-        return;
+        return Err("Not enough arguments provided".into());
     }
 
     let execution_num: usize = args[1].parse().unwrap();
@@ -297,6 +318,60 @@ fn main() {
     // Mission will never start this quick anyway
     let recording_start_time: f64 = 5.0;
     let mut next_time_to_record: f64 = recording_start_time;
+
+
+    // wait for arm throttle
+    let socket_path = "/tmp/rust_receiver.sock";
+
+    // Remove stale socket file if it exists
+    if Path::new(socket_path).exists() {
+        fs::remove_file(socket_path)?;
+    }
+
+    let listener = UnixListener::bind(socket_path)?;
+    println!("Rust server listening on {}", socket_path);
+
+    // Set nonblocking
+    listener.set_nonblocking(true)?;
+
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _addr)) => {
+                println!("Client connected");
+
+                let mut buf = [0u8; 1024];
+                let n = match stream.read(&mut buf) {
+                    Ok(size) => size,
+                    Err(e) => {
+                        println!("Failed to read from client: {}", e);
+                        continue;
+                    }
+                };
+
+                if n > 0 {
+                    let msg = String::from_utf8_lossy(&buf[..n]);
+                    println!("Received: {}", msg);
+
+                    if msg.trim() == "throttle armed" {
+                        println!("Throttle armed message received, starting recording...");
+                        break;
+                    } else {
+                        println!("Received unexpected message: {}", msg);
+                    }
+                } else {
+                    println!("Client connected but sent no data");
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                println!("No client yet, polling...");
+                thread::sleep(Duration::from_millis(500));
+            }
+            Err(e) => return Err(Box::new(e)),
+        }
+    }
+
+    fs::remove_file(socket_path);
+
     loop {
 
         let gz_data: String = get_raw_gz_data(&mut node);
@@ -309,13 +384,15 @@ fn main() {
         current_sim_time = get_sim_time(&clock_block);
         if current_sim_time >= sim_time_limit {
             break;
-        } else if current_sim_time < recording_start_time {
-            continue;
+        // } else if current_sim_time < recording_start_time {
+        //     continue;
         } else if current_sim_time >= next_time_to_record {
             record_state_at_time(&gz_data, &file);
             next_time_to_record += time_step;
         }
 
     }
+
+    return Ok(());
 
 }

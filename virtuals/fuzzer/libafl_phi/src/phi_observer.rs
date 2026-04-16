@@ -63,6 +63,99 @@ struct State {
     lin_accel_z: f64,
 }
 
+#[derive(Deserialize)]
+struct ContestState {
+    time: f64,
+    lyapunov: f64,
+}
+
+/**
+ * A helper function to create the OptiFuzz default trace state.
+ */
+fn create_state(
+    sim_time: f64,
+    x: f64,
+    y: f64,
+    z: f64,
+    roll: f64,
+    pitch: f64,
+    yaw: f64,
+    lin_velo_x: f64,
+    lin_velo_y: f64,
+    lin_velo_z: f64,
+    ang_velo_x: f64,
+    ang_velo_y: f64,
+    ang_velo_z: f64,
+    lin_accel_x: f64,
+    lin_accel_y: f64,
+    lin_accel_z: f64,
+) -> HashMap<String, f64> {
+    HashMap::from([
+        ("time".to_string(), sim_time),
+        ("x".to_string(), x), 
+        ("y".to_string(), y), 
+        ("z".to_string(), z),
+        ("roll".to_string(), roll), 
+        ("pitch".to_string(), pitch), 
+        ("yaw".to_string(), yaw),
+        ("lin_velo_x".to_string(), lin_velo_x),
+        ("lin_velo_y".to_string(), lin_velo_y),
+        ("lin_velo_z".to_string(), lin_velo_z),
+        ("ang_velo_x".to_string(), ang_velo_x),
+        ("ang_velo_y".to_string(), ang_velo_y),
+        ("ang_velo_z".to_string(), ang_velo_z),
+        ("lin_accel_x".to_string(), lin_accel_x),
+        ("lin_accel_y".to_string(), lin_accel_y),
+        ("lin_accel_z".to_string(), lin_accel_z),
+    ])
+}
+
+fn create_default_trace(mut csv_reader: csv::Reader<std::fs::File>) -> Trace<HashMap<String, f64>> {
+
+    let mut trace: Trace<HashMap<String, f64>> = Trace::new();
+    for result in csv_reader.deserialize() {
+        let state: State = result.unwrap();
+        trace.insert(state.time, create_state(
+            state.time, 
+            state.x, state.y, state.z, 
+            state.roll, state.pitch, state.yaw,
+            state.lin_velo_x, state.lin_velo_y, state.lin_velo_z,
+            state.ang_velo_x, state.ang_velo_y, state.ang_velo_z,
+            state.lin_accel_x, state.lin_accel_y, state.lin_accel_z,
+        ));
+    }
+
+    trace
+
+}
+
+/**
+ * A helper function to create the ConTest trace state.
+ */
+fn create_contest_state(
+    sim_time: f64,
+    lyapunov: f64,
+) -> HashMap<String, f64> {
+    HashMap::from([
+        ("time".to_string(), sim_time),
+        ("lyapunov".to_string(), lyapunov),
+    ])
+}
+
+fn create_contest_trace(mut csv_reader: csv::Reader<std::fs::File>) -> Trace<HashMap<String, f64>> {
+
+    let mut trace: Trace<HashMap<String, f64>> = Trace::new();
+    for result in csv_reader.deserialize() {
+        let record: ContestState = result.unwrap();
+        let sim_time: f64 = record.time;
+        let lyapunov: f64 = record.lyapunov;
+        trace.insert(sim_time, create_contest_state(sim_time, lyapunov));
+    }
+
+    trace
+
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct PhysicalObserver {
     name: Cow<'static, str>,
@@ -232,45 +325,7 @@ where
     }
 
     fn post_exec(&mut self, state: &mut S, _input: &I, _exit_kind: &ExitKind,) -> Result<(), Error> {
-
-        fn create_state(
-            sim_time: f64,
-            x: f64,
-            y: f64,
-            z: f64,
-            roll: f64,
-            pitch: f64,
-            yaw: f64,
-            lin_velo_x: f64,
-            lin_velo_y: f64,
-            lin_velo_z: f64,
-            ang_velo_x: f64,
-            ang_velo_y: f64,
-            ang_velo_z: f64,
-            lin_accel_x: f64,
-            lin_accel_y: f64,
-            lin_accel_z: f64,
-        ) -> HashMap<String, f64> {
-            HashMap::from([
-                ("time".to_string(), sim_time),
-                ("x".to_string(), x), 
-                ("y".to_string(), y), 
-                ("z".to_string(), z),
-                ("roll".to_string(), roll), 
-                ("pitch".to_string(), pitch), 
-                ("yaw".to_string(), yaw),
-                ("lin_velo_x".to_string(), lin_velo_x),
-                ("lin_velo_y".to_string(), lin_velo_y),
-                ("lin_velo_z".to_string(), lin_velo_z),
-                ("ang_velo_x".to_string(), ang_velo_x),
-                ("ang_velo_y".to_string(), ang_velo_y),
-                ("ang_velo_z".to_string(), ang_velo_z),
-                ("lin_accel_x".to_string(), lin_accel_x),
-                ("lin_accel_y".to_string(), lin_accel_y),
-                ("lin_accel_z".to_string(), lin_accel_z),
-            ])
-        }
-
+        
         if self.recorder_process.is_none() {
             // The recorder process should NOT be none...
             panic!("Error: Recorder process is none in post_exec!");
@@ -285,33 +340,49 @@ where
 
         let newest_trace_log_path = format!("{}/trace_{}.csv", self.trace_log_dir, state.executions());
 
+        // let csv_reader_status = csv::ReaderBuilder::new()
+        //     .has_headers(false)
+        //     .from_path(&newest_trace_log_path);
+        
+        // if csv_reader_status.is_err() {
+        //     println!("Warning: Failed to open trace log file for execution {}", state.executions());
+        //     println!("Skipping physical observation...");
+        //     return Ok(());
+        // }
+
+        // let mut csv_reader = csv_reader_status.unwrap();
+        // let mut trace: Trace<HashMap<String, f64>> = create_default_trace(csv_reader);
+
+        let newest_lyapunov_log_path = format!("{}/lyapunov_{}.csv", self.trace_log_dir, state.executions());
+        let initial_distance_to_waypoint: f64 = 1000.0;
+        let epsilon: f64 = 100.0; // WP_RADIUS
+        let mission_timeout: f64 = 180.0;
+
+        let lyapunov_process = Command::new("python3")
+            .arg("calculate_lyapunov.py")
+            .arg(newest_trace_log_path)
+            .arg(&newest_lyapunov_log_path)
+            .arg(initial_distance_to_waypoint.to_string())
+            .arg(epsilon.to_string())
+            .arg(mission_timeout.to_string())
+            .spawn();
+        if lyapunov_process.is_err() {
+            panic!("Error: Failed to start Lyapunov calculation script!");
+        }
+        let _ = lyapunov_process.unwrap().wait();
+
         let csv_reader_status = csv::ReaderBuilder::new()
             .has_headers(false)
-            .from_path(newest_trace_log_path);
+            .from_path(&newest_lyapunov_log_path);
         
         if csv_reader_status.is_err() {
-            println!("Warning: Failed to open trace log file for execution {}", state.executions());
+            println!("Warning: Failed to open lyapunov log file for execution {}", state.executions());
             println!("Skipping physical observation...");
             return Ok(());
         }
 
         let mut csv_reader = csv_reader_status.unwrap();
-
-        let mut trace: Trace<HashMap<String, f64>> = Trace::new();
-        for result in csv_reader.deserialize() {
-            let state: State = result.unwrap();
-            trace.insert(state.time, create_state(
-                state.time, 
-                state.x, state.y, state.z, 
-                state.roll, state.pitch, state.yaw,
-                state.lin_velo_x, state.lin_velo_y, state.lin_velo_z,
-                state.ang_velo_x, state.ang_velo_y, state.ang_velo_z,
-                state.lin_accel_x, state.lin_accel_y, state.lin_accel_z,
-            ));
-        }
-
-        // Finally, evaluate the trace against all STL formulas that were
-        // parsed from the external file using `banquo-parser`.
+        let mut trace: Trace<HashMap<String, f64>> = create_contest_trace(csv_reader);
 
         self.latest_robustness_vec.clear();
 
@@ -337,16 +408,19 @@ where
         // These are inequalities that relate metrics from the CPS's physical state to arbitrary float expressions.
         // See the State struct (near line 40) for the available metrics you can use in predicates.
         // The State struct only contains a subset of the available metrics for now. We will complete the list later.
-        let min_z_pred = predicate!{ 50.0 <= z };
-        let time_pred = predicate!{ 110.0 <= time };
+        // let min_z_pred = predicate!{ 50.0 <= z };
+        // let time_pred = predicate!{ 110.0 <= time };
+        let exponential_stability_pred = predicate!{ lyapunov <= 0.0 };
 
         // After creating the predicates, use the logical operators to form a complete STL formula.
         // "For all simulation times, if the simulation time is greater than 110, then the plane's Z coordinate must
         // be greater than 50."
-        let min_z_formula: Always<Implies<Predicate, Predicate>> = Always::unbounded(Implies::new(time_pred.clone(), min_z_pred));
+        // let min_z_formula: Always<Implies<Predicate, Predicate>> = Always::unbounded(Implies::new(time_pred.clone(), min_z_pred));
+        let contest_formula = Always::unbounded(exponential_stability_pred);
 
         // After creating all your formulas, make sure to push their evaluations into the robustness vector, like this:
-        self.latest_robustness_vec.push(evaluate(&trace, &min_z_formula).unwrap());
+        // self.latest_robustness_vec.push(evaluate(&trace, &min_z_formula).unwrap());
+        self.latest_robustness_vec.push(evaluate(&trace, &contest_formula).unwrap());
 
         // ------------------------------------------------------------------------------------------------
         // ------------------------------------- ONLY MODIFY ABOVE ----------------------------------------

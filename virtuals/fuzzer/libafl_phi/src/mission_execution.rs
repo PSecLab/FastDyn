@@ -18,7 +18,6 @@ use gz_transport::Node;
 use gz_msgs::clock::Clock;
 
 const RUN_SERVICES_DIR: &str = "../../physics/flight_controllers/courbet/gazebo";
-const QEMU_BUILD_DIR: &str = "../../../../qemu/build";
 const MAV_C2_DIR: &str = "../../physics/flight_controllers/courbet/mavlink";
 const FASTDYN_DIR: &str = "../../..";
 
@@ -70,7 +69,7 @@ pub fn execute_mission(
 ) -> ExitKind {
 
     // 1. Apply inputs
-    println!("execute_mission received inputs: {:?}", input);
+    // println!("execute_mission received inputs: {:?}", input);
     let raw_paramater_values = input.get_param_bytes().target_bytes().clone();
     let raw_env_config = input.get_env_config();
 
@@ -90,14 +89,14 @@ pub fn execute_mission(
     }
 
     let spawn_services = services_command
-        // .stdout(Stdio::null())
+        .stdout(Stdio::null())
         .spawn();
     if spawn_services.is_err() {
         panic!("Error: Failed to start services: {}", spawn_services.err().unwrap());
     }
 
     // Let services spin up
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::thread::sleep(std::time::Duration::from_secs(5));
 
     let init_file_name: &str;
     if cps_name == "rover" {
@@ -127,20 +126,15 @@ pub fn execute_mission(
     }
 
     // Let mavlink C2 spin up
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::thread::sleep(std::time::Duration::from_secs(5));
 
-    // let script_name: String = format!("../{}v462.sh", cps_name);
-    // let spawn_fd = Command::new("bash")
-    //     .current_dir(QEMU_BUILD_DIR)
-    //     .arg(script_name)
-    //     // .stdout(Stdio::null())
-    //     .spawn();
-    let script_name: String = format!("fastdyn run -c configs/{}462.toml", cps_name);
-    let spawn_fd = Command::new("bash")
+    let script_name: String = format!("configs/{}462.toml", cps_name);
+    let spawn_fd = Command::new("fastdyn")
         .current_dir(FASTDYN_DIR)
+        .arg("run")
         .arg("-c")
         .arg(script_name)
-        // .stdout(Stdio::null())
+        .stdout(Stdio::null())
         .spawn();
     if spawn_fd.is_err() {
         panic!("Error: Failed to start FastDyn QEMU: {}", spawn_fd.err().unwrap());
