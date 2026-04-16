@@ -607,16 +607,6 @@ void convert_to_invensense(const float in[7], int16_t out[7])
     out[4] = gyro_x;
     out[5] = gyro_y;
     out[6] = gyro_z;
-
-    // noise directly to LSBs
-
-    out[0] += (rand() % 5) - 2; // ±2 LSB accel
-    out[1] += (rand() % 5) - 2;
-    out[2] += (rand() % 5) - 2;
-
-    out[4] += (rand() % 7) - 3; // ±3 LSB
-    out[5] += (rand() % 7) - 3;
-    out[6] += (rand() % 7) - 3;
 }
 
 #if PROFILE_INS_READS == 1
