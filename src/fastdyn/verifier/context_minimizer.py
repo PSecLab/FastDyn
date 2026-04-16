@@ -1,3 +1,4 @@
+import glob
 import logging
 import os
 import re
@@ -92,7 +93,7 @@ def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_win
                 f.write(f"- {finding}\n")
         fastdyn_log.debug(f"Stateful analysis saved to: {state_file_path}")
 
-        entropy_findings = analyzer.analyze_entropy(p_accesses)
+        entropy_findings, low_entropy_registers = analyzer.analyze_entropy(p_accesses)
         entropy_file_path = os.path.join(peripheral_dir, "entropy.txt")
         with open(entropy_file_path, 'w') as f:
             f.write(f"# Entropy Analysis for {peripheral}\n")
@@ -101,6 +102,37 @@ def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_win
             for finding in entropy_findings:
                 f.write(f"- {finding}\n")
         fastdyn_log.debug(f"  Entropy analysis saved to: {entropy_file_path}")
+
+        # --- Rare value transitions for LOW-entropy registers ---
+        # The top-k loop patterns can miss infrequent but critical state
+        # transitions (e.g. UART STATUS going from 0x50 idle to 0x140 RX-ready).
+        # For registers classified as LOW entropy by analyze_entropy(), collect
+        # every unique read value NOT already in the extracted loop patterns
+        # and emit one representative trace line per missing value.
+        existing_loop_values = defaultdict(set)
+        for lf in sorted(glob.glob(os.path.join(peripheral_dir, "loop_pattern_*.txt"))):
+            with open(lf, 'r') as f:
+                for line in f:
+                    if line.startswith('#') or not line.strip():
+                        continue
+                    m = re.search(r'value=0x([0-9A-Fa-f]+)', line)
+                    r_m = re.search(r'->\s*(\w+)\s', line)
+                    if m and r_m:
+                        existing_loop_values[r_m.group(1)].add(int(m.group(1), 16))
+
+        rare_transitions = analyzer.find_rare_value_transitions(
+            p_accesses, low_entropy_registers, existing_loop_values
+        )
+        if rare_transitions:
+            rare_file = os.path.join(peripheral_dir, "rare_transitions.txt")
+            with open(rare_file, 'w') as f:
+                f.write(f"# Rare Value Transitions for {peripheral}\n")
+                f.write("# These are read values from LOW-entropy (status/control) registers\n")
+                f.write("# that did NOT appear in the dominant loop patterns above.\n")
+                f.write("# They represent infrequent but important state changes.\n\n")
+                for access in rare_transitions:
+                    f.write(f"{access}\n")
+            fastdyn_log.debug(f"Rare transitions saved to: {rare_file}")
 
         # Filter the global ISR findings for the current peripheral
         peripheral_isr_findings = [f for f in all_isr_findings if f"INTERRUPT on {peripheral}" in f]
@@ -281,6 +313,51 @@ class MMIOAnalyzer:
                 return [(pattern, seq_len // p)]
         return []
 
+    def find_rare_value_transitions(
+        self,
+        accesses: List[MMIOAccess],
+        low_entropy_registers: set,
+        existing_values: dict,
+    ) -> List[MMIOAccess]:
+        """Return one representative trace line for each unique read value of a
+        LOW-entropy register that is NOT already present in the extracted loop
+        patterns.
+
+        This ensures that infrequent but critical state transitions (e.g. UART
+        STATUS changing from 0x50 to 0x140 when RX data arrives) are always
+        included in the prompt, even when they fall outside the top-k patterns.
+
+        Args:
+            accesses: All MMIO accesses for this peripheral.
+            low_entropy_registers: Set of register names classified as LOW
+                                   entropy by analyze_entropy().
+            existing_values: Dict mapping register name -> set of values already
+                             captured in the loop pattern files.
+
+        Returns:
+            A list of MMIOAccess objects — one per missing (register, value) pair.
+        """
+        if not low_entropy_registers:
+            return []
+
+        rare = []
+        seen = set()  # (register, value) pairs already emitted
+        for acc in accesses:
+            if acc.access_type != 'read':
+                continue
+            if acc.register not in low_entropy_registers:
+                continue
+            key = (acc.register, acc.value)
+            if key in seen:
+                continue
+            seen.add(key)
+            # Skip values already represented in the loop pattern files
+            if acc.value in existing_values.get(acc.register, set()):
+                continue
+            rare.append(acc)
+
+        return rare
+
     # --- NEW: Stateful Analysis Method ---
     def analyze_stateful_behavior(self, accesses: List[MMIOAccess]) -> List[str]:
         """Scans a list of accesses for common stateful patterns."""
@@ -334,11 +411,16 @@ class MMIOAnalyzer:
         return results
 
         # --- NEW: Entropy Analysis Method ---
-    def analyze_entropy(self, accesses: List[MMIOAccess]) -> List[str]:
-        """Calculates Shannon entropy for each read register."""
+    def analyze_entropy(self, accesses: List[MMIOAccess]) -> Tuple[List[str], set]:
+        """Calculates Shannon entropy for each read register.
+
+        Returns:
+            A tuple of (findings list, set of LOW-entropy register names).
+        """
         fastdyn_log.debug(" Analyzing entropy of read values...")
         reads_by_register = defaultdict(list)
         results = []
+        low_entropy_registers = set()
 
         # 1. Group all read values by register
         for acc in accesses:
@@ -346,7 +428,7 @@ class MMIOAnalyzer:
                 reads_by_register[(acc.peripheral, acc.register)].append(acc.value)
 
         if not reads_by_register:
-            return ["No read operations found for this peripheral."]
+            return ["No read operations found for this peripheral."], low_entropy_registers
 
         # 2. Calculate entropy for each register's reads
         for (p, r), values in sorted(reads_by_register.items()):
@@ -361,6 +443,7 @@ class MMIOAnalyzer:
             entropy_class = ""
             if entropy < 2.0:
                 entropy_class = "LOW (suggests status/control register)"
+                low_entropy_registers.add(r)
             elif entropy < 6.0:
                 entropy_class = "MEDIUM (suggests counter or complex status)"
             else:
@@ -368,7 +451,9 @@ class MMIOAnalyzer:
 
             results.append(f"Register {r}: {entropy_class} - Entropy = {entropy:.2f} bits")
 
-        return results if results else ["No registers with sufficient read data for entropy analysis."]
+        if not results:
+            results = ["No registers with sufficient read data for entropy analysis."]
+        return results, low_entropy_registers
 
         # --- NEW: ISR Detection Method ---
      # --- MODIFIED: ISR analysis now groups and counts repeating ISRs ---

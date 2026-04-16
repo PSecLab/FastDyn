@@ -1,0 +1,300 @@
+### 1. Previous Model Failure Analysis
+The mismatch is most likely caused by the RX side being modeled as a level-triggered, always-visible condition that starts too early. The current model begins injecting `"Hello"` as soon as the UART is fully enabled during initialization, and `STATUS` returns `0x140` whenever any byte remains in the RX FIFO. The hardware trace shows the opposite behavior: the dominant runtime state is `STATUS=0x50` during the TX polling loop, while `0x140` appears only as an infrequent RX event before FIFO reads. So the model is exposing RX data too soon and holding RX-ready asserted for too long.
+
+### 2. Register Analysis
+- **`CTRL` @ `0x00`**
+  - Main UART control/config register.
+  - Firmware performs RMW sequences on it.
+  - Bit `0x1` appears to enable the UART.
+  - A read-only status bit `0x80000` appears after the final activation write (`0x28C01` read back as `0xA8C01`).
+  - Other writable config bits include values such as `0x20000`, `0x0C00`, and `0x8000`.
+
+- **`STATUS` @ `0x04`**
+  - Polled heavily by firmware.
+  - `0x50` is the normal idle/TX-ready state.
+  - `0x140` indicates an RX event / data available condition.
+  - Hardware behavior suggests RX indication is transient/latched, not simply “RX FIFO non-empty forever”.
+
+- **`CLKDIV` @ `0x10`**
+  - Baud/divider register.
+  - Written with `0x40` during init.
+
+- **`OSR` @ `0x14`**
+  - Oversampling configuration.
+  - Written with `0x5` during init.
+
+- **`FIFO` @ `0x20`**
+  - TX data register on write.
+  - RX data register on read.
+  - Hardware RX data sequence observed: `0x48, 0x65, 0x6C, 0x6C, 0x6F` (`"Hello"`).
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+typedef struct UARTState {
+    uint64_t base;
+
+    uint32_t ctrl;
+    uint32_t clkdiv;
+    uint32_t osr;
+    uint8_t tx_last;
+
+    uint8_t rx_fifo[UART_RX_FIFO_SIZE];
+    unsigned rx_head;
+    unsigned rx_tail;
+    unsigned rx_count;
+
+    bool ready_latched;
+
+    uint64_t rx_timer;
+    bool rx_stream_started;
+    size_t rx_script_pos;
+} UARTState;
+=======
+typedef struct UARTState {
+    uint64_t base;
+
+    uint32_t ctrl;
+    uint32_t clkdiv;
+    uint32_t osr;
+    uint8_t tx_last;
+
+    uint8_t rx_fifo[UART_RX_FIFO_SIZE];
+    unsigned rx_head;
+    unsigned rx_tail;
+    unsigned rx_count;
+
+    bool ready_latched;
+    bool rx_ready_latched;
+
+    uint64_t rx_timer;
+    bool rx_stream_started;
+    size_t rx_script_pos;
+} UARTState;
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+static void uart_rx_push(UARTState *s, uint8_t ch) {
+    if (s->rx_count >= UART_RX_FIFO_SIZE) {
+        return;
+    }
+
+    s->rx_fifo[s->rx_tail] = ch;
+    s->rx_tail = (s->rx_tail + 1) % UART_RX_FIFO_SIZE;
+    s->rx_count++;
+}
+=======
+static void uart_rx_push(UARTState *s, uint8_t ch) {
+    if (s->rx_count >= UART_RX_FIFO_SIZE) {
+        return;
+    }
+
+    s->rx_fifo[s->rx_tail] = ch;
+    s->rx_tail = (s->rx_tail + 1) % UART_RX_FIFO_SIZE;
+    s->rx_count++;
+    s->rx_ready_latched = true;
+}
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+static uint32_t uart_status_value(UARTState *s) {
+    if (!uart_enabled(s)) {
+        return 0;
+    }
+
+    if (s->rx_count > 0) {
+        return UART_STATUS_RX_AVAIL;
+    }
+
+    return UART_STATUS_IDLE_TX;
+}
+=======
+static uint32_t uart_status_value(UARTState *s) {
+    if (!uart_enabled(s)) {
+        return 0;
+    }
+
+    /*
+     * Hardware does not keep STATUS at 0x140 just because unread bytes remain
+     * in the FIFO. RX visibility behaves more like a latched event that is
+     * observed briefly, while the dominant steady-state value during the TX
+     * polling loop remains 0x50.
+     */
+    if (s->rx_ready_latched) {
+        return UART_STATUS_RX_AVAIL;
+    }
+
+    return UART_STATUS_IDLE_TX;
+}
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+static uint32_t uart_read_reg32(UARTState *s, uint64_t offset) {
+    switch (offset) {
+    case UART_REG_CTRL:
+        return uart_ctrl_read_value(s);
+
+    case UART_REG_STATUS:
+        return uart_status_value(s);
+
+    case UART_REG_CLKDIV:
+        return s->clkdiv;
+
+    case UART_REG_OSR:
+        return s->osr;
+
+    case UART_REG_FIFO:
+        return (uint32_t)uart_rx_pop(s);
+
+    default:
+        uart_debug("UART: read from unknown register\n");
+        return 0;
+    }
+}
+=======
+static uint32_t uart_read_reg32(UARTState *s, uint64_t offset) {
+    uint32_t value;
+
+    switch (offset) {
+    case UART_REG_CTRL:
+        return uart_ctrl_read_value(s);
+
+    case UART_REG_STATUS:
+        value = uart_status_value(s);
+        if (s->rx_ready_latched) {
+            s->rx_ready_latched = false;
+        }
+        return value;
+
+    case UART_REG_CLKDIV:
+        return s->clkdiv;
+
+    case UART_REG_OSR:
+        return s->osr;
+
+    case UART_REG_FIFO:
+        value = (uint32_t)uart_rx_pop(s);
+        if (s->rx_count == 0) {
+            s->rx_ready_latched = false;
+        }
+        return value;
+
+    default:
+        uart_debug("UART: read from unknown register\n");
+        return 0;
+    }
+}
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+static void uart_write_reg32(UARTState *s, uint64_t offset, uint32_t value) {
+    switch (offset) {
+    case UART_REG_CTRL:
+        /*
+         * Writable state mirrors firmware writes. The trace shows that after
+         * writing 0x28C01, reads return 0xA8C01, so we model 0x80000 as a
+         * latched read-only ready/active bit that appears once the UART is
+         * brought into its fully active configuration.
+         */
+        s->ctrl = value & ~UART_CTRL_READY_RO;
+
+        if ((value & UART_CTRL_ACTIVE_CFG) && (value & UART_CTRL_EN)) {
+            s->ready_latched = true;
+            uart_maybe_start_rx_stream(s);
+        } else if (!(value & UART_CTRL_EN)) {
+            s->ready_latched = false;
+        }
+        break;
+
+    case UART_REG_CLKDIV:
+        s->clkdiv = value;
+        break;
+
+    case UART_REG_OSR:
+        s->osr = value;
+        break;
+
+    case UART_REG_FIFO:
+        /*
+         * TX path: trace shows firmware polling STATUS==0x50 and then writing
+         * bytes to FIFO. No observed need for TX timing/backpressure, so this
+         * model accepts bytes immediately and keeps STATUS transmit-ready.
+         */
+        s->tx_last = (uint8_t)(value & 0xFF);
+        break;
+
+    case UART_REG_STATUS:
+        /*
+         * No evidence of writable STATUS semantics in trace.
+         */
+        break;
+
+    default:
+        uart_debug("UART: write to unknown register\n");
+        break;
+    }
+}
+=======
+static void uart_write_reg32(UARTState *s, uint64_t offset, uint32_t value) {
+    switch (offset) {
+    case UART_REG_CTRL:
+        /*
+         * Writable state mirrors firmware writes. The trace shows that after
+         * writing 0x28C01, reads return 0xA8C01, so we model 0x80000 as a
+         * latched read-only ready/active bit that appears once the UART is
+         * brought into its fully active configuration.
+         */
+        s->ctrl = value & ~UART_CTRL_READY_RO;
+
+        if ((value & UART_CTRL_ACTIVE_CFG) && (value & UART_CTRL_EN)) {
+            s->ready_latched = true;
+        } else if (!(value & UART_CTRL_EN)) {
+            s->ready_latched = false;
+            s->rx_ready_latched = false;
+        }
+        break;
+
+    case UART_REG_CLKDIV:
+        s->clkdiv = value;
+        break;
+
+    case UART_REG_OSR:
+        s->osr = value;
+        break;
+
+    case UART_REG_FIFO:
+        /*
+         * TX path: trace shows firmware polling STATUS==0x50 and then writing
+         * bytes to FIFO. RX traffic should not appear immediately on UART
+         * enable; start the synthetic RX stream only after real runtime TX
+         * activity is observed.
+         */
+        s->tx_last = (uint8_t)(value & 0xFF);
+        uart_maybe_start_rx_stream(s);
+        break;
+
+    case UART_REG_STATUS:
+        /*
+         * No evidence of writable STATUS semantics in trace.
+         */
+        break;
+
+    default:
+        uart_debug("UART: write to unknown register\n");
+        break;
+    }
+}
+>>>>>>> REPLACE
+```

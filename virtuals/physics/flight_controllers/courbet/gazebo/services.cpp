@@ -15,9 +15,18 @@
 #include <gz/msgs/any.pb.h>
 #include <gz/msgs/laserscan.pb.h>
 #include <gz/msgs/uint32.pb.h>
+#include <gz/msgs/entity_factory.pb.h>
+#include <gz/msgs/boolean.pb.h>
+#include <gz/math/Quaternion.hh>
 #include <boost/circular_buffer.hpp>
 #include <iostream>
+#include <cmath>
+#include <cctype>
 #include <mutex>
+#include <atomic>
+#include <iomanip>
+#include <sstream>
+#include <functional>
 #include <thread>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -33,86 +42,330 @@ static bool READY = false;
 using json = nlohmann::json;
 
 struct Vec3NoiseModel {
-  // BASE (reference) noise levels — tune these once
-  gz::math::Vector3d sigma_white_base{0,0,0}; // std-dev of white noise
-  gz::math::Vector3d sigma_rw_base{0,0,0};    // std-dev of random-walk drift
+  // Base noise levels
+  gz::math::Vector3d sigma_white_base{0,0,0};
+  gz::math::Vector3d sigma_rw_base{0,0,0};
 
-  // ======= YOUR TWO KNOBS =======
-  double white_scale = 1.0;  // <-- scales instantaneous noise
-  double drift_scale = 1.0;  // <-- scales long-term drift
-  // ==============================
+  // User knobs
+  double white_scale = 1.0;
+  double drift_scale = 1.0;
 
-  // current bias state (drifting over time)
+  // Deterministic controls
+  uint64_t seed = 0;
+
+  // Time quantization
+  // white_dt: how often white noise changes
+  // drift_dt: how often bias random walk gets a new increment
+  double white_dt = 0.01;
+  double drift_dt = 0.01;
+
+  // Bias state
   gz::math::Vector3d bias{0,0,0};
 
-  std::mt19937 rng{std::random_device{}()};
-  std::normal_distribution<double> N{0.0, 1.0};
+  // Track how far the drift has been integrated
+  int64_t last_drift_tick = -1;
 
-  // === NEW: constructors ===
-
-  // Default constructor (keeps your existing defaults)
   Vec3NoiseModel() = default;
 
-  // Convenience constructor
   Vec3NoiseModel(
       gz::math::Vector3d white_base,
       gz::math::Vector3d rw_base,
       double w_scale = 1.0,
       double d_scale = 1.0,
-      gz::math::Vector3d initial_bias = {0,0,0})
-  : sigma_white_base(white_base),
-    sigma_rw_base(rw_base),
-    white_scale(w_scale),
-    drift_scale(d_scale),
-    bias(initial_bias)
-  {}
+      gz::math::Vector3d initial_bias = {0,0,0},
+      uint64_t deterministic_seed = 0,
+      double white_dt_sec = 0.01,
+      double drift_dt_sec = 0.01)
+      : sigma_white_base(white_base),
+        sigma_rw_base(rw_base),
+        white_scale(w_scale),
+        drift_scale(d_scale),
+        seed(deterministic_seed),
+        white_dt(white_dt_sec),
+        drift_dt(drift_dt_sec),
+        bias(initial_bias),
+        last_drift_tick(-1) {}
 
-  // === existing methods (unchanged) ===
+  void Reset()
+  {
+    bias = {0,0,0};
+    last_drift_tick = -1;
+  }
 
-  gz::math::Vector3d SampleWhite() {
+  void Reset(gz::math::Vector3d initial_bias)
+  {
+    bias = initial_bias;
+    last_drift_tick = -1;
+  }
+
+private:
+  static uint64_t SplitMix64(uint64_t x)
+  {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    x ^= (x >> 31);
+    return x;
+  }
+
+  static double Uniform01(uint64_t key)
+  {
+    return (SplitMix64(key) >> 11) * (1.0 / 9007199254740992.0);
+  }
+
+  static double Normal01(uint64_t key1, uint64_t key2)
+  {
+    double u1 = Uniform01(key1);
+    double u2 = Uniform01(key2);
+    u1 = std::max(u1, 1e-12);
+    return std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
+  }
+
+  static int64_t TimeToTick(double t, double dt)
+  {
+    // Stable floor-based bucket mapping
+    return static_cast<int64_t>(std::floor(t / dt));
+  }
+
+  double NoiseSample(int axis, int stream_id, int64_t tick) const
+  {
+    const uint64_t tick_u = static_cast<uint64_t>(tick);
+
+    const uint64_t base =
+        seed ^
+        (0xD1B54A32D192ED03ULL * (tick_u + 1)) ^
+        (0x94D049BB133111EBULL * static_cast<uint64_t>(axis + 1)) ^
+        (0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(stream_id + 1));
+
+    const uint64_t k1 = base ^ 0xA24BAED4963EE407ULL;
+    const uint64_t k2 = base ^ 0x9FB21C651E98DF25ULL;
+
+    return Normal01(k1, k2);
+  }
+
+  gz::math::Vector3d WhiteAtTime(double simTimeSec) const
+  {
+    const int64_t tick = TimeToTick(simTimeSec, white_dt);
+
     return {
-      (sigma_white_base.X() * white_scale) * N(rng),
-      (sigma_white_base.Y() * white_scale) * N(rng),
-      (sigma_white_base.Z() * white_scale) * N(rng)
+      (sigma_white_base.X() * white_scale) * NoiseSample(0, 0, tick),
+      (sigma_white_base.Y() * white_scale) * NoiseSample(1, 0, tick),
+      (sigma_white_base.Z() * white_scale) * NoiseSample(2, 0, tick)
     };
   }
 
-  void StepBias(double dt) {
-    const double sdt = std::sqrt(dt);
+  void AdvanceBiasToTime(double simTimeSec)
+  {
+    const int64_t target_tick = TimeToTick(simTimeSec, drift_dt);
+    if (target_tick < 0)
+      return;
 
-    bias += gz::math::Vector3d(
-      (sigma_rw_base.X() * drift_scale) * sdt * N(rng),
-      (sigma_rw_base.Y() * drift_scale) * sdt * N(rng),
-      (sigma_rw_base.Z() * drift_scale) * sdt * N(rng)
-    );
+    if (last_drift_tick < 0) {
+      last_drift_tick = -1;
+    }
+
+    for (int64_t tick = last_drift_tick + 1; tick <= target_tick; ++tick) {
+      const double sdt = std::sqrt(drift_dt);
+
+      bias += gz::math::Vector3d(
+        (sigma_rw_base.X() * drift_scale) * sdt * NoiseSample(0, 1, tick),
+        (sigma_rw_base.Y() * drift_scale) * sdt * NoiseSample(1, 1, tick),
+        (sigma_rw_base.Z() * drift_scale) * sdt * NoiseSample(2, 1, tick)
+      );
+    }
+
+    last_drift_tick = target_tick;
   }
 
-  gz::math::Vector3d Apply(const gz::math::Vector3d &trueVal, double dt) {
-    StepBias(dt);
-    return trueVal + bias + SampleWhite();
+public:
+  gz::math::Vector3d Apply(const gz::math::Vector3d &trueVal, double simTimeSec)
+  {
+    AdvanceBiasToTime(simTimeSec);
+    return trueVal + bias + WhiteAtTime(simTimeSec);
   }
 };
 
 Vec3NoiseModel gyro_noise_model(
-    {0.001, 0.001, 0.001},   // sigma_white_base
-    {0.0002, 0.0002, 0.0002},// sigma_rw_base
-    0.0,                     // white_scale
-    0.0                      // drift_scale
+    {0.001, 0.001, 0.001},      // white base
+    {0.0002, 0.0002, 0.0002},   // random walk base
+    1.0,                        // white scale
+    1.0,                        // drift scale
+    {0,0,0},                    // initial bias
+    12345,                      // seed
+    0.01,                       // white_dt (100 Hz)
+    0.01                        // drift_dt (100 Hz)
 );
 
 Vec3NoiseModel accel_noise_model(
     {0.02, 0.02, 0.02},
     {0.01, 0.01, 0.01},
-    0.0,
-    0.0
+    1.0,
+    1.0,
+    {0,0,0},
+    23456,
+    0.01,
+    0.01
 );
 
 Vec3NoiseModel mag_noise_model(
     {0.001, 0.001, 0.001},
     {0.0001, 0.0001, 0.0001},
-    0.0,
-    0.0
+    1.0,
+    1.0,
+    {0,0,0},
+    34567,
+    0.02,   // maybe 50 Hz
+    0.02
 );
+
+class DeterministicNoiseTestService
+{
+public:
+  DeterministicNoiseTestService(gz::transport::Node &node, const std::string &service_name)
+  {
+    node.Advertise(service_name, &DeterministicNoiseTestService::OnRequest, this);
+  }
+private:
+  bool OnRequest(const gz::msgs::Empty &, gz::msgs::StringMsg &response)
+  {
+    // generate 5 noise samples from a base value and then do it again and compare the results
+    std::ostringstream ss;
+    double simTimeSec = 123.456; // fixed time for testing
+    // arrays for storing noisy samples of size [5][3] for gyro, accel, mag
+    gz::math::Vector3d gyro_samples[5];
+    gz::math::Vector3d accel_samples[5];
+    gz::math::Vector3d mag_samples[5];
+
+    for (int i = 0; i < 5; i++) {
+      gz::math::Vector3d trueVal(1.0, 2.0, 3.0);
+      gyro_samples[i] = gyro_noise_model.Apply(trueVal, simTimeSec + i);
+      accel_samples[i] = accel_noise_model.Apply(trueVal, simTimeSec + i);
+      mag_samples[i] = mag_noise_model.Apply(trueVal, simTimeSec + i);
+      ss << std::fixed << std::setprecision(6);
+      ss << "Sample " << i << ", Time:" << simTimeSec + i << ":\n";
+      ss << "  Gyro:  " << gyro_samples[i].X() << ", " << gyro_samples[i].Y() << ", " << gyro_samples[i].Z() << "\n";
+      ss << "  Accel: " << accel_samples[i].X() << ", " << accel_samples[i].Y() << ", " << accel_samples[i].Z() << "\n";
+      ss << "  Mag:   " << mag_samples[i].X() << ", " << mag_samples[i].Y() << ", " << mag_samples[i].Z() << "\n";
+    }
+
+    // reset the noise models to ensure they start from the same state
+    gyro_noise_model.Reset();
+    accel_noise_model.Reset();
+    mag_noise_model.Reset();
+
+    for (int i = 0; i < 5; i++) {
+      gz::math::Vector3d trueVal(1.0, 2.0, 3.0);
+      gz::math::Vector3d gyro_sample_2 = gyro_noise_model.Apply(trueVal, simTimeSec + i);
+      gz::math::Vector3d accel_sample_2 = accel_noise_model.Apply(trueVal, simTimeSec + i);
+      gz::math::Vector3d mag_sample_2 = mag_noise_model.Apply(trueVal, simTimeSec + i);
+      ss << std::fixed << std::setprecision(6);
+      ss << "Sample " << i << ", Time:" << simTimeSec + i << " (second call):\n";
+      ss << "  Gyro:  " << gyro_sample_2.X() << ", " << gyro_sample_2.Y() << ", " << gyro_sample_2.Z() << "\n";
+      ss << "  Accel: " << accel_sample_2.X() << ", " << accel_sample_2.Y() << ", " << accel_sample_2.Z() << "\n";
+      ss << "  Mag:   " << mag_sample_2.X() << ", " << mag_sample_2.Y() << ", " << mag_sample_2.Z() << "\n";
+
+      // Compare with the first sample
+      bool gyro_match = (gyro_samples[i].X() == gyro_sample_2.X()) &&
+                        (gyro_samples[i].Y() == gyro_sample_2.Y()) &&
+                        (gyro_samples[i].Z() == gyro_sample_2.Z());
+      bool accel_match = (accel_samples[i].X() == accel_sample_2.X()) &&
+                         (accel_samples[i].Y() == accel_sample_2.Y()) &&
+                         (accel_samples[i].Z() == accel_sample_2.Z());
+      bool mag_match = (mag_samples[i].X() == mag_sample_2.X()) &&
+                       (mag_samples[i].Y() == mag_sample_2.Y()) &&
+                       (mag_samples[i].Z() == mag_sample_2.Z());
+
+      ss << "  Gyro match: " << (gyro_match ? "YES" : "NO") << "\n";
+      ss << "  Accel match: " << (accel_match ? "YES" : "NO") << "\n";
+      ss << "  Mag match:   " << (mag_match ? "YES" : "NO") << "\n";
+    }
+
+    response.set_data(ss.str());
+    return true;
+  }
+};
+
+// struct Vec3NoiseModel {
+//   // BASE (reference) noise levels — tune these once
+//   gz::math::Vector3d sigma_white_base{0,0,0}; // std-dev of white noise
+//   gz::math::Vector3d sigma_rw_base{0,0,0};    // std-dev of random-walk drift
+
+//   // ======= YOUR TWO KNOBS =======
+//   double white_scale = 1.0;  // <-- scales instantaneous noise
+//   double drift_scale = 1.0;  // <-- scales long-term drift
+//   // ==============================
+
+//   // current bias state (drifting over time)
+//   gz::math::Vector3d bias{0,0,0};
+
+//   std::mt19937 rng{std::random_device{}()};
+//   std::normal_distribution<double> N{0.0, 1.0};
+
+//   // === NEW: constructors ===
+
+//   // Default constructor (keeps your existing defaults)
+//   Vec3NoiseModel() = default;
+
+//   // Convenience constructor
+//   Vec3NoiseModel(
+//       gz::math::Vector3d white_base,
+//       gz::math::Vector3d rw_base,
+//       double w_scale = 1.0,
+//       double d_scale = 1.0,
+//       gz::math::Vector3d initial_bias = {0,0,0})
+//   : sigma_white_base(white_base),
+//     sigma_rw_base(rw_base),
+//     white_scale(w_scale),
+//     drift_scale(d_scale),
+//     bias(initial_bias)
+//   {}
+
+//   // === existing methods (unchanged) ===
+
+//   gz::math::Vector3d SampleWhite() {
+//     return {
+//       (sigma_white_base.X() * white_scale) * N(rng),
+//       (sigma_white_base.Y() * white_scale) * N(rng),
+//       (sigma_white_base.Z() * white_scale) * N(rng)
+//     };
+//   }
+
+//   void StepBias(double dt) {
+//     const double sdt = std::sqrt(dt);
+
+//     bias += gz::math::Vector3d(
+//       (sigma_rw_base.X() * drift_scale) * sdt * N(rng),
+//       (sigma_rw_base.Y() * drift_scale) * sdt * N(rng),
+//       (sigma_rw_base.Z() * drift_scale) * sdt * N(rng)
+//     );
+//   }
+
+//   gz::math::Vector3d Apply(const gz::math::Vector3d &trueVal, double dt) {
+//     StepBias(dt);
+//     return trueVal + bias + SampleWhite();
+//   }
+// };
+
+// Vec3NoiseModel gyro_noise_model(
+//     {0.001, 0.001, 0.001},   // sigma_white_base
+//     {0.0002, 0.0002, 0.0002},// sigma_rw_base
+//     0.0,                     // white_scale
+//     0.0                      // drift_scale
+// );
+
+// Vec3NoiseModel accel_noise_model(
+//     {0.02, 0.02, 0.02},
+//     {0.01, 0.01, 0.01},
+//     0.0,
+//     0.0
+// );
+
+// Vec3NoiseModel mag_noise_model(
+//     {0.001, 0.001, 0.001},
+//     {0.0001, 0.0001, 0.0001},
+//     0.0,
+//     0.0
+// );
 
 typedef struct
 {
@@ -150,9 +403,9 @@ imu_data_t parse_imu_json(const std::string &input)
 
     // add noise to gyros (+)
     // noise from 0 to 0.001 rad/s
-    imu.gyro_x += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
-    imu.gyro_y += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
-    imu.gyro_z += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    // imu.gyro_x += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    // imu.gyro_y += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    // imu.gyro_z += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
 
     // imu.gyro_x  = std::to_string(gyro[0].get<double>());
     // imu.gyro_y  = std::to_string(gyro[1].get<double>());
@@ -282,17 +535,17 @@ private:
     const gz::math::Vector3d tmp = C_ws.Transposed() * m_raw;
     const gz::math::Vector3d m_corr = C_ws * (C_ww * tmp);
 
-    double dt = 0.01; // assuming 100 Hz update rate
-    gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
+    // double dt = 0.01; // assuming 100 Hz update rate
+    // gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
     // std::cerr << "NEW READING:" << std::endl;
     // std::cerr << "\tCorrected mag: " << m_corr.X() << ", " << m_corr.Y() << ", " << m_corr.Z() << std::endl;
     // std::cerr << "\tNoisy mag: " << noisy_mag_corr.X() << ", " << noisy_mag_corr.Y() << ", " << noisy_mag_corr.Z() << std::endl;
-    gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
+    // gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
 
     gz::msgs::Magnetometer latest_msg_corr_ = raw; // timestamp/frame_id 유지
-    latest_msg_corr_.mutable_field_tesla()->set_x(noisy_msg_corr.X());
-    latest_msg_corr_.mutable_field_tesla()->set_y(noisy_msg_corr.Y());
-    latest_msg_corr_.mutable_field_tesla()->set_z(noisy_msg_corr.Z());
+    // latest_msg_corr_.mutable_field_tesla()->set_x(noisy_msg_corr.X());
+    // latest_msg_corr_.mutable_field_tesla()->set_y(noisy_msg_corr.Y());
+    // latest_msg_corr_.mutable_field_tesla()->set_z(noisy_msg_corr.Z());
 
     rep = latest_msg_corr_;
     return true;
@@ -331,14 +584,14 @@ private:
       msg.field_tesla().y(),
       msg.field_tesla().z()
     );
-    double dt = 0.01; // assuming 100 Hz update rate
-    gz::math::Vector3d noisy_mag = mag_noise_model.Apply(true_mag, dt);
+    // double dt = 0.01; // assuming 100 Hz update rate
+    // gz::math::Vector3d noisy_mag = mag_noise_model.Apply(true_mag, dt);
     std::lock_guard<std::mutex> lock(mutex_);
-    gz::msgs::Magnetometer noisy_msg = msg;
-    noisy_msg.mutable_field_tesla()->set_x(noisy_mag.X());
-    noisy_msg.mutable_field_tesla()->set_y(noisy_mag.Y());
-    noisy_msg.mutable_field_tesla()->set_z(noisy_mag.Z());
-    latest_msg_ = noisy_msg;
+    // gz::msgs::Magnetometer noisy_msg = msg;
+    // noisy_msg.mutable_field_tesla()->set_x(noisy_mag.X());
+    // noisy_msg.mutable_field_tesla()->set_y(noisy_mag.Y());
+    // noisy_msg.mutable_field_tesla()->set_z(noisy_mag.Z());
+    latest_msg_ = msg; // for now just return raw without noise
   }
 
   bool OnServiceRequest(const gz::msgs::Empty &,
@@ -398,13 +651,21 @@ private:
     std::lock_guard<std::mutex> lock(mutex_);
     std::string scan_data;
     int num_samples = req.data();
-    scan_data += std::to_string(sample_index_); // include starting index in the response
-    std::string delimiter = ":";
+    // Format must be "start_index:range0,range1,..." so clients can parse with find(':')
+    // and stoi(start_index). Do NOT concatenate index + first range without ':' or
+    // "185" + "2.93" becomes "1852.93" and start_index is parsed wrong.
+    scan_data += std::to_string(sample_index_);
+    scan_data += ':';
     for (int i = 0; i < num_samples; ++i) {
       int index = (sample_index_ + i) % 400; // loop back to the beginning if we reach the end
-      scan_data += std::to_string(latest_scan_[index]) + delimiter;
-      if (i == 0) {
-        delimiter = ",";
+      if (i > 0) {
+        scan_data += ',';
+      }
+      const double r = latest_scan_[index];
+      if (std::isinf(r) || std::isnan(r)) {
+        scan_data += "inf";
+      } else {
+        scan_data += std::to_string(r);
       }
     }
     sample_index_ = (sample_index_ + num_samples) % 400; // update sample index for next call
@@ -803,16 +1064,16 @@ private:
 
             imu_data_t imu = parse_imu_json(response);
             {
-              gz::math::Vector3d true_accel(imu.accel_x, imu.accel_y, imu.accel_z);
-              gz::math::Vector3d true_gyro(imu.gyro_x, imu.gyro_y, imu.gyro_z);
-              gz::math::Vector3d noisy_accel = accel_noise_model.Apply(true_accel, 0.2);
-              gz::math::Vector3d noisy_gyro  = gyro_noise_model.Apply(true_gyro, 0.2);
-              imu.accel_x = noisy_accel.X();
-              imu.accel_y = noisy_accel.Y();
-              imu.accel_z = noisy_accel.Z();
-              imu.gyro_x  = noisy_gyro.X();
-              imu.gyro_y  = noisy_gyro.Y();
-              imu.gyro_z  = noisy_gyro.Z();
+              // gz::math::Vector3d true_accel(imu.accel_x, imu.accel_y, imu.accel_z);
+              // gz::math::Vector3d true_gyro(imu.gyro_x, imu.gyro_y, imu.gyro_z);
+              // gz::math::Vector3d noisy_accel = accel_noise_model.Apply(true_accel, 0.2);
+              // gz::math::Vector3d noisy_gyro  = gyro_noise_model.Apply(true_gyro, 0.2);
+              // imu.accel_x = noisy_accel.X();
+              // imu.accel_y = noisy_accel.Y();
+              // imu.accel_z = noisy_accel.Z();
+              // imu.gyro_x  = noisy_gyro.X();
+              // imu.gyro_y  = noisy_gyro.Y();
+              // imu.gyro_z  = noisy_gyro.Z();
               std::lock_guard<std::mutex> lock(mutex_);
               imu_buffer_.push_back(imu);
             }
@@ -1128,8 +1389,200 @@ private:
   std::mutex mutex_;
 };
 
+/**
+ * @brief Parse /world/<name>/... from a full Gazebo topic path.
+ */
+static std::string WorldNameFromNavsatTopic(const std::string &navsat_topic)
+{
+  const std::string key = "/world/";
+  const std::size_t p = navsat_topic.find(key);
+  if (p == std::string::npos) {
+    return "runway";
+  }
+  const std::size_t start = p + key.size();
+  const std::size_t slash = navsat_topic.find('/', start);
+  if (slash == std::string::npos) {
+    return "runway";
+  }
+  return navsat_topic.substr(start, slash - start);
+}
 
+/**
+ * @brief Parse model scoped name from /model/<name>/pose.
+ */
+static std::string ModelNameFromPoseTopic(const std::string &pose_topic)
+{
+  const std::string pre = "/model/";
+  const std::string suf = "/pose";
+  if (pose_topic.size() <= pre.size() + suf.size()) {
+    return "";
+  }
+  if (pose_topic.compare(0, pre.size(), pre) != 0) {
+    return "";
+  }
+  if (pose_topic.compare(pose_topic.size() - suf.size(), suf.size(), suf) != 0) {
+    return "";
+  }
+  return pose_topic.substr(pre.size(), pose_topic.size() - pre.size() - suf.size());
+}
 
+/**
+ * @brief Advertises /place_box_relative: spawn a box in the sim world at a
+ *        pose relative to the vehicle model (Gazebo EntityFactory relative_to).
+ *
+ * Request body: JSON on gz::msgs::StringMsg::data(), e.g.
+ *   {"x":1,"y":0,"z":0,"sx":0.5,"sy":0.5,"sz":0.5,"roll":0,"pitch":0,"yaw":0}
+ * Optional keys: name (unique model name), relative_to (override frame),
+ * mass (kg), wait (if true, block for gz-sim reply — slows sim; default false),
+ * timeout_ms (only when wait=true).
+ *
+ * Default behavior sends /world/.../create asynchronously so this service returns
+ * immediately and does not block simulation.
+ *
+ * Response: JSON with dispatched, transport_ok, name; if wait=true also gz_result.
+ */
+class PlaceRelativeBoxService
+{
+public:
+  PlaceRelativeBoxService(gz::transport::Node &node,
+                          const std::string &world_name,
+                          const std::string &vehicle_model_name)
+    : node_(node),
+      world_(world_name),
+      vehicle_(vehicle_model_name)
+  {
+    node_.Advertise("/place_box_relative",
+                    &PlaceRelativeBoxService::OnRequest, this);
+  }
+
+private:
+  static bool IsSafeModelToken(const std::string &s)
+  {
+    for (char c : s) {
+      if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) {
+        return false;
+      }
+    }
+    return !s.empty();
+  }
+
+  bool OnRequest(const gz::msgs::StringMsg &req, gz::msgs::StringMsg &rep)
+  {
+    try {
+      const json j = json::parse(req.data());
+      const double x = j.value("x", 0.0);
+      const double y = j.value("y", 0.0);
+      const double z = j.value("z", 0.0);
+      const double sx = j.value("sx", 1.0);
+      const double sy = j.value("sy", 1.0);
+      const double sz = j.value("sz", 1.0);
+      const double mass = j.value("mass", 1.0);
+      const double roll = j.value("roll", 0.0);
+      const double pitch = j.value("pitch", 0.0);
+      const double yaw = j.value("yaw", 0.0);
+
+      std::string rel = j.value("relative_to", vehicle_);
+      if (rel.empty()) {
+        rel = vehicle_;
+      }
+
+      std::string box_name = j.value("name", std::string(""));
+      if (!IsSafeModelToken(box_name)) {
+        box_name = "placed_box_" + std::to_string(++counter_);
+      }
+
+      std::ostringstream sdf;
+      sdf << std::setprecision(17);
+      sdf << "<?xml version=\"1.0\" ?><sdf version=\"1.6\">"
+          << "<model name=\"inline_box\">"
+          << "<link name=\"link\">"
+          << "<inertial><mass>" << mass << "</mass></inertial>"
+          << "<visual name=\"v\"><geometry><box><size>"
+          << sx << " " << sy << " " << sz
+          << "</size></box></geometry></visual>"
+          << "<collision name=\"c\"><geometry><box><size>"
+          << sx << " " << sy << " " << sz
+          << "</size></box></geometry></collision>"
+          << "</link></model></sdf>";
+
+      const gz::math::Quaterniond q(roll, pitch, yaw);
+
+      gz::msgs::EntityFactory factory;
+      factory.set_sdf(sdf.str());
+      factory.set_name(box_name);
+      factory.set_allow_renaming(true);
+      factory.set_relative_to(rel);
+      factory.mutable_pose()->mutable_position()->set_x(x);
+      factory.mutable_pose()->mutable_position()->set_y(y);
+      factory.mutable_pose()->mutable_position()->set_z(z);
+      factory.mutable_pose()->mutable_orientation()->set_x(q.X());
+      factory.mutable_pose()->mutable_orientation()->set_y(q.Y());
+      factory.mutable_pose()->mutable_orientation()->set_z(q.Z());
+      factory.mutable_pose()->mutable_orientation()->set_w(q.W());
+
+      const std::string svc = "/world/" + world_ + "/create";
+      const bool wait_for_reply = j.value("wait", false);
+
+      json out;
+      out["name"] = box_name;
+      out["async"] = !wait_for_reply;
+
+      if (wait_for_reply) {
+        gz::msgs::Boolean gz_rep;
+        bool gz_result = false;
+        unsigned int timeout_ms =
+            static_cast<unsigned int>(j.value("timeout_ms", 60000));
+        if (timeout_ms < 1000u) {
+          timeout_ms = 1000u;
+        }
+        const bool executed =
+            node_.Request(svc, factory, timeout_ms, gz_rep, gz_result);
+        out["transport_ok"] = executed;
+        out["gz_result"] = gz_result;
+        out["gz_accepted"] = gz_rep.data();
+        out["create_timeout_ms"] = timeout_ms;
+        if (!executed) {
+          out["error"] = "Timed out or unreachable: " + svc;
+        } else if (!gz_result) {
+          out["error"] = "Gazebo create returned false";
+        }
+      } else {
+        std::function<void(const gz::msgs::Boolean &, bool)> on_create_reply =
+            [box_name](const gz::msgs::Boolean &gz_rep, bool gz_result) {
+              if (DEBUG) {
+                std::cerr << "[place_box_relative] async create \"" << box_name
+                          << "\" gz_result=" << gz_result
+                          << " accepted=" << gz_rep.data() << "\n";
+              } else if (!gz_result) {
+                std::cerr << "[place_box_relative] create failed for \""
+                          << box_name << "\"\n";
+              }
+            };
+        const bool dispatched = node_.Request(svc, factory, on_create_reply);
+        out["dispatched"] = dispatched;
+        out["transport_ok"] = dispatched;
+        if (!dispatched) {
+          out["error"] = "Could not send create request (discovery failed?): " + svc;
+        }
+      }
+
+      rep.set_data(out.dump());
+      return true;
+    } catch (const std::exception &e) {
+      json err;
+      err["transport_ok"] = false;
+      err["gz_result"] = false;
+      err["error"] = e.what();
+      rep.set_data(err.dump());
+      return true;
+    }
+  }
+
+  gz::transport::Node &node_;
+  std::string world_;
+  std::string vehicle_;
+  std::atomic<uint64_t> counter_{0};
+};
 
 int main(int argc, char **argv)
 {
@@ -1150,25 +1603,30 @@ int main(int argc, char **argv)
   std::string pose_topic = "/model/r1_rover/pose";
   std::string altimeter_topic = "NONE";
   std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
+  std::string laserscan_topic = "/lidar";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
+    laserscan_topic = "NONE";
   } else if (model_name == "iris") {
     navsat_topic = "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/iris_with_ardupilot/pose";
+    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "bicopter") {
     navsat_topic = "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/bicopter_with_ardupilot/pose";
     joint_states_topic = "NONE";
+    laserscan_topic = "NONE";
   } else if (model_name == "vtail_plane") {
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/skywalker_x8/pose";
     imu_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/imu_sensor/imu";
+    laserscan_topic = "NONE";
     // pose_topic = "/world/runway/dynamic_pose/info";
     // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
     // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
@@ -1176,20 +1634,34 @@ int main(int argc, char **argv)
   } else if (model_name == "skywalker_x8_quad") {
     navsat_topic = "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "blueboat") {
     navsat_topic = "/world/waves/model/blueboat/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/waves/model/blueboat/link/base_link/sensor/magnetometer_sensor/magnetometer";
+    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "bluerov2") {
     navsat_topic = "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
+    laserscan_topic = "NONE";
   }
 
   if (model_name == "r1_rover") {
     altimeter_topic = "/world/runway/altitude";
   }
+  else 
+  {
+    altimeter_topic = "NONE";
+  }
+
+  const std::string sim_world_name = WorldNameFromNavsatTopic(navsat_topic);
+  std::string vehicle_scope_name = ModelNameFromPoseTopic(pose_topic);
+  if (vehicle_scope_name.empty()) {
+    vehicle_scope_name = model_name;
+  }
+  PlaceRelativeBoxService placeBoxService(node, sim_world_name, vehicle_scope_name);
 
   GenericSensorService<gz::msgs::NavSat> navSatService(
     node,
@@ -1281,6 +1753,11 @@ int main(int argc, char **argv)
     mag_topic,
     "/get_corrected_mag_reading",
     mag_rpy
+  );
+
+  DeterministicNoiseTestService noiseTestService(
+    node,
+    "/get_deterministic_noise_test"
   );
 
   std::cout << "ArduPilot Services running...\n";

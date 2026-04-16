@@ -74,7 +74,7 @@ int classic_parse_ranges(const char *s, Range *ranges, int max_ranges) {
 
     return count;
 }
-static int classic_init(ConfigSection* model_info);
+static void* classic_init(ConfigSection* model_info);
 // The public definition of the classic device model
 DeviceModel classic_model_def = {
     .name = "classic",
@@ -85,13 +85,13 @@ DeviceModel classic_model_def = {
     .interrupt = classic_interrupt,
 };
 
-static int classic_init(ConfigSection* model_info) {
+static void* classic_init(ConfigSection* model_info) {
     Range ranges[10];
     utils_parse_ranges(model_info->overall_range_count,model_info->overall_ranges, ranges);
 
 	for (int i = 0; i < model_info->overall_range_count; i++) {
         dev_register_device_model(ranges[i].start, ranges[i].end, &classic_model_def);
     }
-    return 0;
+    return NULL;
 }
 

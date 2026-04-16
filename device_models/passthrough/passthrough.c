@@ -81,6 +81,17 @@ static void* dev_thread_fn(void* arg) {
 					dev_debug("Register%d: 0x%lx\n", i, hw_read_reg(hw, i));
 				}
 				int firing_line = hw_read_reg(hw, 0);
+
+				if (firing_line < 1 || firing_line > 240) {
+					// Spurious halt (debugger halt on connect, not monitor BKPT).
+					// Resume the board so the monitor firmware can start running.
+					printf("passthrough: spurious halt (r0=%d), resuming board\n", firing_line);
+					hw_board_run(hw);
+					pthread_mutex_unlock(&hw_mutex);
+					usleep(100000);
+					continue;
+				}
+
 				irq_pending = firing_line;
 
 				dev_debug("Register%d: 0x%lx\n", 0, hw_read_reg(hw, 0));
@@ -129,7 +140,7 @@ static int passthrough_interrupt(int line) {
 		return 0;
 }
 
-static int passthrough_init(ConfigSection* model_info);
+static void* passthrough_init(ConfigSection* model_info);
 // The public definition of the passthrough device model
 DeviceModel passthrough_model_def = {
     .name = "passthrough",
@@ -140,7 +151,7 @@ DeviceModel passthrough_model_def = {
     .interrupt = passthrough_interrupt,
 };
 
-static int passthrough_init(ConfigSection* model_info) {
+static void* passthrough_init(ConfigSection* model_info) {
     //Find the overall ranges for all the devices registered as passthrough
     Range ranges[10];
     utils_parse_ranges(model_info->overall_range_count,model_info->overall_ranges, ranges);
@@ -149,12 +160,12 @@ static int passthrough_init(ConfigSection* model_info) {
     hw = hw_connect(model_info->backend, NULL, 0);
 	if (!hw) {
         utils_die("HW connection failed.");
-        return 1;
+        return NULL;
     }
 
     if (pthread_create(&dev_thread, NULL, dev_thread_fn, NULL) != 0) {
         perror("Failed to create thread");
-        return 1;
+        return NULL;
     }
 
 	for (int i = 0; i < model_info->overall_range_count; i++) {
@@ -178,7 +189,7 @@ static int passthrough_init(ConfigSection* model_info) {
         break;
     }
 
-    return 0;
+    return NULL;
 }
 
 

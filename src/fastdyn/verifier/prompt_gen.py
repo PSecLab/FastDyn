@@ -45,18 +45,45 @@ The trace data shows these absolute addresses directly (e.g., `address = 0x40022
 Use them to infer each peripheral's base address and register layout.
 
 ### 2. Callback Function Signatures
-Any function pointer registered with a framework API **MUST exactly match** the
-expected signature. In particular:
 
-- **All callback-based APIs** in this framework pass a `void *opaque` (or `void *data`)
-  argument to the registered callback. Your callback functions **MUST** accept this
-  parameter. Do NOT use empty parameter lists `()` in C — that is NOT the same as
-  `(void)` and causes undefined behavior when the framework passes an argument.
+#### 2a. MMIO read/write callbacks (`_read` / `_write`)
+The framework passes the pointer returned by `_init` as the `opaque` argument to
+every subsequent `_read` and `_write` call. Your `_init` **MUST return a pointer to
+your state struct** so the framework can wire it up correctly:
+
+```c
+static MyPeriphState g_state;
+
+void* myperiph_init(ConfigSection* model_info) {
+    memset(&g_state, 0, sizeof(g_state));
+    // ... initialization ...
+    return &g_state;   // REQUIRED — framework stores this and passes it as opaque
+}
+
+uint64_t myperiph_read(void *opaque, hwaddr addr, unsigned size) {
+    MyPeriphState *s = (MyPeriphState *)opaque;  // valid: framework set this from init
+    hwaddr offset = addr - MY_BASE;
+    // ...
+}
+
+void myperiph_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
+    MyPeriphState *s = (MyPeriphState *)opaque;
+    hwaddr offset = addr - MY_BASE;
+    // ...
+}
+```
+
+#### 2b. Inter-peripheral / timer callbacks
+Any function pointer registered with a framework API such as `api_signal_register`,
+`api_dma_register_stream`, or `qemu_plugin_timer_new_ns` **MUST exactly match** the
+expected signature, and those callbacks DO receive a valid `opaque` pointer (the one
+you passed at registration time). Your callback functions **MUST** accept the `opaque`
+parameter and cast it to access your state:
 
 ```c
 // CORRECT — matches the expected void (*)(void *) signature:
 static void my_callback(void *opaque) {
-    MyState *s = (MyState *)opaque;
+    MyPeriphState *s = (MyPeriphState *)opaque;  // valid: you registered &g_state
     // ...
 }
 
@@ -66,8 +93,9 @@ static void my_callback() { ... }
 
 - **Never cast function pointers** to hide type mismatches. If the compiler warns
   about an incompatible function pointer, fix the function signature instead.
-- This applies to ALL framework callbacks: timer callbacks, inter-peripheral request
-  handlers, and any other API that accepts a function pointer and an opaque/data pointer.
+- This applies to ALL inter-peripheral / timer callbacks: timer callbacks, signal
+  handlers, DMA request handlers, and any other API that accepts a function pointer
+  and an opaque/data pointer.
 
 ### 3. Stateful Emulation over Trace Memorization
 You must implement a dynamic, stateful model. The trace data is EVIDENCE for
@@ -212,7 +240,21 @@ implement self-clearing/auto-transitioning bits in that register!
 """
 
 
-# Define the QEMU API context
+# Base QEMU/FastDyn APIs (always available, even in --no-vio ablation mode)
+qemu_base_api_list = """
+- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes guest memory.
+- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads guest memory.
+- `int qemu_plugin_read_register(int reg, uint8_t *buf)`: Reads a register of VM. reg is number of register 0 is R0 in ARM.
+- `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
+- `void qemu_plugin_raise_irq(int irq, false)`: Raises an interrupt line, MUST: use interrupt + 16, here false means non-secure interrupt, dont change it to true!.
+- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Accepts a timer's handle and an absolute nanosecond timestamp to arm that timer to fire at the specified moment for one shot.
+- `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
+- `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
+- `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
+- `void dev_debug(char *str)`: Any debug messages must be logged using this function.
+"""
+
+# Define the full QEMU API context (base + VIO)
 qemu_api_list = """
 - `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes guest memory.
 - `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads guest memory.
@@ -310,16 +352,20 @@ int api_tap_send(int fd, const uint8_t *buf, int len);
 int api_tap_recv_nonblock(int fd, uint8_t *buf, int max_len);
 """
 
-def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir, model_sources, **kwargs):
+def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, out_dir, model_sources, no_vio=False, **kwargs):
     fastdyn_log.info("Generating Prompt for LLM")
     if 'user_obs' in kwargs:
         pass  # Deprecated — observability is now always inferred via observability_guidance
+
+    api_list = qemu_base_api_list if no_vio else qemu_api_list
+    if no_vio:
+        fastdyn_log.info("Ablation mode: --no-vio enabled. VIO APIs stripped from prompt.")
 
     final_prompt = generate_prompt_multiple(
         analysis_dir=analysis_dir,
         model_name=model_name,
         peripherals=peripherals,
-        qemu_api_list=qemu_api_list,
+        qemu_api_list=api_list,
         model_sources=model_sources
     )
 
@@ -332,12 +378,14 @@ def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, o
 
 
 
-def initial_prompt_gen(analysis_dir, peripheral, out_dir):
+def initial_prompt_gen(analysis_dir, peripheral, out_dir, no_vio=False):
     fastdyn_log.info("Generating Prompt for LLM")
+    if no_vio:
+        fastdyn_log.info("Ablation mode: --no-vio enabled. VIO APIs stripped from prompt.")
     # Construct the path from the base directory and the peripheral name
     peripheral_path = os.path.join(analysis_dir, peripheral)
 
-    final_prompt = generate_prompt(peripheral_path)
+    final_prompt = generate_prompt(peripheral_path, no_vio=no_vio)
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     output_path = Path(out_dir) / "initial_prompt.txt"
@@ -438,6 +486,12 @@ These files contain the most common repeating sequences of operations during run
 {diff_obj.diff_loop_pattern_data}
 ```
 
+## Rare Value Transitions (`rare_transitions.txt`):
+These are read values from LOW-entropy (status/control) registers that did NOT appear in the dominant loop patterns above. They represent infrequent but important state changes that the model MUST handle correctly. Pay close attention to these values — they reveal how the register behaves in a different operational phase (e.g. data available vs. idle).
+```
+{diff_obj.rare_transitions_data}
+```
+
 ## Stateful Behavior Analysis (`state.txt`):
 This file identifies programming patterns like Read-Modify-Write (RMW), which indicate stateful registers.
 ```
@@ -507,9 +561,13 @@ def parse_summary_file(filepath: str) -> Dict[str, str]:
         pass
     return summary_data
 
-def generate_prompt(peripheral_directory: str) -> str:
+def generate_prompt(peripheral_directory: str, no_vio: bool = False) -> str:
     """
     Generates a detailed prompt for an LLM based on analysis files in a directory.
+
+    Args:
+        peripheral_directory: Path to the analysis directory for the peripheral.
+        no_vio: If True, strip VIO APIs from the prompt (ablation mode).
     """
     if not os.path.isdir(peripheral_directory):
         raise FileNotFoundError(
@@ -530,6 +588,7 @@ def generate_prompt(peripheral_directory: str) -> str:
     init_data = read_file_content(os.path.join(peripheral_directory, "init.txt"))
     state_data = read_file_content(os.path.join(peripheral_directory, "state.txt"))
     entropy_data = read_file_content(os.path.join(peripheral_directory, "entropy.txt"))
+    rare_transitions_data = read_file_content(os.path.join(peripheral_directory, "rare_transitions.txt"))
     loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
     isr_analysis_data = read_file_content(isr_analysis)
 
@@ -541,6 +600,9 @@ def generate_prompt(peripheral_directory: str) -> str:
             loop_data_list.append(f"--- Contents of {os.path.basename(loop_file)} ---\n{read_file_content(loop_file)}")
     loop_data = "\n\n".join(loop_data_list)
 
+    # Select API list based on ablation mode
+    active_api_list = qemu_base_api_list if no_vio else qemu_api_list
+
     # Assemble the prompt, escaping literal curly braces {{ and }} in the C code example
     prompt = f"""
 Take this prompt independent from previous prompt history.
@@ -551,7 +613,7 @@ Your task is to analyze the following summary of MMIO trace data and generate a 
 ## Available APIs
 You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
 ```c
-{qemu_api_list.strip()}
+{active_api_list.strip()}
 ```
 
 {api_missing_note}
@@ -582,6 +644,12 @@ This file contains all accesses that occur before the main runtime loop begins.
 These files contain the most common repeating sequences of operations during runtime.
 ```
 {loop_data}
+```
+
+## Rare Value Transitions (`rare_transitions.txt`):
+These are read values from LOW-entropy (status/control) registers that did NOT appear in the dominant loop patterns above. They represent infrequent but important state changes that the model MUST handle correctly. Pay close attention to these values — they reveal how the register behaves in a different operational phase (e.g. data available vs. idle).
+```
+{rare_transitions_data}
 ```
 
 ## Stateful Behavior Analysis (`state.txt`):
@@ -623,24 +691,195 @@ The C source code for MMIO read and write callback for {peripheral_name} emulati
 // Inferred Register Functions:
 // ... add registers here ...
 
-// This function will emulation all device reads
+static {peripheral_name}State g_{peripheral_name.lower()};
+
+// This function will emulate all device reads
 uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
-    // Example: return device->register; // Return some register value from device
-	// ... {peripheral_name.lower()} reads, the retuned value will be emulation of device ...
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+    // ... return register value based on offset ...
 }}
 
 // This function will emulate all device writes
 void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
-        // Example: s->control_reg = value; // Update control register from firmware write
-        // ... Code that responds to {peripheral_name.lower()} writes to emulated device ...
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+    // ... update register state based on offset and value ...
 }}
 
-void {peripheral_name.lower()}_init(ConfigSection* model_info) {{
-		// Example: memset(&{peripheral_name.lower()}_state, 0, sizeof({peripheral_name.lower()}_state_t));
+// MUST return pointer to state — framework passes it as opaque to _read/_write
+void* {peripheral_name.lower()}_init(ConfigSection* model_info) {{
+    memset(&g_{peripheral_name.lower()}, 0, sizeof(g_{peripheral_name.lower()}));
+    // ... initialize state from model_info (bus inits, etc.) ...
+    return &g_{peripheral_name.lower()};
 }}
 ```
 """
     return prompt.strip()
+
+def generate_prompt_no_encoder(hardware_log: str, peripheral_name: str, platform_name: str,
+                               peripheral_ranges: list = None, no_vio: bool = False) -> str:
+    """Generate a prompt using the raw I/O trace instead of the Encoder's compact automaton.
+
+    This is the A1 ablation variant. The prompt contains:
+    - The raw io.log (filtered to the target peripheral's address range if known)
+    - The VIO API definitions (unless no_vio is also set)
+    - The same framework rules and output format as the full pipeline
+
+    No SVD annotations, no pattern mining, no entropy analysis, no ISR detection.
+
+    Args:
+        hardware_log: Path to the raw hardware_log/io.log file.
+        peripheral_name: Name of the peripheral (e.g., "UART0", "SPI0").
+        platform_name: Platform identifier (e.g., "Max78000").
+        peripheral_ranges: Optional list of (start, end) address tuples to filter trace lines.
+        no_vio: If True, also strip VIO APIs (combines A1+A3 ablation).
+    """
+    # Read the raw trace
+    with open(hardware_log, "r", encoding="utf-8") as f:
+        raw_trace = f.read()
+
+    # Filter to peripheral address range if provided
+    if peripheral_ranges:
+        filtered_lines = []
+        for line in raw_trace.splitlines():
+            # Check if any address in the line falls within the peripheral ranges
+            keep = False
+            for start, end in peripheral_ranges:
+                if f"0x{start:08X}" in line.upper() or f"0x{start:08x}" in line.lower():
+                    keep = True
+                    break
+                # Also try matching the address field directly
+                if "address" in line.lower() or "0x" in line:
+                    try:
+                        # Extract hex address from the line
+                        import re
+                        addr_match = re.search(r'address\s*=\s*(0x[0-9a-fA-F]+)', line)
+                        if addr_match:
+                            addr = int(addr_match.group(1), 16)
+                            if start <= addr <= end:
+                                keep = True
+                                break
+                    except (ValueError, AttributeError):
+                        pass
+            if keep or not peripheral_ranges:
+                filtered_lines.append(line)
+        raw_trace = "\n".join(filtered_lines)
+
+    active_api_list = qemu_base_api_list if no_vio else qemu_api_list
+
+    prompt = f"""
+Take this prompt independent from previous prompt history.
+
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
+Your task is to analyze the following raw MMIO I/O trace and generate a complete C device model.
+
+## Available APIs
+You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
+```c
+{active_api_list.strip()}
+```
+
+{api_missing_note}
+
+{framework_rules}
+
+--- START OF RAW I/O TRACE ---
+
+## Platform:
+{platform_name}
+
+## Peripheral Name:
+{peripheral_name}
+
+## Raw Hardware I/O Trace:
+The following is the raw MMIO trace captured during hardware execution.
+Each line represents a single register read or write with timestamp, address, value, and size.
+You must infer the register layout, initialization sequence, runtime behavior, and interrupt patterns from this trace.
+```
+{raw_trace}
+```
+
+--- END OF RAW I/O TRACE ---
+
+Based **only** on the trace data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
+
+## Required Output Format:
+
+### 1. High-Level Summary
+A concise, one-paragraph summary of this peripheral's likely purpose and overall behavior, considering the platform context.
+
+### 2. Register Analysis
+A bulleted list of the important registers mentioned in the traces and their inferred functions.
+
+### 3. C Device Model Source Code
+The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs i mentioned.
+
+```c
+// Device Model for {peripheral_name}
+
+// Inferred Register Functions:
+// ... add registers here ...
+
+static {peripheral_name}State g_{peripheral_name.lower()};
+
+// This function will emulate all device reads
+uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+    // ... return register value based on offset ...
+}}
+
+// This function will emulate all device writes
+void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+    // ... update register state based on offset and value ...
+}}
+
+// MUST return pointer to state — framework passes it as opaque to _read/_write
+void* {peripheral_name.lower()}_init(ConfigSection* model_info) {{
+    memset(&g_{peripheral_name.lower()}, 0, sizeof(g_{peripheral_name.lower()}));
+    // ... initialize state from model_info (bus inits, etc.) ...
+    return &g_{peripheral_name.lower()};
+}}
+```
+"""
+    return prompt.strip()
+
+
+def _strip_commented_out_blocks(source: str, min_run: int = 10) -> str:
+    """Remove large contiguous blocks of //-commented lines from C source.
+
+    Inline comments that appear alongside active code are left intact.
+    Only runs of `min_run` or more consecutive lines where every non-blank
+    line starts with '//' are removed — these are almost always dead code
+    blocks that were commented out, not useful documentation.
+    """
+    lines = source.splitlines()
+    result = []
+    i = 0
+    while i < len(lines):
+        # Scan forward to measure the length of a //-only run starting at i
+        j = i
+        while j < len(lines):
+            stripped = lines[j].strip()
+            if stripped == '' or stripped.startswith('//'):
+                j += 1
+            else:
+                break
+        run_len = j - i
+        if run_len >= min_run:
+            # Drop the block; skip to end of run
+            i = j
+        else:
+            result.extend(lines[i:j])
+            i = j
+            if i < len(lines):
+                result.append(lines[i])
+                i += 1
+    return '\n'.join(result)
+
 
 def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path, reference_model_path, slave_type="i2c"):
     '''
@@ -649,7 +888,7 @@ def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path
     fastdyn_log.info("Generating Prompt for LLM")
 
     with open(slave_firmware_path, 'r') as f:
-        slave_firmware = f.read().strip()
+        slave_firmware = _strip_commented_out_blocks(f.read().strip())
 
     with open(reference_model_path, 'r') as f:
         reference_model = f.read().strip()
@@ -741,7 +980,7 @@ The code must compile as a shared library (`gcc -shared -fPIC -O2 -o slave.so <f
 """
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    output_path = Path(out_dir) / "slave_model_prompt.txt"
+    output_path = Path(out_dir) / "initial_prompt.txt"
     output_path.write_text(slave_gen_prompt + "\n", encoding="utf-8")
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
@@ -956,15 +1195,19 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     // Device Model for {model_name}
 
     uint64_t {model_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
+        MyState *s = (MyState *)opaque;  // valid: framework passes return value of _init
         // ...
     }}
 
     void {model_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
+        MyState *s = (MyState *)opaque;
         // ...
     }}
 
-    void {model_name.lower()}_init(ConfigSection* model_info) {{
+    // MUST return &g_state — framework stores this and passes it as opaque to _read/_write
+    void* {model_name.lower()}_init(ConfigSection* model_info) {{
         // ...
+        return &g_{model_name.lower()};
     }}
     ```
     """)
@@ -1031,9 +1274,12 @@ def iteration_prompt_gen_multiple_periph(
         return None
 
     # ── 2. Build model source blocks ─────────────────────────────────────────
+    # Iterate all -d entries so every provided model is embedded and patchable,
+    # not just the -mname ones. This handles cases like slave models (BME280)
+    # or signal-connected peripherals (GPIOD) that have no trace data but are
+    # still relevant for the LLM to reason about and potentially correct.
     model_source_blocks = []
-    for model_name in model_names:
-        path = model_to_path[model_name]
+    for model_name, path in model_to_path.items():
         filename = os.path.basename(path)
         if show_prompt:
             source = Path(path).read_text(encoding="utf-8", errors="replace")
@@ -1077,6 +1323,12 @@ def iteration_prompt_gen_multiple_periph(
         {diff_obj.diff_loop_pattern_data}
 ```
 
+        ### Rare Value Transitions
+        These are read values from LOW-entropy (status/control) registers that did NOT appear in the dominant loop patterns. They represent infrequent but important state changes that the model MUST handle correctly.
+```
+        {diff_obj.rare_transitions_data}
+```
+
         ### Stateful Behavior Analysis
 ```
         {state_data_section}
@@ -1101,8 +1353,8 @@ def iteration_prompt_gen_multiple_periph(
 
     # ── 4. Build file target reference ───────────────────────────────────────
     file_reference = "\n    ".join(
-        f"- `{model_name}` → `{os.path.basename(model_to_path[model_name])}`"
-        for model_name in model_names
+        f"- `{model_name}` → `{os.path.basename(path)}`"
+        for model_name, path in model_to_path.items()
     )
 
     mismatch_list = [p for p, (nm, _) in peripheral_results.items() if nm]

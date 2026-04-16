@@ -98,7 +98,7 @@ typedef void (*DeviceWriteFunc)(void *opaque, hwaddr offset, uint64_t value, uns
  */
 typedef uint64_t (*DeviceReadFunc)(void *opaque, hwaddr offset, unsigned size, uint64_t pc);
 
-typedef int (*DeviceInit)(ConfigSection* args);
+typedef void* (*DeviceInit)(ConfigSection* args);
 
 typedef int (*DeviceIRQFunc)(int);
 

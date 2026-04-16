@@ -25,6 +25,7 @@ class DiffLog:
         self.raw_state = None      # dict with rmw_hw, rmw_em, wp_hw_str, wp_em_str
         self.raw_entropy = None    # dict with entropy_hw, entropy_em, warnings list
         self.diff_runtime_trace = None
+        self.rare_transitions_data = None
         self.isr_analysis_data = None
 
 #This function will compare the automata for the given automatas...
@@ -47,6 +48,7 @@ def verify_automata(automata1, automata2, peripheral):
         differential_data.diff_state_data = "CRITICAL ERROR: Emulation crashed early. Check your model code for infinite loops, bad memory accesses, or missing behaviors causing the firmware to halt/panic."
         differential_data.diff_entropy_data = "CRITICAL ERROR: Emulation crashed."
         differential_data.diff_runtime_trace = "CRITICAL ERROR: Emulation crashed. This peripheral was never accessed in emulation."
+        differential_data.rare_transitions_data = ""
         differential_data.isr_analysis_data = "CRITICAL ERROR: Emulation crashed."
         return True, differential_data
 
@@ -76,6 +78,14 @@ def verify_automata(automata1, automata2, peripheral):
     #Check the ISR Analysis
     fastdyn_log.info('Performing Verification for the ISRs')
     diff_isr_analysis(differential_data, periph_hw, periph_em)
+
+    # Pass through rare value transitions from the hardware trace (no diff needed)
+    rare_path = os.path.join(periph_hw, 'rare_transitions.txt')
+    if os.path.exists(rare_path):
+        with open(rare_path, 'r') as f:
+            differential_data.rare_transitions_data = f.read()
+    else:
+        differential_data.rare_transitions_data = ''
 
     return differential_data.not_match, differential_data
 
@@ -134,6 +144,8 @@ def diff_runtime_trace_analysis(diff_data, periph_hw, periph_em):
             if state_hw[i] != state_em[i]:
                 fastdyn_log.warn(f"Hardware access {state_hw[i]} does not match with the emulated device model access {state_em[i]}")
 
+    read_seq_section = _build_read_sequence_section(state_hw_path, state_em_path)
+
     diff_data.diff_runtime_trace = f'''
     Hardware Runtime Trace Data Accesses
     {state_hw}
@@ -141,7 +153,54 @@ def diff_runtime_trace_analysis(diff_data, periph_hw, periph_em):
     Emulated Model Runtime Trace Data Accesses
     {state_em}
 
+    {read_seq_section}
     '''
+
+
+def _build_read_sequence_section(hw_path, em_path, max_per_reg=10):
+    """
+    Builds a compact 'Actual Read Sequences' subsection showing the first
+    max_per_reg read values per register from both traces side-by-side.
+    MCU-agnostic: uses no register-name heuristics — every register that
+    was read at least once appears. Registers where hw and em sequences
+    match exactly are marked [MATCH]; differing ones are marked [DIFFERS].
+    This section is purely informational and does not affect MISMATCH/PASSING.
+    """
+    pattern = re.compile(
+        r'^\[\s*\d+\.\d+\]\s*READ\s+to\s+'
+        r'[A-Za-z0-9_]+->([A-Za-z0-9_]+)\s*'
+        r'\([^)]+\)\s*value=(0x[0-9A-Fa-f]+)'
+    )
+
+    def collect(path):
+        seq = defaultdict(list)
+        if not os.path.exists(path):
+            return seq
+        with open(path) as f:
+            for line in f:
+                m = pattern.search(line)
+                if m:
+                    reg, val = m.group(1), m.group(2)
+                    seq[reg].append(val)
+        return seq
+
+    hw_seq = collect(hw_path)
+    em_seq = collect(em_path)
+    all_regs = sorted(set(hw_seq) | set(em_seq))
+
+    if not all_regs:
+        return ''
+
+    lines = ['Actual Read Sequences (first %d values per register):' % max_per_reg]
+    for reg in all_regs:
+        hw_vals = hw_seq[reg][:max_per_reg]
+        em_vals = em_seq[reg][:max_per_reg]
+        tag = '[MATCH]' if hw_vals == em_vals else '[DIFFERS]'
+        hw_str = '[' + ', '.join(hw_vals) + (', ...' if len(hw_seq[reg]) > max_per_reg else '') + ']'
+        em_str = '[' + ', '.join(em_vals) + (', ...' if len(em_seq[reg]) > max_per_reg else '') + ']'
+        lines.append(f'  {tag} {reg}: hw={hw_str}  em={em_str}')
+
+    return '\n    '.join(lines)
 def diff_stateful_analysis(diff_data, periph_hw, periph_em):
     state_hw_path = os.path.join(periph_hw, 'state.txt')
     state_em_path = os.path.join(periph_em, 'state.txt')
@@ -263,12 +322,49 @@ def diff_entropy_calculate(diff_data, periph_hw, periph_em):
             if hw_val > 0 and em_val == 0:
                 # Duration-independent: HW register value changes but model
                 # returns the exact same value every time — strong signal.
+                #
+                # However, when both sides fall in the same entropy LEVEL
+                # (e.g. both LOW), the variation in hardware may be caused
+                # by timing artifacts rather than missing model logic.
+                # Example: STM32 TIM SR register shows alternating 0x1F/0x1E
+                # in hardware due to spurious NVIC re-entry (APB write
+                # propagation delay), but the model correctly returns only
+                # 0x1F because it clears UIF synchronously.  Both are LOW
+                # entropy; the difference is not a behavioral bug.
+                #
+                # Downgrade to warning-only when levels match; keep hard
+                # fail when levels differ (e.g. hw=MEDIUM, em=LOW).
+                same_level = (hw_level.lower() == em_level.lower())
                 entropy_warnings.append(
                     f"{reg}: hardware entropy={hw_level} ({hw_val}) but emulated "
                     f"entropy=LOW (0.00). The model always returns the same value for "
                     f"this register, but hardware shows it changing. This strongly "
                     f"suggests the model is missing self-clearing bits, auto-"
                     f"transitioning state, or is stuck in a polling loop."
+                )
+                if not same_level:
+                    diff_data.not_match = True
+                else:
+                    fastdyn_log.info(
+                        f"Entropy mismatch on {reg} downgraded to warning: both "
+                        f"sides are {hw_level} entropy (hw={hw_val}, em={em_val}). "
+                        f"Small variation within the same level is likely a timing "
+                        f"artifact, not a model defect."
+                    )
+            elif hw_val == 0.0 and em_val >= 0.5:
+                # Register is perfectly constant in hardware (write-only,
+                # reserved, or always-zero) but varies in emulation.
+                # Guard: em_val >= 0.5 avoids false positives from floating-point
+                # noise on registers read only once or twice.
+                # This is MCU-agnostic: any hardware register that never changes
+                # value across all reads in a complete firmware run should be
+                # equally stable in the emulated model.
+                entropy_warnings.append(
+                    f"{reg}: hardware entropy=0.00 (register always returns the "
+                    f"same value) but emulated entropy={em_level} ({em_val:.2f}). "
+                    f"The model returns varying values for a register that is "
+                    f"constant in hardware — likely a write-only or reserved "
+                    f"register whose reads the model handles incorrectly."
                 )
                 diff_data.not_match = True
             elif hw_level.lower() != em_level.lower():

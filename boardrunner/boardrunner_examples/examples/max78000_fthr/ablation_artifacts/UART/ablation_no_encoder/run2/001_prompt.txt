@@ -1,0 +1,1700 @@
+Take this prompt independent from previous prompt history.
+
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for Max78000 with special familiarity with uart peripheral.
+Your task is to analyze the following raw MMIO I/O trace and generate a complete C device model.
+
+## Available APIs
+You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
+```c
+- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes guest memory.
+- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads guest memory.
+- `int qemu_plugin_read_register(int reg, uint8_t *buf)`: Reads a register of VM. reg is number of register 0 is R0 in ARM.
+- `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
+- `void qemu_plugin_raise_irq(int irq, false)`: Raises an interrupt line, MUST: use interrupt + 16, here false means non-secure interrupt, dont change it to true!.
+- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Accepts a timer's handle and an absolute nanosecond timestamp to arm that timer to fire at the specified moment for one shot.
+- `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
+- `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
+- `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
+- `void dev_debug(char *str)`: Any debug messages must be logged using this function.
+- `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for a host-side pseudo-terminal device. The actual PTY path is determined by the framework at runtime.
+- `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
+- `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
+- `I2CBus api_i2c_init_bus(ConfigSection* model_info)`: Initializes an I2C bus from a configuration section and returns the I2CBus struct by value.
+- `int api_i2c_start_transfer(I2CBus* bus, uint8_t address, bool is_recv)`: Starts an I2C transaction with a slave device.
+- `int api_i2c_start_transfer_10bit(I2CBus* bus, uint16_t address, bool is_recv)`: Starts an I2C transaction with a slave device when the address is 10bit.
+- `void api_i2c_end_transfer(I2CBus* bus)`: Ends the current I2C transaction.
+- `int api_i2c_send(I2CBus *bus, uint8_t data)`: Sends a byte to the active I2C slave device.
+- `uint8_t api_i2c_recv(I2CBus *bus)`: Receives a byte from the active I2C slave device.
+- `SPIBus api_spi_init_bus(ConfigSection* model_info)`: Takes a ConfigSection pointer, parses the SPI configuration, loads all specified slave device models, and returns a populated SPIBus structure.
+- `uint32_t api_spi_transfer(SPIBus *bus, uint32_t val)`: Performs a full-duplex transfer on the bus by sending val (MOSI) to the currently selected slave and returning the uint32_t value received from it (MISO).
+- `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
+- `void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque)`: Called by a DMA model. Takes a `stream_id`, a `handler` callback, and an `opaque` data pointer. Registers the handler to be called when a peripheral triggers a request for that stream.
+- `void api_dma_request(int stream_id)`: Called by a peripheral model (e.g., ADC). Takes a `stream_id` to trigger. This function looks up the corresponding handler (registered via `api_dma_register_stream`).
+- `void api_signal_register(int signal_id, signal_handler_t handler, void *opaque)`: Called by a sink peripheral model (for example EXTI). Registers a callback for a logical signal line such as EXTI line 13.
+- `void api_signal_set(int signal_id, bool level)`: Called by a source peripheral model (for example GPIO). Publishes the logical level for a signal line. The API is level-based; edge detection belongs in the receiving model.
+- `int api_fifo_open(const char *path)`: Creates and opens a named pipe (FIFO) at the specified path using O_RDWR to prevent EOF when the external writer disconnects.
+- `int api_fifo_write(int fd, const void *data, int len)`: Writes a data buffer of a specified length to the FIFO file descriptor.
+- `int api_fifo_read_nonblock(int fd, uint8_t *out_byte)`: Reads a single byte from the FIFO in non-blocking mode. Returns 1 if a byte was read, 0 if the buffer is empty.
+- `void api_fifo_close(int fd, const char *path)`: Closes the file descriptor and removes (unlinks) the named pipe file from the filesystem.
+
+// --- I2C Bus struct definitions here ---
+typedef struct {
+    char* name; //Name of the slave
+    int address;    //address for which the slave will be registered
+    SlaveSendFunc send; //Call this function when you want to send data and get ack from the slave device.
+    SlaveRecvFunc recv; //Call this function when you want to receive data from the slave device.
+    SlaveEventFunc event; //Call this function when you want to start transmission
+} SlaveDetails;
+
+typedef struct {
+    int num_slaves;
+    SlaveDetails* slave; //Dynamic array of slaves
+} SlaveList;
+
+typedef struct {
+    SlaveList Slaves;  //Constant once registered on i2c_init_bus
+    SlaveDetails* current_dev;//Current devices show the current devices being used for the transaction
+    uint8_t saved_address; //saved_address is the address initiated for the transaction by the master.
+} I2CBus;
+// --- End of struct definitions ---
+
+// --- SPI Bus struct definitions here ---
+#define NUM_CS_LINES 4          //USER can change the max number based on the requirement
+
+typedef struct {
+    char* name;                 //Name of the slave
+    int cs_id;                  //Chip select id for which the device will be registered
+    int cs_enable;              //is the current chip enable
+    SlaveTransferFunc transfer; //transfer function used to send and receive the data to/from slave
+    SlaveSetcsFunc set_cs;      //function to tell the slave it is selected
+} SpiSlaveDetails;
+
+typedef struct {
+    int num_slaves;
+    SpiSlaveDetails* slave; //Dynamic array of slaves
+} SpiSlaveList;
+
+typedef struct {
+    SpiSlaveList Slaves;  //Registered on spi_init_bus
+} SPIBus;
+// --- End of struct definitions ---
+
+// --- Start of DMA Info
+
+#define MAX_DMA_STREAMS 16
+
+// --- End of DMA Info
+
+// --- Start of Signals API Info
+
+#define MAX_SIGNALS 128
+
+typedef void (*signal_handler_t)(void *opaque, int signal_id, bool level);
+
+// --- End of Signals API Info
+
+// --- Network Backend APIs (Linux TAP) ---
+// 1. Init TAP interface (NON-BLOCKING). Returns fd.
+int api_tap_init(const char *dev_name);
+// 2. Send raw frame to host.
+int api_tap_send(int fd, const uint8_t *buf, int len);
+// 3. Poll host for incoming frame. Returns length or -1.
+int api_tap_recv_nonblock(int fd, uint8_t *buf, int max_len);
+```
+
+### Missing API Policy (HARD BLOCKER)
+If the model requires an API that is not listed above, you MUST stop and NOT generate the device model. Instead:
+1. Clearly name the missing API and explain why it is required for this model.
+2. Propose a precise signature for the missing API in the following format:
+   - **Name**: `api_<domain>_<action>` (e.g., `api_can_send_frame`)
+   - **Inputs**: list each parameter with its C type and a one-line description
+   - **Output**: return type and meaning
+   - **Description**: one paragraph explaining what the API does and when the model would call it
+3. STOP here. Do not generate the model. Do not attempt workarounds or placeholder implementations. The user will add the API to the framework and re-run generation.
+
+Do NOT generate partial or placeholder models when a required API is missing — this creates cascading failures in the emulation pipeline.
+
+
+
+## Critical Framework Rules
+
+### 1. Absolute Addressing
+The emulation framework passes **absolute guest physical addresses** to the model's
+read/write callbacks — NOT offsets relative to the peripheral base. For example, a
+read to a register at offset 0x08 of a peripheral whose base address is 0x40022000
+arrives as `addr = 0x40022008`.
+
+**You MUST subtract the peripheral's base address** from `addr` before comparing
+against register offsets. For example:
+```c
+uint64_t my_periph_read(void *opaque, hwaddr addr, unsigned size) {
+    // Convert absolute address to register offset
+    hwaddr offset = addr - MY_PERIPH_BASE;
+    switch (offset) {
+        case 0x00: /* first register  */ ...
+        case 0x08: /* second register */ ...
+    }
+}
+```
+If a device covers multiple disjoint address ranges (e.g., peripheral A at
+0x40020000–0x400203FF and peripheral B at 0x40020800–0x40020BFF), your model must
+handle both absolute ranges by checking which range the incoming address falls into
+and subtracting the appropriate base for that range.
+
+The trace data shows these absolute addresses directly (e.g., `address = 0x40022008`).
+Use them to infer each peripheral's base address and register layout.
+
+### 2. Callback Function Signatures
+
+#### 2a. MMIO read/write callbacks (`_read` / `_write`)
+The framework passes the pointer returned by `_init` as the `opaque` argument to
+every subsequent `_read` and `_write` call. Your `_init` **MUST return a pointer to
+your state struct** so the framework can wire it up correctly:
+
+```c
+static MyPeriphState g_state;
+
+void* myperiph_init(ConfigSection* model_info) {
+    memset(&g_state, 0, sizeof(g_state));
+    // ... initialization ...
+    return &g_state;   // REQUIRED — framework stores this and passes it as opaque
+}
+
+uint64_t myperiph_read(void *opaque, hwaddr addr, unsigned size) {
+    MyPeriphState *s = (MyPeriphState *)opaque;  // valid: framework set this from init
+    hwaddr offset = addr - MY_BASE;
+    // ...
+}
+
+void myperiph_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
+    MyPeriphState *s = (MyPeriphState *)opaque;
+    hwaddr offset = addr - MY_BASE;
+    // ...
+}
+```
+
+#### 2b. Inter-peripheral / timer callbacks
+Any function pointer registered with a framework API such as `api_signal_register`,
+`api_dma_register_stream`, or `qemu_plugin_timer_new_ns` **MUST exactly match** the
+expected signature, and those callbacks DO receive a valid `opaque` pointer (the one
+you passed at registration time). Your callback functions **MUST** accept the `opaque`
+parameter and cast it to access your state:
+
+```c
+// CORRECT — matches the expected void (*)(void *) signature:
+static void my_callback(void *opaque) {
+    MyPeriphState *s = (MyPeriphState *)opaque;  // valid: you registered &g_state
+    // ...
+}
+
+// WRONG — empty parameter list, undefined behavior when caller passes an argument:
+static void my_callback() { ... }
+```
+
+- **Never cast function pointers** to hide type mismatches. If the compiler warns
+  about an incompatible function pointer, fix the function signature instead.
+- This applies to ALL inter-peripheral / timer callbacks: timer callbacks, signal
+  handlers, DMA request handlers, and any other API that accepts a function pointer
+  and an opaque/data pointer.
+
+### 3. Stateful Emulation over Trace Memorization
+You must implement a dynamic, stateful model. The trace data is EVIDENCE for
+reverse-engineering the register logic — it is NOT a lookup table to copy from.
+
+- Never emit "record-and-replay" code that hardcodes return values from the
+  trace (e.g., `if (addr == X && count == N) return Y;`). Such code only works
+  for the exact execution that was recorded and breaks on any other run.
+- DO maintain a state struct whose fields represent register values.
+- DO update state based on firmware writes at runtime (e.g., set/clear bits via
+  masking when the firmware writes to a control register).
+- DO derive read return values from current state, not from trace constants.
+- DO keep the logic minimal — only implement behavior the trace evidence supports.
+  Do not invent complex state machines, timers, or hardware features beyond what
+  the trace implies.
+
+### 4. Initialization and ConfigSection
+The `_init` function receives a `ConfigSection* model_info` pointer that contains
+the peripheral's configuration from the platform description (base address, IRQ
+numbers, bus connections, etc.). Use it when calling bus-init APIs like
+`api_i2c_init_bus(model_info)` or `api_spi_init_bus(model_info)`. Do not
+hardcode values that can be read from the configuration.
+
+
+--- START OF RAW I/O TRACE ---
+
+## Platform:
+Max78000
+
+## Peripheral Name:
+UART
+
+## Raw Hardware I/O Trace:
+The following is the raw MMIO trace captured during hardware execution.
+Each line represents a single register read or write with timestamp, address, value, and size.
+You must infer the register layout, initialization sequence, runtime behavior, and interrupt patterns from this trace.
+```
+[    1.265985] [passthrough] Write: 	 address = 0xE000ED08, size = 4 bytes, value = 0x10000000, pc=0x10000746 
+[    1.270038] [passthrough] Read: 	 address = 0x4002A100, size = 4 bytes, value = 0x00010081, pc=0x10000FA0 
+[    1.273972] [passthrough] Write: 	 address = 0x4002A100, size = 4 bytes, value = 0x00010080, pc=0x10000FAA 
+[    1.277919] [passthrough] Write: 	 address = 0x4002A700, size = 4 bytes, value = 0x00000001, pc=0x10000FAE 
+[    1.281906] [passthrough] Read: 	 address = 0x4002A100, size = 4 bytes, value = 0x00010080, pc=0x10000FB2 
+[    1.287962] [passthrough] Read: 	 address = 0x4002A100, size = 4 bytes, value = 0x00010080, pc=0x10000FBA 
+[    1.291930] [passthrough] Write: 	 address = 0x4002A100, size = 4 bytes, value = 0x00010081, pc=0x10000FC2 
+[    1.295896] [passthrough] Read: 	 address = 0x4002A100, size = 4 bytes, value = 0x00010081, pc=0x10000FC6 
+[    1.299990] [passthrough] Read: 	 address = 0xE000ED88, size = 4 bytes, value = 0x00f00000, pc=0x1000074E 
+[    1.303916] [passthrough] Write: 	 address = 0xE000ED88, size = 4 bytes, value = 0x00f00000, pc=0x10000756 
+[    1.307981] [passthrough] Read: 	 address = 0x40000008, size = 4 bytes, value = 0x3414a008, pc=0x100006D4 
+[    1.312101] [passthrough] Read: 	 address = 0x40000008, size = 4 bytes, value = 0x3414a008, pc=0x100006F8 
+[    1.316192] [passthrough] Read: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009C6 
+[    1.319911] [passthrough] Write: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009D2 
+[    1.323870] [passthrough] Read: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009C6 
+[    1.329838] [passthrough] Write: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009D2 
+[    1.333992] [passthrough] Read: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x10000998 
+[    1.337908] [passthrough] Write: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x100009A6 
+[    1.342258] [passthrough] Write: 	 address = 0x40000004, size = 4 bytes, value = 0x00000800, pc=0x10000B10 
+[    1.345876] [passthrough] Read: 	 address = 0x40000004, size = 4 bytes, value = 0x00000000, pc=0x10000B12 
+[    1.350078] [passthrough] Read: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x1000097E 
+[    1.353941] [passthrough] Write: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffffc, pc=0x10000988 
+[    1.358218] [passthrough] Read: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffffc, pc=0x100009C6 
+[    1.361835] [passthrough] Write: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffffc, pc=0x100009D2 
+[    1.366907] [passthrough] Read: 	 address = 0x400080C0, size = 4 bytes, value = 0x00000004, pc=0x10000E6A 
+[    1.371932] [passthrough] Write: 	 address = 0x400080C0, size = 4 bytes, value = 0x00000004, pc=0x10000E74 
+[    1.376154] [passthrough] Read: 	 address = 0x40008030, size = 4 bytes, value = 0xffffffff, pc=0x10000E90 
+[    1.379907] [passthrough] Write: 	 address = 0x40008030, size = 4 bytes, value = 0xffffffff, pc=0x10000E94 
+[    1.383872] [passthrough] Write: 	 address = 0x40008004, size = 4 bytes, value = 0x00000003, pc=0x10000E96 
+[    1.388002] [passthrough] Write: 	 address = 0x40008088, size = 4 bytes, value = 0x00000003, pc=0x10000ECC 
+[    1.391908] [passthrough] Write: 	 address = 0x4000807C, size = 4 bytes, value = 0x00000003, pc=0x10000ED2 
+[    1.395900] [passthrough] Write: 	 address = 0x40008070, size = 4 bytes, value = 0x00000003, pc=0x10000ED4 
+[    1.399882] [passthrough] Write: 	 address = 0x40008008, size = 4 bytes, value = 0x00000003, pc=0x10000ED6 
+[    1.404079] [passthrough] Read: 	 address = 0x40008060, size = 4 bytes, value = 0x00000004, pc=0x10000C82 
+[    1.407933] [passthrough] Write: 	 address = 0x40008060, size = 4 bytes, value = 0x00000004, pc=0x10000C8A 
+[    1.413914] [passthrough] Read: 	 address = 0x40008064, size = 4 bytes, value = 0x00000000, pc=0x10000C8C 
+[    1.417892] [passthrough] Write: 	 address = 0x40008064, size = 4 bytes, value = 0x00000000, pc=0x10000C92 
+[    1.422229] [passthrough] Read: 	 address = 0x400080B0, size = 4 bytes, value = 0x00000000, pc=0x10000F4A 
+[    1.425930] [passthrough] Write: 	 address = 0x400080B0, size = 4 bytes, value = 0x00000000, pc=0x10000F52 
+[    1.429925] [passthrough] Read: 	 address = 0x400080B4, size = 4 bytes, value = 0x00000000, pc=0x10000F56 
+[    1.433925] [passthrough] Write: 	 address = 0x400080B4, size = 4 bytes, value = 0x00000000, pc=0x10000F5E 
+[    1.437901] [passthrough] Read: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffffc, pc=0x100009C6 
+[    1.441826] [passthrough] Write: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009D2 
+[    1.446199] [passthrough] Read: 	 address = 0x40000008, size = 4 bytes, value = 0x3414a008, pc=0x10000A7A 
+[    1.449911] [passthrough] Write: 	 address = 0x40000008, size = 4 bytes, value = 0x3414a008, pc=0x10000A80 
+[    1.456147] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00b87a71, pc=0x10000784 
+[    1.459815] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000784
+[    1.459939] [passthrough] Read: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000000, pc=0x10000786 
+[    1.463827] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000000, size=4 bytes, pc=0x10000786
+[    1.463967] [passthrough] Read: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000000, pc=0x1000078E 
+[    1.467824] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000000, size=4 bytes, pc=0x1000078e
+[    1.468001] [passthrough] Write: 	 address = 0xE000E014, size = 4 bytes, value = 0x00ffffff, pc=0x1000079A 
+[    1.471800] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000004, size = 4 bytes, value = 0x00ffffff, pc=0x1000079A 
+[    1.471912] [passthrough] Write: 	 address = 0xE000E018, size = 4 bytes, value = 0x00ffffff, pc=0x100007A0 
+[    1.475800] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000008, size = 4 bytes, value = 0x00ffffff, pc=0x100007A0 
+[    1.475912] [passthrough] Write: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000005, pc=0x100007A2 
+[    1.479803] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000000, size = 4 bytes, value = 0x00000005, pc=0x100007A2 
+[    1.480792] [passthrough] Read: 	 address = 0x40000008, size = 4 bytes, value = 0x3414a008, pc=0x10000A94 
+[    1.485054] [passthrough] Write: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000000, pc=0x100008C4 
+[    1.488799] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000000, size = 4 bytes, value = 0x00000000, pc=0x100008C4 
+[    1.489197] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00000000, pc=0x10001484 
+[    1.492927] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00000000, pc=0x1000148E 
+[    1.499003] [passthrough] Write: 	 address = 0x40042000, size = 4 bytes, value = 0x00020000, pc=0x100014DC 
+[    1.503049] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00020000, pc=0x100014F8 
+[    1.507330] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00020000, pc=0x10001540 
+[    1.510916] [passthrough] Write: 	 address = 0x40042000, size = 4 bytes, value = 0x00020001, pc=0x1000154A 
+[    1.515028] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00020001, pc=0x1000137C 
+[    1.518915] [passthrough] Write: 	 address = 0x40042000, size = 4 bytes, value = 0x00020c01, pc=0x10001388 
+[    1.523081] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00020c01, pc=0x100013E8 
+[    1.526893] [passthrough] Write: 	 address = 0x40042000, size = 4 bytes, value = 0x00020c01, pc=0x100013F0 
+[    1.531097] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00020c01, pc=0x100013B0 
+[    1.534925] [passthrough] Write: 	 address = 0x40042000, size = 4 bytes, value = 0x00020c01, pc=0x100013B6 
+[    1.541066] [passthrough] Write: 	 address = 0x40042014, size = 4 bytes, value = 0x00000005, pc=0x100010A2 
+[    1.545175] [passthrough] Write: 	 address = 0x40042010, size = 4 bytes, value = 0x00000040, pc=0x1000136C 
+[    1.548993] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x00020c01, pc=0x10001090 
+[    1.552907] [passthrough] Write: 	 address = 0x40042000, size = 4 bytes, value = 0x00028c01, pc=0x10001096 
+[    1.556886] [passthrough] Read: 	 address = 0x40042000, size = 4 bytes, value = 0x000a8c01, pc=0x10001098 
+[    1.561353] [passthrough] Read: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009C6 
+[    1.564828] [passthrough] Write: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009D2 
+[    1.569010] [passthrough] Read: 	 address = 0x400080C0, size = 4 bytes, value = 0x00000004, pc=0x10000E5C 
+[    1.572919] [passthrough] Write: 	 address = 0x400080C0, size = 4 bytes, value = 0x00000004, pc=0x10000E64 
+[    1.576852] [passthrough] Read: 	 address = 0x40008030, size = 4 bytes, value = 0xffffffff, pc=0x10000E90 
+[    1.582824] [passthrough] Write: 	 address = 0x40008030, size = 4 bytes, value = 0xffffffff, pc=0x10000E94 
+[    1.586795] [passthrough] Write: 	 address = 0x40008004, size = 4 bytes, value = 0x00000004, pc=0x10000E96 
+[    1.590924] [passthrough] Write: 	 address = 0x40008014, size = 4 bytes, value = 0x00000004, pc=0x10000EB8 
+[    1.594922] [passthrough] Write: 	 address = 0x40008004, size = 4 bytes, value = 0x00000004, pc=0x10000EBA 
+[    1.598897] [passthrough] Write: 	 address = 0x40008070, size = 4 bytes, value = 0x00000004, pc=0x10000EBE 
+[    1.602903] [passthrough] Write: 	 address = 0x4000807C, size = 4 bytes, value = 0x00000004, pc=0x10000EC0 
+[    1.606883] [passthrough] Write: 	 address = 0x40008088, size = 4 bytes, value = 0x00000004, pc=0x10000EC2 
+[    1.610936] [passthrough] Read: 	 address = 0x40008060, size = 4 bytes, value = 0x00000004, pc=0x10000C72 
+[    1.614909] [passthrough] Write: 	 address = 0x40008060, size = 4 bytes, value = 0x00000004, pc=0x10000C78 
+[    1.618870] [passthrough] Read: 	 address = 0x40008064, size = 4 bytes, value = 0x00000000, pc=0x10000C7A 
+[    1.624971] [passthrough] Write: 	 address = 0x40008064, size = 4 bytes, value = 0x00000000, pc=0x10000C60 
+[    1.628888] [passthrough] Read: 	 address = 0x400080B8, size = 4 bytes, value = 0x00000000, pc=0x10000C62 
+[    1.632888] [passthrough] Write: 	 address = 0x400080B8, size = 4 bytes, value = 0x00000000, pc=0x10000C6A 
+[    1.637131] [passthrough] Read: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009C6 
+[    1.640817] [passthrough] Write: 	 address = 0x40000024, size = 4 bytes, value = 0xfffffdfc, pc=0x100009D2 
+[    1.644922] [passthrough] Read: 	 address = 0x400090C0, size = 4 bytes, value = 0x00000080, pc=0x10000E5C 
+[    1.648810] [passthrough] Write: 	 address = 0x400090C0, size = 4 bytes, value = 0x00000080, pc=0x10000E64 
+[    1.652806] [passthrough] Read: 	 address = 0x40009030, size = 4 bytes, value = 0x000003ff, pc=0x10000E90 
+[    1.656811] [passthrough] Write: 	 address = 0x40009030, size = 4 bytes, value = 0x000003ff, pc=0x10000E94 
+[    1.660792] [passthrough] Write: 	 address = 0x40009004, size = 4 bytes, value = 0x00000080, pc=0x10000E96 
+[    1.664805] [passthrough] Write: 	 address = 0x40009014, size = 4 bytes, value = 0x00000080, pc=0x10000EB8 
+[    1.670791] [passthrough] Write: 	 address = 0x40009004, size = 4 bytes, value = 0x00000080, pc=0x10000EBA 
+[    1.674800] [passthrough] Write: 	 address = 0x40009070, size = 4 bytes, value = 0x00000080, pc=0x10000EBE 
+[    1.678810] [passthrough] Write: 	 address = 0x4000907C, size = 4 bytes, value = 0x00000080, pc=0x10000EC0 
+[    1.682809] [passthrough] Write: 	 address = 0x40009088, size = 4 bytes, value = 0x00000080, pc=0x10000EC2 
+[    1.686802] [passthrough] Read: 	 address = 0x40009060, size = 4 bytes, value = 0x00000080, pc=0x10000C72 
+[    1.690819] [passthrough] Write: 	 address = 0x40009060, size = 4 bytes, value = 0x00000080, pc=0x10000C78 
+[    1.694794] [passthrough] Read: 	 address = 0x40009064, size = 4 bytes, value = 0x00000000, pc=0x10000C7A 
+[    1.698818] [passthrough] Write: 	 address = 0x40009064, size = 4 bytes, value = 0x00000000, pc=0x10000C60 
+[    1.702802] [passthrough] Read: 	 address = 0x400090B8, size = 4 bytes, value = 0x00000000, pc=0x10000C62 
+[    1.706817] [passthrough] Write: 	 address = 0x400090B8, size = 4 bytes, value = 0x00000000, pc=0x10000C6A 
+[    1.714760] [passthrough] Write: 	 address = 0x4008041C, size = 4 bytes, value = 0x00000001, pc=0x10000E30 
+[    1.718990] [passthrough] Read: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x10000998 
+[    1.722826] [passthrough] Write: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x100009A6 
+[    1.726863] [passthrough] Read: 	 address = 0x400804C0, size = 4 bytes, value = 0x00000007, pc=0x10000E5C 
+[    1.730831] [passthrough] Write: 	 address = 0x400804C0, size = 4 bytes, value = 0x00000007, pc=0x10000E64 
+[    1.734811] [passthrough] Read: 	 address = 0x40080430, size = 4 bytes, value = 0x000000ff, pc=0x10000E90 
+[    1.738814] [passthrough] Write: 	 address = 0x40080430, size = 4 bytes, value = 0x000000ff, pc=0x10000E94 
+[    1.742800] [passthrough] Write: 	 address = 0x40080404, size = 4 bytes, value = 0x00000001, pc=0x10000E96 
+[    1.746865] [passthrough] Write: 	 address = 0x40080410, size = 4 bytes, value = 0x00000001, pc=0x10000EC8 
+[    1.750868] [passthrough] Write: 	 address = 0x40080404, size = 4 bytes, value = 0x00000001, pc=0x10000EBA 
+[    1.756800] [passthrough] Write: 	 address = 0x40080470, size = 4 bytes, value = 0x00000001, pc=0x10000EBE 
+[    1.760801] [passthrough] Write: 	 address = 0x4008047C, size = 4 bytes, value = 0x00000001, pc=0x10000EC0 
+[    1.764800] [passthrough] Write: 	 address = 0x40080488, size = 4 bytes, value = 0x00000001, pc=0x10000EC2 
+[    1.768795] [passthrough] Read: 	 address = 0x40080460, size = 4 bytes, value = 0x00000000, pc=0x10000C82 
+[    1.772808] [passthrough] Write: 	 address = 0x40080460, size = 4 bytes, value = 0x00000000, pc=0x10000C8A 
+[    1.776795] [passthrough] Read: 	 address = 0x40080464, size = 4 bytes, value = 0x00000000, pc=0x10000C8C 
+[    1.780807] [passthrough] Write: 	 address = 0x40080464, size = 4 bytes, value = 0x00000000, pc=0x10000C92 
+[    1.784793] [passthrough] Read: 	 address = 0x400804B0, size = 4 bytes, value = 0x00000000, pc=0x10000F4A 
+[    1.788803] [passthrough] Write: 	 address = 0x400804B0, size = 4 bytes, value = 0x00000000, pc=0x10000F52 
+[    1.792794] [passthrough] Read: 	 address = 0x400804B4, size = 4 bytes, value = 0x00000000, pc=0x10000F56 
+[    1.796804] [passthrough] Write: 	 address = 0x400804B4, size = 4 bytes, value = 0x00000000, pc=0x10000F5E 
+[    1.802923] [passthrough] Write: 	 address = 0x4008041C, size = 4 bytes, value = 0x00000002, pc=0x10000E30 
+[    1.806797] [passthrough] Read: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x10000998 
+[    1.810806] [passthrough] Write: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x100009A6 
+[    1.814796] [passthrough] Read: 	 address = 0x400804C0, size = 4 bytes, value = 0x00000007, pc=0x10000E5C 
+[    1.818810] [passthrough] Write: 	 address = 0x400804C0, size = 4 bytes, value = 0x00000007, pc=0x10000E64 
+[    1.822790] [passthrough] Read: 	 address = 0x40080430, size = 4 bytes, value = 0x000000ff, pc=0x10000E90 
+[    1.826802] [passthrough] Write: 	 address = 0x40080430, size = 4 bytes, value = 0x000000ff, pc=0x10000E94 
+[    1.830788] [passthrough] Write: 	 address = 0x40080404, size = 4 bytes, value = 0x00000002, pc=0x10000E96 
+[    1.834790] [passthrough] Write: 	 address = 0x40080410, size = 4 bytes, value = 0x00000002, pc=0x10000EC8 
+[    1.838797] [passthrough] Write: 	 address = 0x40080404, size = 4 bytes, value = 0x00000002, pc=0x10000EBA 
+[    1.842791] [passthrough] Write: 	 address = 0x40080470, size = 4 bytes, value = 0x00000002, pc=0x10000EBE 
+[    1.848790] [passthrough] Write: 	 address = 0x4008047C, size = 4 bytes, value = 0x00000002, pc=0x10000EC0 
+[    1.852792] [passthrough] Write: 	 address = 0x40080488, size = 4 bytes, value = 0x00000002, pc=0x10000EC2 
+[    1.856796] [passthrough] Read: 	 address = 0x40080460, size = 4 bytes, value = 0x00000000, pc=0x10000C82 
+[    1.860824] [passthrough] Write: 	 address = 0x40080460, size = 4 bytes, value = 0x00000000, pc=0x10000C8A 
+[    1.864800] [passthrough] Read: 	 address = 0x40080464, size = 4 bytes, value = 0x00000000, pc=0x10000C8C 
+[    1.868834] [passthrough] Write: 	 address = 0x40080464, size = 4 bytes, value = 0x00000000, pc=0x10000C92 
+[    1.872811] [passthrough] Read: 	 address = 0x400804B0, size = 4 bytes, value = 0x00000000, pc=0x10000F4A 
+[    1.876831] [passthrough] Write: 	 address = 0x400804B0, size = 4 bytes, value = 0x00000000, pc=0x10000F52 
+[    1.880806] [passthrough] Read: 	 address = 0x400804B4, size = 4 bytes, value = 0x00000000, pc=0x10000F56 
+[    1.884829] [passthrough] Write: 	 address = 0x400804B4, size = 4 bytes, value = 0x00000000, pc=0x10000F5E 
+[    1.890811] [passthrough] Write: 	 address = 0x4008041C, size = 4 bytes, value = 0x00000004, pc=0x10000E30 
+[    1.894811] [passthrough] Read: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x10000998 
+[    1.898827] [passthrough] Write: 	 address = 0x4008000C, size = 4 bytes, value = 0x0000007e, pc=0x100009A6 
+[    1.902801] [passthrough] Read: 	 address = 0x400804C0, size = 4 bytes, value = 0x00000007, pc=0x10000E5C 
+[    1.906821] [passthrough] Write: 	 address = 0x400804C0, size = 4 bytes, value = 0x00000007, pc=0x10000E64 
+[    1.910792] [passthrough] Read: 	 address = 0x40080430, size = 4 bytes, value = 0x000000ff, pc=0x10000E90 
+[    1.914811] [passthrough] Write: 	 address = 0x40080430, size = 4 bytes, value = 0x000000ff, pc=0x10000E94 
+[    1.918787] [passthrough] Write: 	 address = 0x40080404, size = 4 bytes, value = 0x00000004, pc=0x10000E96 
+[    1.922803] [passthrough] Write: 	 address = 0x40080410, size = 4 bytes, value = 0x00000004, pc=0x10000EC8 
+[    1.926794] [passthrough] Write: 	 address = 0x40080404, size = 4 bytes, value = 0x00000004, pc=0x10000EBA 
+[    1.930808] [passthrough] Write: 	 address = 0x40080470, size = 4 bytes, value = 0x00000004, pc=0x10000EBE 
+[    1.936811] [passthrough] Write: 	 address = 0x4008047C, size = 4 bytes, value = 0x00000004, pc=0x10000EC0 
+[    1.940791] [passthrough] Write: 	 address = 0x40080488, size = 4 bytes, value = 0x00000004, pc=0x10000EC2 
+[    1.944802] [passthrough] Read: 	 address = 0x40080460, size = 4 bytes, value = 0x00000000, pc=0x10000C82 
+[    1.948811] [passthrough] Write: 	 address = 0x40080460, size = 4 bytes, value = 0x00000000, pc=0x10000C8A 
+[    1.952796] [passthrough] Read: 	 address = 0x40080464, size = 4 bytes, value = 0x00000000, pc=0x10000C8C 
+[    1.956829] [passthrough] Write: 	 address = 0x40080464, size = 4 bytes, value = 0x00000000, pc=0x10000C92 
+[    1.960822] [passthrough] Read: 	 address = 0x400804B0, size = 4 bytes, value = 0x00000000, pc=0x10000F4A 
+[    1.964834] [passthrough] Write: 	 address = 0x400804B0, size = 4 bytes, value = 0x00000000, pc=0x10000F52 
+[    1.968814] [passthrough] Read: 	 address = 0x400804B4, size = 4 bytes, value = 0x00000000, pc=0x10000F56 
+[    1.972829] [passthrough] Write: 	 address = 0x400804B4, size = 4 bytes, value = 0x00000000, pc=0x10000F5E 
+[    1.979055] [passthrough] Write: 	 address = 0x4000440C, size = 4 bytes, value = 0x00000043, pc=0x1000035A 
+[    1.983052] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00f7bf77, pc=0x10000784 
+[    1.986824] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000784
+[    1.986839] [passthrough] Read: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000000, pc=0x10000786 
+[    1.990831] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000000, size=4 bytes, pc=0x10000786
+[    1.990853] [passthrough] Read: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000000, pc=0x1000078E 
+[    1.994812] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000000, size=4 bytes, pc=0x1000078e
+[    1.994826] [passthrough] Write: 	 address = 0xE000E014, size = 4 bytes, value = 0x00ffffff, pc=0x1000079A 
+[    1.998796] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000004, size = 4 bytes, value = 0x00ffffff, pc=0x1000079A 
+[    1.998816] [passthrough] Write: 	 address = 0xE000E018, size = 4 bytes, value = 0x00ffffff, pc=0x100007A0 
+[    2.002801] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000008, size = 4 bytes, value = 0x00ffffff, pc=0x100007A0 
+[    2.002817] [passthrough] Write: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000005, pc=0x100007A2 
+[    2.006795] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000000, size = 4 bytes, value = 0x00000005, pc=0x100007A2 
+[    2.006998] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00fc59d8, pc=0x10000904 
+[    2.010812] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.010931] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00f8afc2, pc=0x10000904 
+[    2.014818] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.014832] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00f32f7c, pc=0x10000904 
+[    2.020802] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.020813] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00ef854b, pc=0x10000904 
+[    2.024798] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.024807] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00ebda6d, pc=0x10000904 
+[    2.028822] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.028837] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00e82ed3, pc=0x10000904 
+[    2.032819] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.032832] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00e48403, pc=0x10000904 
+[    2.036816] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.036831] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00e0d9f6, pc=0x10000904 
+[    2.040803] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.040813] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00dd2e5e, pc=0x10000904 
+[    2.044835] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.044855] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00d98340, pc=0x10000904 
+[    2.048858] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.048875] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00d5d92c, pc=0x10000904 
+[    2.052849] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.052866] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00d22e52, pc=0x10000904 
+[    2.056830] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.056844] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00ccace5, pc=0x10000904 
+[    2.062819] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.062836] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00c901ff, pc=0x10000904 
+[    2.066808] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.066818] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00c557e2, pc=0x10000904 
+[    2.070814] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.070829] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00c1ac3c, pc=0x10000904 
+[    2.074829] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.074851] [passthrough] Read: 	 address = 0xE000E018, size = 4 bytes, value = 0x00be01c6, pc=0x10000904 
+[    2.078812] IO Read Access NOT Handled (Unknown Region): 	 address=0x00000008, size=4 bytes, pc=0x10000904
+[    2.078996] [passthrough] Write: 	 address = 0xE000E010, size = 4 bytes, value = 0x00000000, pc=0x10000922 
+[    2.082791] IO Write Access NOT Handled (Unknown Region): 	 address = 0x00000000, size = 4 bytes, value = 0x00000000, pc=0x10000922 
+[    2.088797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.093017] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.096916] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    2.100894] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.106834] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.110810] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    2.115503] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.118819] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.122814] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    2.126797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.130819] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.134813] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    2.139267] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.142809] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.146812] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.152875] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.156819] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.160826] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.164795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.168820] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.172827] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.176812] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.180840] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.184818] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.188797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.194805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.198806] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.202791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.206840] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.210806] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.214795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.218809] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.222803] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000055, pc=0x10001518 
+[    2.226802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.230821] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.236829] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000041, pc=0x10001518 
+[    2.240797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.244822] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.248820] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000052, pc=0x10001518 
+[    2.252789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.256805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.260813] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    2.264791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.268810] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.272817] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.276802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.282820] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.286804] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    2.290797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.294817] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.298819] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    2.302785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.306830] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.310804] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    2.314793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.318808] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.322808] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006e, pc=0x10001518 
+[    2.328793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.332802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.336815] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    2.340795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.344823] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.348804] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006d, pc=0x10001518 
+[    2.352793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.356805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.360806] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    2.364787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.368819] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.374800] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    2.378789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.382809] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.386800] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002f, pc=0x10001518 
+[    2.390786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.394801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.398824] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000052, pc=0x10001518 
+[    2.402796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.406805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.410802] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.414795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.420811] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.424792] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000063, pc=0x10001518 
+[    2.428788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.432830] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.436797] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.440789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.444795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.448819] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    2.452786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.456795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.460826] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000076, pc=0x10001518 
+[    2.466788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.470837] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.474831] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.478792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.482817] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.486813] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.490784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.494815] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.498831] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000042, pc=0x10001518 
+[    2.502788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.506805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.512817] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000079, pc=0x10001518 
+[    2.516783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.520818] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.524812] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    2.528788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.532824] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.536806] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.540784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.544809] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.548811] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.554803] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.558819] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.562805] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    2.566797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.570814] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.574797] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.578799] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.582815] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.586818] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    2.590792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.594830] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.600801] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    2.604789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.608814] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.612815] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.616785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.620815] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.624831] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.628784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.632826] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.636820] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.642794] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.646798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.650819] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.654787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.658803] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.662811] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.666792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.670799] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.674793] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002a, pc=0x10001518 
+[    2.678798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.682823] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.688811] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    2.692795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.696813] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.700807] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    2.704845] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.708798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.712825] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    2.716790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.720814] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.724808] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    2.731975] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.735807] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.739801] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    2.743789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.747809] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.751807] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000068, pc=0x10001518 
+[    2.755782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.759808] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.763805] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    2.767782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.773812] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.777793] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    2.781787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.785800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.789791] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.793791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.797806] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.801794] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    2.805786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.809801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.815808] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.819791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.823812] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.827804] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    2.831789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.835809] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.839803] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    2.843779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.847806] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.851810] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.855792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.861804] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.865805] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000075, pc=0x10001518 
+[    2.869793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.873810] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.877803] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    2.881810] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.885804] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.889800] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.893797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.897821] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.903814] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    2.907794] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.911801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.915825] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.919788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.923792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.927815] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    2.931792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.935790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.939811] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000068, pc=0x10001518 
+[    2.945788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.949815] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.953802] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    2.957784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.961816] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.965811] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    2.969777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.973801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.977798] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000063, pc=0x10001518 
+[    2.981779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.985800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    2.989802] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001518 
+[    2.995791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    2.999804] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.003785] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006e, pc=0x10001518 
+[    3.007797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.011810] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.015800] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    3.019795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.023790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.027797] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001518 
+[    3.031793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.035792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.041789] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    3.045791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.049801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.053787] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.057793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.061791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.065798] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.069788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.073828] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.077827] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000055, pc=0x10001518 
+[    3.083798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.087821] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.091807] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000041, pc=0x10001518 
+[    3.095797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.099801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.103807] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000052, pc=0x10001518 
+[    3.107793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.111793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.115799] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    3.119796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.123805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.129821] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.133784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.137805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.141810] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    3.145779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.149815] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.153819] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001518 
+[    3.157781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.161815] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.165809] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.171792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.175802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.179790] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000076, pc=0x10001518 
+[    3.183783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.187793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.191794] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.195785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.199790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.203791] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    3.207772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.211790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.217787] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    3.221772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.225786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.229787] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000066, pc=0x10001518 
+[    3.233773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.237785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.241818] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000079, pc=0x10001518 
+[    3.245777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.249787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.253788] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.259774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.263786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.267785] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    3.271773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.275789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.279785] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000058, pc=0x10001518 
+[    3.283773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.287788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.291811] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.295775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.299786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.305797] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    3.309773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.313786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.317804] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006e, pc=0x10001518 
+[    3.321775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.325800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.329783] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000064, pc=0x10001518 
+[    3.333772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.337796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.341813] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.347779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.351817] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.355807] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000052, pc=0x10001518 
+[    3.359779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.363799] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.367807] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000058, pc=0x10001518 
+[    3.371806] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.375805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.379799] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002e, pc=0x10001518 
+[    3.383776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.387788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.393794] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    3.397775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.401821] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.405797] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    3.415594] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.419068] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.422886] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000050, pc=0x10001518 
+[    3.426871] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.430799] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.436802] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    3.440778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.444786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.448795] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.452781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.456792] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.460801] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    3.464784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.468797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.472802] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    3.478794] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.482789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.486802] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.490784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.494788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.498806] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.502774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.506791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.510784] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    3.514769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.518790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.524787] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000079, pc=0x10001518 
+[    3.528783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.532800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.536789] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000070, pc=0x10001518 
+[    3.540773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.544806] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.548789] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.552781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.556783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.560803] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.566781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.570783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.574777] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000022, pc=0x10001518 
+[    3.578767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.582781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.586775] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000048, pc=0x10001518 
+[    3.590782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.594783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.598801] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.602766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.606782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.612783] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    3.616775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.620806] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.624799] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    3.628771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.632811] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.636782] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001518 
+[    3.640769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.644780] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.648789] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000022, pc=0x10001518 
+[    3.654778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.658785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.662787] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.666778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.670808] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.674782] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    3.678774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.682795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.686807] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006e, pc=0x10001518 
+[    3.690768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.694799] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.700780] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000064, pc=0x10001518 
+[    3.704777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.708781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.712813] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.716783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.720784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.724778] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000070, pc=0x10001518 
+[    3.728776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.732782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.736775] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    3.740774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.746811] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.750790] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.754763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.758776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.762781] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    3.766766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.770777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.774792] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    3.778779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.782787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.788780] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.792765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.796778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.800789] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000045, pc=0x10001518 
+[    3.804774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.808790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.812801] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006e, pc=0x10001518 
+[    3.816772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.820785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.824773] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    3.830764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.834787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.838774] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    3.842782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.846789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.850780] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    3.854784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.858790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.862772] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000003a, pc=0x10001518 
+[    3.866783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    3.872809] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    3.876782] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    3.881626] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.885908] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.889773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.893772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.897787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.901795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.905794] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.909779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.915767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.919770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.923767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.927769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.931764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.935768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.939764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.943762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.947777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.951767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.955786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.961776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.965778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.969781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.973777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.977772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.981775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.985777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.989776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.993776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    3.997791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.003779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.007783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.011795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.015775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.019775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.023777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.027779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.031779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.035773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.039775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.043775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.049786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.053796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.057778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.061776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.065788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.069782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.073779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.077770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.081774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.085775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.089780] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.093801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.099785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.103794] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.107772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.111779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.115767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.119764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.123791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.127766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.131765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.135783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.141768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.145786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.149771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.153784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.157779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.161779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.165775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.169780] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.173769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.177760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.181777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.187796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.191802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.195777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.199775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.203775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.207799] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.211804] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.215793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.219775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.223773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.227772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.233771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.237773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.241771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.245771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.249784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.253771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.257780] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.261779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.265769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.269777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.273764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.279772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.283766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.287762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.291760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.295773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.299761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.303761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.307781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.311781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.315769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.321762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.325759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.329765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.333757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.337755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.341797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.345788] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.349802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.353800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.357810] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.363800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.367782] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.371798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.375797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.379797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.383800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.387789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.391796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.395798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.399786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.405800] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.409797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.413805] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.417797] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.421795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.425795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.429798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.433802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.437763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.441774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.445767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.451766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.455758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.459761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.463781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.467775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.471758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.475760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.479762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.483796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.487787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.493791] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.497789] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.501766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.505764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.509758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.513765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.517761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.521757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.525755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.529769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.535758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.539756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.543757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.547761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.551790] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.555794] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.559804] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.563802] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.567798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.571801] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.577784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.581786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.585783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.589795] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.593798] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.597793] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.601796] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.605775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.609766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.613767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.619769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.623773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.627764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.631767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.635762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.639762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.643768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.647762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.651768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.655770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.661771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.665765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.669772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.673762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.677762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.681759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.685770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.689761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.693762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.697767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.703770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.707762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.711772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.715768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.719767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.723762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.727768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.731758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.735756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.739756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.743761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.749769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.753766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.757763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.761765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.765760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.769760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.773760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.777773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.781767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.785755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.791755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.795754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.799751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.803778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.807760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.811773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.815754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.819754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.823757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.827749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.831757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.837759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.841767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.845759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.849756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.853757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.857759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.861757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.865754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.869751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.873773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.879756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.883771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.887758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.891745] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.895746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.899757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.903770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.907756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.911767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.915752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.919751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.925765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.929765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.933768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.937765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.941759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001524 
+[    4.945965] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001500 
+[    4.949861] [passthrough] Read: 	 address = 0x40042020, size = 4 bytes, value = 0x00000048, pc=0x10001506 
+[    4.953930] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    4.957771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    4.961751] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000048, pc=0x10001518 
+[    4.965821] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.971775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.975752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.979748] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.983762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.987752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.991750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.995767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    4.999773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.003757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.007764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.013749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.017764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.021776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.025753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.029774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.033766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.037761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.041761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.045754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.049758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.055752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.059756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.063762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.067771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.071772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.075764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.079766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.083762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.087758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.091785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.097761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.101765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.105771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.109776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.113769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001524 
+[    5.117775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001500 
+[    5.121770] [passthrough] Read: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001506 
+[    5.125771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.129751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.133758] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    5.137743] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.143752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.147763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.151773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.155772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.159770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.163766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.167766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.171755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.175753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.179759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.185775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.189758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.193762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.197761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.201759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.205767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001524 
+[    5.209760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001500 
+[    5.213756] [passthrough] Read: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001506 
+[    5.217759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.221754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.225754] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    5.231740] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.235754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.239754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.243754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.247766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.251758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.255755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.259753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.263754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.267754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.273755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.277758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.281752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.285752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.289752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.293747] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.297751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.301755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.305751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.309761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.315778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.319756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.323750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.327752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.331751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.335750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.339756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.343751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.347752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001524 
+[    5.351779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001500 
+[    5.357764] [passthrough] Read: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001506 
+[    5.361760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.365767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.369785] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    5.373746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.377768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.381787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.385784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.389777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.393755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.397757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.403777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.407770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.411766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.415786] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.419755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.423778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.427784] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.431754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.435767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.439771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.445767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.449759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.453757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.457761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.461770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.465762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.469768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.473772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.477754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.481766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.487763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.491749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.495768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.499760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.503743] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.507769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.511777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.515781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.519754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.523770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.529769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.533763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.537753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.541758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.545759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.549749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.553759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.557761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.561767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.565763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.571758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.575759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.579761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.583752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.587770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.591762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.595749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.599757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.603762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.607755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.611758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.617757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.621775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.625774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.629745] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.633761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.637775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.641747] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.645753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.649758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.653772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001524 
+[    5.659768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001524 
+[    5.663776] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000140, pc=0x10001500 
+[    5.667760] [passthrough] Read: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001506 
+[    5.671764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.675746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.679755] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001518 
+[    5.685282] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.688760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.692760] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    5.696825] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.702777] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.706770] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    5.711253] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.714779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.718767] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    5.722749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.726765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.730765] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    5.734759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.738775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.744771] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    5.748759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.752751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.756746] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    5.760756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.764779] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.768746] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    5.772750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.776770] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.780751] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006e, pc=0x10001518 
+[    5.786754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.790771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.794761] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    5.798748] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.802759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.806760] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006d, pc=0x10001518 
+[    5.810754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.814755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.818780] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    5.822746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.826752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.832748] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    5.836751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.840778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.844765] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    5.848743] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.852769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.856775] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    5.860737] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.864763] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.868759] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000064, pc=0x10001518 
+[    5.872759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.878771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.882765] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000003a, pc=0x10001518 
+[    5.886737] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.890750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.894749] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    5.898734] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.902764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.906757] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000070, pc=0x10001518 
+[    5.910735] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.914771] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.920769] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    5.924756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.928762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.932783] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001518 
+[    5.936744] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.940759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.944738] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006d, pc=0x10001518 
+[    5.948738] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.952764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.956751] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000070, pc=0x10001518 
+[    5.962734] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.966754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.970753] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    5.974748] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.978750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.982740] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    5.986738] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    5.990736] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    5.994734] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006d, pc=0x10001518 
+[    5.998740] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.002742] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.008751] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.012730] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.016743] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.020756] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    6.024725] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.028758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.032757] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    6.036726] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.040756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.044756] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    6.050737] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.054767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.058762] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000067, pc=0x10001518 
+[    6.062736] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.066765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.070738] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.074734] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.078760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.082735] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.086725] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.090787] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.096766] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000028, pc=0x10001518 
+[    6.100726] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.104756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.108737] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    6.112723] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.116730] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.120743] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000058, pc=0x10001518 
+[    6.124746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.128738] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.132766] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.138734] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.142742] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.146756] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000076, pc=0x10001518 
+[    6.150729] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.154761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.158749] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.162722] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.166768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.170756] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    6.174750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.180774] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.184766] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    6.188756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.192751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.196741] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000066, pc=0x10001518 
+[    6.200735] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.204754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.208736] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    6.212740] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.216773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.222747] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.226734] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.230748] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.234737] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000064, pc=0x10001518 
+[    6.238722] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.242742] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.246753] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000029, pc=0x10001518 
+[    6.250745] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.254746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.258735] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    6.262732] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.268734] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.272736] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    6.277317] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.280766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.284765] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000052, pc=0x10001518 
+[    6.288756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.292765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.296763] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.300749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.304773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.310766] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000063, pc=0x10001518 
+[    6.314752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.318773] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.322762] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.326747] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.330756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.334761] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    6.338747] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.342775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.346761] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000076, pc=0x10001518 
+[    6.352741] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.356755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.360761] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.364748] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.368749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.372763] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000064, pc=0x10001518 
+[    6.376734] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.380737] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.384749] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000003a, pc=0x10001518 
+[    6.388748] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.394741] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.398772] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.402756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.406768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.410746] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.414738] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.418762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.422752] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.426754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.430765] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.436768] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.440738] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.444753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.448742] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000022, pc=0x10001518 
+[    6.452716] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.456739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.460745] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000048, pc=0x10001518 
+[    6.464727] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.468764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.472751] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.478745] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.482742] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.486753] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    6.490746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.494756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.498744] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006c, pc=0x10001518 
+[    6.502740] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.506757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.510745] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006f, pc=0x10001518 
+[    6.514735] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.518755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.524734] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000022, pc=0x10001518 
+[    6.528733] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.532761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.536737] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.540730] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.544737] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.548753] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000028, pc=0x10001518 
+[    6.552725] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.556737] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.560758] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000052, pc=0x10001518 
+[    6.566732] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.570736] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.574743] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000058, pc=0x10001518 
+[    6.578725] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.582731] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.586741] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.590723] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.594785] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.598756] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000076, pc=0x10001518 
+[    6.602722] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.606744] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.612737] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.616711] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.620739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.624741] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000072, pc=0x10001518 
+[    6.628733] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.632740] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.636726] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    6.640712] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.644737] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.648731] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000066, pc=0x10001518 
+[    6.654722] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.658739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.662745] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000069, pc=0x10001518 
+[    6.666722] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.670741] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.674764] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.678740] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.682761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.686761] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000064, pc=0x10001518 
+[    6.690735] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.696733] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.700729] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000029, pc=0x10001518 
+[    6.704746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.708761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.712768] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    6.716739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.720761] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.724747] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    6.728721] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.732726] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.736747] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    6.742715] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.746760] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.750751] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    6.755449] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.758768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.762760] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000044, pc=0x10001518 
+[    6.766740] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.770766] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.774759] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    6.778747] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.784762] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.788755] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    6.792749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.796759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.800763] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    6.804750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.808758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.812756] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.816755] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.820764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.826755] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000006d, pc=0x10001518 
+[    6.830739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.834768] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.838764] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000061, pc=0x10001518 
+[    6.842739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.846757] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.850763] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    6.854739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.858758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.862759] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000063, pc=0x10001518 
+[    6.868739] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.872756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.876762] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000068, pc=0x10001518 
+[    6.880759] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.884764] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.888771] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.892746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.896767] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.900772] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    6.904754] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.910783] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.914766] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000002e, pc=0x10001518 
+[    6.918751] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.922772] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.926750] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.930745] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.934769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.938766] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000054, pc=0x10001518 
+[    6.942753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.946775] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.952763] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000065, pc=0x10001518 
+[    6.956752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.960769] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.964763] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000073, pc=0x10001518 
+[    6.968752] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.972781] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.976768] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000074, pc=0x10001518 
+[    6.980749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.984778] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    6.988768] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000020, pc=0x10001518 
+[    6.994729] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    6.998758] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.002753] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000050, pc=0x10001518 
+[    7.006724] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    7.010753] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.014777] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000041, pc=0x10001518 
+[    7.018756] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    7.022748] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.026735] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000053, pc=0x10001518 
+[    7.030727] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    7.034750] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.040727] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000053, pc=0x10001518 
+[    7.044714] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    7.048746] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.052749] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000045, pc=0x10001518 
+[    7.056721] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    7.060743] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.064767] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x00000044, pc=0x10001518 
+[    7.068730] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    7.072749] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.076728] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000d, pc=0x10001518 
+[    7.080712] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x1000152C 
+[    7.086717] [passthrough] Read: 	 address = 0x40042004, size = 4 bytes, value = 0x00000050, pc=0x10001510 
+[    7.090722] [passthrough] Write: 	 address = 0x40042020, size = 4 bytes, value = 0x0000000a, pc=0x10001518 
+[    7.095154] [passthrough] Write: 	 address = 0x40080420, size = 4 bytes, value = 0x00000002, pc=0x10000E34 
+
+```
+
+--- END OF RAW I/O TRACE ---
+
+Based **only** on the trace data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
+
+## Required Output Format:
+
+### 1. High-Level Summary
+A concise, one-paragraph summary of this peripheral's likely purpose and overall behavior, considering the platform context.
+
+### 2. Register Analysis
+A bulleted list of the important registers mentioned in the traces and their inferred functions.
+
+### 3. C Device Model Source Code
+The C source code for MMIO read and write callback for UART emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs i mentioned.
+
+```c
+// Device Model for UART
+
+// Inferred Register Functions:
+// ... add registers here ...
+
+static UARTState g_uart;
+
+// This function will emulate all device reads
+uint64_t uart_read(void *opaque, hwaddr addr, unsigned size) {
+    UARTState *s = (UARTState *)opaque;
+    hwaddr offset = addr - UART_BASE;
+    // ... return register value based on offset ...
+}
+
+// This function will emulate all device writes
+void uart_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
+    UARTState *s = (UARTState *)opaque;
+    hwaddr offset = addr - UART_BASE;
+    // ... update register state based on offset and value ...
+}
+
+// MUST return pointer to state — framework passes it as opaque to _read/_write
+void* uart_init(ConfigSection* model_info) {
+    memset(&g_uart, 0, sizeof(g_uart));
+    // ... initialize state from model_info (bus inits, etc.) ...
+    return &g_uart;
+}
+```

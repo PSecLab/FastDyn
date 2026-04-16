@@ -14,7 +14,7 @@
 0x80965d4 gcs_send_text
 0x809658c gcs_send_text
 0x804fdec gcs_read *
-0x804fe0c gcs_bytes_available *
+0x804fe0c uart_bytes_available *
 0x80978f4 gcs_send_mavlink_message *
 0x81721d2 raise_periodic_irq 66
 0x80427fe gps_get_type_mavlink copter

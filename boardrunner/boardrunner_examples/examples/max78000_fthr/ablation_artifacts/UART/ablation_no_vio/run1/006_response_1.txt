@@ -1,0 +1,168 @@
+### 1. Previous Model Failure Analysis
+The current model’s main bug is that it treats RX-ready in `STATUS` as a one-shot, self-clearing latch that is cleared merely by reading `STATUS`. The trace instead indicates normal UART behavior: `STATUS=0x140` corresponds to unread RX data being present, and that condition should persist until firmware actually reads `FIFO`. Because the emulation clears RX-ready on the `STATUS` read, firmware can miss the receive event and never perform the `FIFO` reads seen on hardware (`'H' 'e' 'l' 'l' 'o'`), which explains why the model’s `STATUS` entropy is too low and `FIFO` is never reached.
+
+### 2. Register Analysis
+- `CTRL` (`0x00`)
+  - Main UART control/config register.
+  - Bit `0x1` behaves like UART enable.
+  - Firmware writes progress through `0x20000 -> 0x20001 -> 0x20C01 -> 0x28C01`.
+  - Readback of `0x28C01` becomes `0xA8C01`, indicating a read-only/auto-set status bit at `0x80000`.
+- `STATUS` (`0x04`)
+  - Polled during runtime.
+  - Idle/TX-ready state is `0x50`.
+  - RX-data-available state is `0x140`.
+  - RX-ready must reflect unread FIFO occupancy, not be cleared by reading `STATUS`.
+- `CLKDIV` (`0x10`)
+  - Baud-rate divider; firmware writes `0x40`.
+- `OSR` (`0x14`)
+  - Oversampling register; firmware writes `0x5`.
+- `FIFO` (`0x20`)
+  - TX data register on write.
+  - RX data register on read.
+  - Hardware returns ASCII bytes `0x48, 0x65, 0x6C, 0x6C, 0x6F` (`"Hello"`).
+
+### 3. Output your code changes using SEARCH/REPLACE blocks.
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    bool ready_latched;
+    bool rx_status_latched;
+
+    uint64_t rx_timer;
+=======
+    bool ready_latched;
+
+    uint64_t rx_timer;
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+static uint32_t uart_status_value(UARTState *s) {
+    if (!uart_enabled(s)) {
+        return 0;
+    }
+
+    /*
+     * Hardware spends almost all of its time returning 0x50, with 0x140 only
+     * appearing briefly before firmware reads RX data. Model RX-ready as a
+     * transient latched status indication rather than a permanent reflection of
+     * unread FIFO occupancy.
+     */
+    if (s->rx_status_latched) {
+        return UART_STATUS_RX_AVAIL;
+    }
+
+    return UART_STATUS_IDLE_TX;
+}
+=======
+static uint32_t uart_status_value(UARTState *s) {
+    if (!uart_enabled(s)) {
+        return 0;
+    }
+
+    /*
+     * STATUS=0x140 corresponds to unread RX data being present. Unlike the
+     * previous model, this condition must persist until FIFO is actually read;
+     * clearing it on a STATUS read loses the receive event and prevents
+     * firmware from reaching the FIFO read path seen on hardware.
+     */
+    if (s->rx_count != 0) {
+        return UART_STATUS_RX_AVAIL;
+    }
+
+    return UART_STATUS_IDLE_TX;
+}
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    uart_rx_push(s, g_uart_rx_script[s->rx_script_pos]);
+    s->rx_script_pos++;
+    s->rx_status_latched = true;
+}
+=======
+    uart_rx_push(s, g_uart_rx_script[s->rx_script_pos]);
+    s->rx_script_pos++;
+}
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    case UART_REG_STATUS:
+        value = uart_status_value(s);
+
+        if (value == UART_STATUS_RX_AVAIL) {
+            s->rx_status_latched = false;
+        }
+
+        return value;
+=======
+    case UART_REG_STATUS:
+        return uart_status_value(s);
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+    case UART_REG_FIFO:
+        value = (uint32_t)uart_rx_pop(s);
+        s->rx_status_latched = false;
+
+        if ((s->rx_count == 0) &&
+            s->rx_stream_started &&
+            (s->rx_script_pos < sizeof(g_uart_rx_script))) {
+            uart_schedule_rx_after(s, UART_RX_INTERBYTE_DELAY_NS);
+        }
+
+        return value;
+=======
+    case UART_REG_FIFO:
+        value = (uint32_t)uart_rx_pop(s);
+
+        if ((s->rx_count == 0) &&
+            s->rx_stream_started &&
+            (s->rx_script_pos < sizeof(g_uart_rx_script))) {
+            uart_schedule_rx_after(s, UART_RX_INTERBYTE_DELAY_NS);
+        }
+
+        return value;
+>>>>>>> REPLACE
+```
+
+```text
+// FILE: model.c
+<<<<<<< SEARCH
+        if ((value & UART_CTRL_ACTIVE_CFG) && (value & UART_CTRL_EN)) {
+            s->ready_latched = true;
+        } else if (!(value & UART_CTRL_EN)) {
+            s->ready_latched = false;
+            s->rx_status_latched = false;
+            s->rx_head = 0;
+            s->rx_tail = 0;
+            s->rx_count = 0;
+            s->rx_timer_armed = false;
+            s->rx_stream_started = false;
+            s->rx_script_pos = 0;
+        }
+=======
+        if ((value & UART_CTRL_ACTIVE_CFG) && (value & UART_CTRL_EN)) {
+            s->ready_latched = true;
+        } else if (!(value & UART_CTRL_EN)) {
+            s->ready_latched = false;
+            s->rx_head = 0;
+            s->rx_tail = 0;
+            s->rx_count = 0;
+            s->rx_timer_armed = false;
+            s->rx_stream_started = false;
+            s->rx_script_pos = 0;
+        }
+>>>>>>> REPLACE
+```

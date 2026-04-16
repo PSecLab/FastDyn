@@ -451,7 +451,7 @@ static void twintrace_write(void *opaque, hwaddr address, uint64_t value, unsign
 // -----------------------
 // init
 // -----------------------
-static int twintrace_init(ConfigSection* model_info);
+static void* twintrace_init(ConfigSection* model_info);
 
 DeviceModel twintrace_model_def = {
     .name      = "twintrace",
@@ -462,7 +462,7 @@ DeviceModel twintrace_model_def = {
     .interrupt = twintrace_interrupt,
 };
 
-static int twintrace_init(ConfigSection* model_info)
+static void* twintrace_init(ConfigSection* model_info)
 {
     // Register address ranges
     Range ranges[10];
@@ -498,18 +498,18 @@ static int twintrace_init(ConfigSection* model_info)
 
         if (pthread_create(&dev_thread, NULL, dev_thread_fn, NULL) != 0) {
             perror("Failed to create IRQ thread");
-            return 1;
+            return NULL;
         }
     } else if (g_mode == TT_REPLAY) {
         if (!g_bin_path || !g_bin_path[0]) utils_die("twintrace_bin missing for replay");
         tt_replay_open(g_bin_path);
         if (pthread_create(&rep_irq_thread, NULL, replay_irq_thread_fn, NULL) != 0) {
             perror("Failed to create replay IRQ thread");
-            return 1;
+            return NULL;
         }
     } else {
         utils_die("twintrace: TT_OFF but model selected");
     }
 
-    return 0;
+    return NULL;
 }

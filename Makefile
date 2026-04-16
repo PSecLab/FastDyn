@@ -2,7 +2,7 @@
 
 qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
-LIBGZ        ?= true
+LIBGZ        ?= false
 LIBHW        ?= false
 LIBFUZZ		 ?= false
 DEV          ?= false
@@ -10,9 +10,9 @@ DEBUG_PRINT  ?= false
 LIBPY        ?= false
 SUNDIALS     ?= false
 BOARD_RUNNER ?= false
-PHY			?= true
-FMU			?= true
-FLIGHT_CONTROLLERS ?= true
+PHY			?= false
+FMU			?= false
+FLIGHT_CONTROLLERS ?= false
 
 # Top-level target: clean, configure with meson, then build with ninja
 all: setup

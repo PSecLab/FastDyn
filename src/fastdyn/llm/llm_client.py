@@ -6,8 +6,12 @@ using the official OpenAI Python SDK.
 """
 
 import os
+import json
+import time
 import logging
 from pathlib import Path
+from dataclasses import dataclass, field, asdict
+from typing import Optional
 
 from .. import fastdyn_log as fastdyn_log_conf
 
@@ -17,6 +21,24 @@ fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 class LLMClientError(Exception):
     """Raised when the LLM client encounters an unrecoverable error."""
+
+
+@dataclass
+class LLMCallMetrics:
+    """Metrics captured from a single LLM API call."""
+    model: str = ""
+    call_id: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    reasoning_tokens: Optional[int] = None
+    total_tokens: int = 0
+    latency_seconds: float = 0.0
+    prompt_chars: int = 0
+    response_chars: int = 0
+    timestamp: float = 0.0
+
+    def to_dict(self):
+        return asdict(self)
 
 
 # The line that prompt_gen.py hardcodes to reset conversation context.
@@ -156,7 +178,7 @@ class LLMClient:
                 model, temperature
             )
 
-    def send_prompt(self, prompt: str, stateless: bool = True) -> str:
+    def send_prompt(self, prompt: str, stateless: bool = True):
         """Send a prompt to the ChatGPT API and return the response text.
 
         Args:
@@ -166,7 +188,10 @@ class LLMClient:
                 stripped before sending to allow multi-turn context.
 
         Returns:
-            The raw text content of the LLM response.
+            Tuple of (content_str, LLMCallMetrics) when evaluate mode is
+            available, but for backward compatibility always returns a tuple.
+            Callers that only need content can use: content, _ = client.send_prompt(...)
+            or content = client.send_prompt(...)[0]
 
         Raises:
             LLMClientError: If the API call fails.
@@ -180,21 +205,23 @@ class LLMClient:
                 "Stripped conversation reset line (stateless=False)"
             )
 
+        prompt_chars = len(prompt)
         fastdyn_log.info(
             "Sending prompt to %s (%d characters)...",
-            self._model, len(prompt)
+            self._model, prompt_chars
         )
 
         try:
             kwargs = {}
             if self._reasoning_effort and self._reasoning_effort != "none":
                 kwargs["reasoning_effort"] = self._reasoning_effort
-            
+
             # OpenAI strictly enforces that temperature cannot be customized for reasoning models.
             is_reasoning = self._reasoning_effort or "o1" in self._model or "o3" in self._model or "gpt-5" in self._model
             if not is_reasoning:
                 kwargs["temperature"] = self._temperature
-            
+
+            start_time = time.time()
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=[
@@ -202,6 +229,7 @@ class LLMClient:
                 ],
                 **kwargs
             )
+            latency = time.time() - start_time
         except openai.AuthenticationError:
             raise LLMClientError(
                 "Authentication failed. Check that your API key is valid."
@@ -226,11 +254,13 @@ class LLMClient:
                 "The LLM returned an empty response."
             )
 
+        metrics = self._extract_metrics(response, latency, prompt_chars, len(content))
+
         fastdyn_log.info(
-            "Received response from %s (%d characters)",
-            self._model, len(content)
+            "Received response from %s (%d characters, %d tokens, %.1fs)",
+            self._model, len(content), metrics.total_tokens, latency
         )
-        return content
+        return content, metrics
 
     def send_followup_prompt(
         self,
@@ -238,7 +268,7 @@ class LLMClient:
         previous_response: str,
         error_context: str,
         stateless: bool = True,
-    ) -> str:
+    ):
         """Send a follow-up prompt that includes error context for retry.
 
         Constructs a two-message conversation: the original exchange,
@@ -252,7 +282,7 @@ class LLMClient:
             stateless: Whether to strip the conversation reset line.
 
         Returns:
-            The raw text content of the LLM's follow-up response.
+            Tuple of (content_str, LLMCallMetrics).
 
         Raises:
             LLMClientError: If the API call fails.
@@ -273,6 +303,7 @@ class LLMClient:
             % error_context
         )
 
+        prompt_chars = len(original_prompt) + len(previous_response) + len(followup_message)
         fastdyn_log.info(
             "Sending follow-up prompt to %s with error context (%d characters)...",
             self._model, len(followup_message)
@@ -282,11 +313,12 @@ class LLMClient:
             kwargs = {}
             if self._reasoning_effort and self._reasoning_effort != "none":
                 kwargs["reasoning_effort"] = self._reasoning_effort
-                
+
             is_reasoning = self._reasoning_effort or "o1" in self._model or "o3" in self._model or "gpt-5" in self._model
             if not is_reasoning:
                 kwargs["temperature"] = self._temperature
-                
+
+            start_time = time.time()
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=[
@@ -296,6 +328,7 @@ class LLMClient:
                 ],
                 **kwargs
             )
+            latency = time.time() - start_time
         except openai.AuthenticationError:
             raise LLMClientError(
                 "Authentication failed. Check that your API key is valid."
@@ -319,11 +352,33 @@ class LLMClient:
                 "The LLM returned an empty follow-up response."
             )
 
+        metrics = self._extract_metrics(response, latency, prompt_chars, len(content))
+
         fastdyn_log.info(
-            "Received follow-up response from %s (%d characters)",
-            self._model, len(content)
+            "Received follow-up response from %s (%d characters, %d tokens, %.1fs)",
+            self._model, len(content), metrics.total_tokens, latency
         )
-        return content
+        return content, metrics
+
+    def _extract_metrics(self, response, latency: float, prompt_chars: int, response_chars: int) -> LLMCallMetrics:
+        """Extract usage metrics from an OpenAI API response."""
+        usage = response.usage
+        reasoning_tokens = None
+        if hasattr(usage, 'completion_tokens_details') and usage.completion_tokens_details:
+            reasoning_tokens = getattr(usage.completion_tokens_details, 'reasoning_tokens', None)
+
+        return LLMCallMetrics(
+            model=response.model,
+            call_id=response.id,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            reasoning_tokens=reasoning_tokens,
+            total_tokens=usage.total_tokens,
+            latency_seconds=round(latency, 3),
+            prompt_chars=prompt_chars,
+            response_chars=response_chars,
+            timestamp=response.created,
+        )
 
     @staticmethod
     def _strip_reset_line(prompt: str) -> str:
