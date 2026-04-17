@@ -118,13 +118,13 @@ finline      = ""
 # Key registers: EN0, INEN, INTEN, INTPOL, INTMODE, INTFL, INTFL_CLR, PADCTRL0/1
 [Device.gpio0]
   ranges       = [["0x40008000", "0x400080FF"]]
-  irq = [['1','150']]
+  irq = [['1','100']]
   description  = "GPIO Port 0: input pin P0.2 (SW1 button). Falling-edge interrupt (IRQ 24) triggers callback that toggles LED on GPIO2."
   read_priority = "elder"
 
   [[Device.gpio0.handlers]]
   model   = "elder"
-  enabled = true
+  enabled = false
   scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
   [[Device.gpio0.handlers]]
@@ -133,7 +133,7 @@ finline      = ""
 
   [[Device.gpio0.handlers]]
   model   = "passthrough"
-  enabled = false
+  enabled = true
 
   [[Device.gpio0.handlers]]
   model   = "twintrace"
@@ -151,7 +151,7 @@ finline      = ""
 #   UART0-2 (0x40042000-0x40044FFF) — printf console output
 #   SPI1    (0x40046000) — not used
 [Device.passthrough_space]
-  irq = [['1','150']]
+  irq = [['1','100']]
 
   ranges = [
     ["0x40000000", "0x40007FFF"],   # all peripherals before GPIO0
