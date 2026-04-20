@@ -33,15 +33,15 @@ finline      = ""
   memory_size  = "512M"
   memory_type  = "SRAM"
 
-  backend     = "file"                 # file | ram | memfd
-  memory_file = "/dev/shm/my_m4_ram3"  # main RAM backend file
+  backend     = "file"
+  memory_file = "/dev/shm/my_m4_ram3"
 
   share    = true
   prealloc = false
 
 
   # ---------------------------------------------------------------------------
-  # Extra memory banks (optional)  (your old "shared RAM")
+  # Extra memory banks (optional)
   # ---------------------------------------------------------------------------
   [[Memory.ram1]]
   id           = "ram1"
@@ -66,8 +66,7 @@ finline      = ""
   machine = "cortexm"
   cpu     = "cortex-m4"
 
-  binary = "boardrunner/boardrunner_examples/examples/max78000_fthr/spi/firmware/SPI.elf"
-
+  binary = "boardrunner/boardrunner_examples/examples/max78000_fthr/SPI/firmware/SPI.elf"
   init_nsvtor = "0x10000000"
 
   plugin_library = "build/libfastdyn.so"
@@ -76,8 +75,8 @@ finline      = ""
   log_file    = "qemu.log"
   log_options = "in_asm,op"
 
-  twintrace       = "None"                 # record | replay | None
-  hardware_trace  = "hardware_log/io.log"  # useful for replay workflows
+  twintrace       = "None"
+  hardware_trace  = "hardware_log/io.log"
 
   logger_content = """
   # --- Plugin Logger Configuration ---
@@ -91,59 +90,65 @@ finline      = ""
 [Device.Models]
 
   [Device.Models.elder]
-  # (empty by default)
 
   [Device.Models.passthrough]
   backend = "openocd"
 
   [Device.Models.classic]
-  # (empty by default)
 
   [Device.Models.twintrace]
   backend = "openocd"
 
   [Device.Models.unhandled]
-  # (empty by default)
 
 # ==============================================================================
 # Devices (MAX78000)
 # ==============================================================================
 
-# --- Peripheral Definitions ---
-
-[Device.spi]
-    # MAX78000 SPI0 (MXC_SPI0) Base Address: 0x400BE000
-    ranges = [["0x400BE000", "0x400BE3FF"]]
-    # SPI0_IRQn is 72 on MAX78000
-    irq = [['1','72']]
-    description = "SPI0 Peripheral (QSPI/High-Speed SPI) for BME280 Sensor."
+# --- SPI0 (MXC_SPI0) — master controller model ---
+# Loopback test: MOSI (P0.5) wired to MISO (P0.6). No external slave device.
+# The slave model implements wire loopback (returns the byte it receives).
+[Device.spi0]
+    # SPI0 base: 0x400BE000, size: 0x1000 (from SVD)
+    ranges = [["0x400BE000", "0x400BEFFF"]]
+    # SPI0_IRQn = 56 (from SVD)
+    irq = [['1','56']]
+    description = "SPI0 peripheral (QSPI/High-Speed SPI). Master polling loopback: transmits 16 bytes of 0xA5, receives them back via MOSI-to-MISO wire."
     read_priority = "elder"
 
-    [[Device.spi.handlers]]
+    [[Device.spi0.handlers]]
         model   = "elder"
-        enabled = false
-        scroll = "boardrunner/boardrunner_sdk/build/model.so"
+        enabled = true
+        scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
-    [[Device.spi.handlers]]
+        [[Device.spi0.slaves]]
+            model         = ["elder"]
+            device        = "loopback"
+            cs_id         = 0
+            device_scroll = "boardrunner/boardrunner_sdk/build/slave.so"
+
+    [[Device.spi0.handlers]]
         model   = "classic"
         enabled = false
 
-    [[Device.spi.handlers]]
+    [[Device.spi0.handlers]]
         model   = "passthrough"
-        enabled = true
+        enabled = false
 
-    [[Device.spi.handlers]]
+    [[Device.spi0.handlers]]
         model   = "twintrace"
         enabled = false
 
+# --- Remaining space: everything not covered by SPI0 ---
+# Includes GPIO0 (SPI pins), GPIO2 (LEDs), GCR, UART, TMR, etc.
 [Device.remaining_space]
-    # Covers all space *except* the SPI0 range defined above.
-    # 1. Start of Peripherals -> Start of SPI0 (Includes old GPIO space)
-    # 2. End of SPI0 -> System/PPB Boundary
-    # 3. System/PPB Space
-    ranges = [["0x40000000", "0x400BDFFF"], ["0x400BE400", "0xE0000000"], ["0xE0000000", "0xEFFFFFFF"]]
-    irq = [['1','100']]
-    description = "Memory regions that will handled by passthrough and are not of interest for the modeling."
+    ranges = [
+        ["0x40000000", "0x400BDFFF"],   # peripherals before SPI0
+        ["0x400BF000", "0xDFFFFFFF"],   # after SPI0 to system boundary
+        ["0xE0000000", "0xEFFFFFFF"]    # system space (NVIC, SysTick, etc.)
+    ]
+    irq = [['1','150']]
+    description = "Memory regions handled by passthrough. Includes GPIO0 (SPI AF pins), GPIO2 (LEDs), GCR, UART, TMR, and all other non-modeled peripherals."
 
     [[Device.remaining_space.handlers]]
         model = "classic"

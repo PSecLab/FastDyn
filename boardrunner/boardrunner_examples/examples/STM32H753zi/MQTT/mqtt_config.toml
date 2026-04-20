@@ -1,0 +1,131 @@
+# ==============================================================================
+#                              Memory Configuration
+# ==============================================================================
+[Memory]
+
+[Memory.main]   # required: goes to -machine ... memory-backend=<id>
+id = "ram0"
+base_address = "0x20000000"
+memory_size  = "512M"
+memory_type  = "SRAM"
+backend      = "file"          # file | ram | memfd
+memory_file  = "/dev/shm/my_m4_ram3"
+share        = true
+prealloc     = false
+
+[[Memory.ram1]]   # optional banks: go to -global cortexm-soc.ram_backendN / ram_baseaddrN
+id = "ram1"
+index = 1
+base_address = "0x30000000"
+memory_size  = "512K"
+memory_type  = "SRAM"
+backend      = "file"
+memory_file  = "/dev/shm/my_m4_ram"
+share        = true
+prealloc     = false
+
+# ==============================================================================
+#                                Machine / CPU Configuration
+# ==============================================================================
+[Machine]
+platform = "STM32H753x"
+# --- Debugging, Control, and Logging ---
+qemu_path = "qemu-system-arm"
+enable_gdb = false
+stop_on_start = false
+launch_gdb = false
+monitor_port = 5555
+qmp_socket = "/tmp/qmp.sock"
+log_file = "qemu.log"
+log_options = "in_asm,op"
+semihosting = true
+semihosting_config = "enable=on,target=native"
+coverage = false
+finline = 'None'
+
+[CPU]
+[[CPU.cpu0]]
+# --- Core Emulation & Plugin Settings ---
+arch = "arm"
+machine = "cortexm"
+cpu = "cortex-m7"
+plugin_library = "build/libfastdyn.so"
+monitor_elf = "../ws/monitor.elf"
+binary = "boardrunner/boardrunner_examples/examples/STM32H753zi/MQTT/firmware/mqtt_h753.elf"
+init_nsvtor = "0x08000000"
+map_file = "courbet/rover_v422_map.txt"
+twintrace = "None"
+hardware_trace = 'hardware_log/io.log'
+
+logger_content = """
+# --- Plugin Logger Configuration ---
+# level = DEBUG
+# output = stderr
+"""
+
+# ==============================================================================
+#                              Device Configuration
+# ==============================================================================
+
+[Device.Models.elder]
+
+[Device.Models.passthrough]
+    backend = "stlink"
+
+[Device.Models.classic]
+
+[Device.Models.twintrace]
+    backend = "stlink"
+
+[Device.Models.unhandled]
+
+    # --- Peripheral Definitions ---
+    # MQTT firmware: Eclipse Paho Embedded C (client subset) on NUCLEO-H753ZI.
+    # Transport is USART3 (ST-Link VCP on PD8/PD9) @ 115200-8N1, polled HAL
+    # transmit/receive (no UART IRQ used). A host-side bridge forwards the
+    # serial byte stream to a Mosquitto broker on TCP:1883. The fuzz target is
+    # the Paho MQTT parser (Middlewares/MQTTPacket/) which lives above the
+    # emulated UART boundary.
+    [Device.usart3]
+        ranges = [["0x40004800", "0x40004BFF"]]
+        irq = [['1','100']]
+        description = "USART3 — Paho MQTT wire-format byte stream to the host bridge."
+        read_priority = "elder"
+
+        [[Device.usart3.handlers]]
+            model   = "elder"
+            enabled = true
+            scroll  = "boardrunner/boardrunner_sdk/build/model.so"
+
+        [[Device.usart3.handlers]]
+            model   = "classic"
+            enabled = false
+
+        [[Device.usart3.handlers]]
+            model   = "passthrough"
+            enabled = false
+
+        [[Device.usart3.handlers]]
+            model   = "twintrace"
+            enabled = false
+
+    [Device.remaining_space]
+        ranges = [
+            ["0x40000000", "0x400047FF"],   # APB1 peripherals before USART3
+            ["0x40004C00", "0xE00FFFFF"],   # everything after USART3 up to Cortex-M7 PPB
+            ["0xE0000000", "0xEFFFFFFF"]    # Cortex-M7 core / debug (NVIC, SysTick, SCB)
+        ]
+        irq = [['1','100']]
+        description = "Memory regions handled by passthrough. Includes RCC, PWR, GPIOD (USART3 pins), GPIOB (LED1), GPIOE (LED2), and all non-modeled peripherals."
+
+        [[Device.remaining_space.handlers]]
+            model = "classic"
+            enabled = false
+
+        [[Device.remaining_space.handlers]]
+            model = "passthrough"
+            enabled = true
+
+        [[Device.remaining_space.handlers]]
+            model = "twintrace"
+            enabled = false

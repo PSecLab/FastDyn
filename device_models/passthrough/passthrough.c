@@ -26,7 +26,14 @@ static uint64_t passthrough_read(void *opaque, hwaddr address, unsigned size, ui
         utils_die("HW handle not initialized");
     }
 
-    int status = hw_read32(hw, address, &value_read);
+    int status;
+    if (size == 1) {
+        uint8_t byte_val;
+        status = hw_read8(hw, address, &byte_val);
+        value_read = byte_val;
+    } else {
+        status = hw_read32(hw, address, &value_read);
+    }
 
     pthread_mutex_unlock(&hw_mutex);
 
