@@ -467,11 +467,12 @@ static void send_gps_mavlink_message(void *opaque)
     (void)opaque;
 
     gps_data_t gps_data;
-    if (!phy_get_navsat_reading(&gps_data))
-    {
+    if (!phy_get_navsat_reading(&gps_data)) {
         fprintf(stderr, "Failed to get GPS reading from Gazebo\n");
         return;
     }
+
+    uint64_t now_ns = qemu_plugin_get_virtual_timer();
 
     gps_input_t gps_message = {
         .latitude_deg = gps_data.lat,
@@ -480,70 +481,115 @@ static void send_gps_mavlink_message(void *opaque)
         .velocity_n = (float)gps_data.vel_n,
         .velocity_e = (float)gps_data.vel_e,
         .velocity_d = (float)gps_data.vel_d,
-        .timestamp_sec = (uint32_t)gps_data.sec,
-        .timestamp_nsec = gps_data.nsec,
-        .fix_type = 3,            // 3D fix
-        .satellites_visible = 10, // Arbitrary number of satellites
-        .yaw_deg = gps_data.yaw_deg};
+        .timestamp_sec = (uint32_t)(now_ns / 1000000000ULL),
+        .timestamp_nsec = (uint32_t)(now_ns % 1000000000ULL),
+        .fix_type = 3,
+        .satellites_visible = 10,
+        .yaw_deg = gps_data.yaw_deg
+    };
 
-    // 220 https://mavlink.io/en/messages/common.html#MAV_COMP_ID_GPS
     send_mavlink_gps_input(1, 220, &gps_message);
 }
 
-static void gps_thread_func(void *arg)
-{
-    (void)arg;
-    const int interval_ms = 100; // 100 ms interval
-    while (1)
-    {
-        send_gps_mavlink_message(NULL);
-        usleep(interval_ms * 1000);
-    }
-}
-
-/**
- * Set GPS type to MAVLink
- *
- * Called like this from virtuals.txt:
- *
- * <address/symbol> gps_get_type_mavlink
- */
 void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
 {
     (void)cpu_index;
     (void)udata;
-    // const char *vehicle = (const char *)udata;
 
     static bool requested_timer = false;
-    // const char *msg = "Hello from GPS MAVLink!";
-    uint8_t gps_type = 14; // Default to GPS_TYPE_MAVLINK
+    uint8_t gps_type = 14;
 
-    // if (strcmp(vehicle, "submarine") == 0)
-    // {
-    //     qemu_set_register(gps_type, ARM_V7M_R3); // GPS_TYPE_UBLOX
-    // }
-    // else
-    // {
     qemu_set_register(gps_type, ARM_V7M_R6);
-    // }
-    // printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
-    if (!requested_timer)
-    {
+
+    if (!requested_timer) {
         requested_timer = true;
-        // // Request periodic timer every 100ms
-        // qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
-        // Start GPS thread
-        pthread_t gps_thread;
-        if (pthread_create(&gps_thread, NULL, (void *(*)(void *))gps_thread_func, NULL) != 0)
-        {
-            fprintf(stderr, "Failed to create GPS thread\n");
-        }
-        else
-        {
-            pthread_detach(gps_thread);
-        }
+        qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, NULL, 100000000ULL);
     }
 }
+
+
+// static void send_gps_mavlink_message(void *opaque)
+// {
+//     (void)opaque;
+
+//     gps_data_t gps_data;
+//     if (!phy_get_navsat_reading(&gps_data))
+//     {
+//         fprintf(stderr, "Failed to get GPS reading from Gazebo\n");
+//         return;
+//     }
+
+//     gps_input_t gps_message = {
+//         .latitude_deg = gps_data.lat,
+//         .longitude_deg = gps_data.lon,
+//         .altitude_m = gps_data.alt,
+//         .velocity_n = (float)gps_data.vel_n,
+//         .velocity_e = (float)gps_data.vel_e,
+//         .velocity_d = (float)gps_data.vel_d,
+//         .timestamp_sec = (uint32_t)qemu_plugin_get_virtual_timer() / 1000000000UL,
+//         .timestamp_nsec = (uint32_t)(qemu_plugin_get_virtual_timer() % 1000000000UL),
+//         .fix_type = 3,            // 3D fix
+//         .satellites_visible = 10, // Arbitrary number of satellites
+//         .yaw_deg = gps_data.yaw_deg};
+
+//     // 220 https://mavlink.io/en/messages/common.html#MAV_COMP_ID_GPS
+//     send_mavlink_gps_input(1, 220, &gps_message);
+// }
+
+// static void gps_thread_func(void *arg)
+// {
+//     (void)arg;
+//     const int interval_ms = 100; // 100 ms interval
+//     while (1)
+//     {
+//         send_gps_mavlink_message(NULL);
+//         usleep(interval_ms * 1000);
+//     }
+// }
+
+// /**
+//  * Set GPS type to MAVLink
+//  *
+//  * Called like this from virtuals.txt:
+//  *
+//  * <address/symbol> gps_get_type_mavlink
+//  */
+// void gps_get_type_mavlink(unsigned int cpu_index, void *udata)
+// {
+//     (void)cpu_index;
+//     (void)udata;
+//     // const char *vehicle = (const char *)udata;
+
+//     static bool requested_timer = false;
+//     // const char *msg = "Hello from GPS MAVLink!";
+//     uint8_t gps_type = 14; // Default to GPS_TYPE_MAVLINK
+
+//     // if (strcmp(vehicle, "submarine") == 0)
+//     // {
+//     //     qemu_set_register(gps_type, ARM_V7M_R3); // GPS_TYPE_UBLOX
+//     // }
+//     // else
+//     // {
+//     qemu_set_register(gps_type, ARM_V7M_R6);
+//     // }
+//     // printf("gps_get_type_mavlink: returning GPS type %u\n", gps_type);
+//     if (!requested_timer)
+//     {
+//         requested_timer = true;
+//         // // Request periodic timer every 100ms
+//         // qemu_plugin_timer_new_period_ns(send_gps_mavlink_message, (void *)msg, 1e8);
+//         // Start GPS thread
+//         pthread_t gps_thread;
+//         if (pthread_create(&gps_thread, NULL, (void *(*)(void *))gps_thread_func, NULL) != 0)
+//         {
+//             fprintf(stderr, "Failed to create GPS thread\n");
+//         }
+//         else
+//         {
+//             pthread_detach(gps_thread);
+//         }
+//     }
+// }
 
 /**
  * INS virtual functions
