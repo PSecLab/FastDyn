@@ -86,6 +86,17 @@ ENABLE_LIBGZ = get_option('enable_libgz')
 #fuzzer support
 ENABLE_LIBFUZZ = get_option('enable_libfuzz')
 
+ENABLE_AFLNET = get_option('enable_aflnet')
+if ENABLE_AFLNET
+    deps += [
+    cc.find_library('gvc',    required: true),
+    cc.find_library('cgraph', required: true),
+    cc.find_library('m',      required: true),
+    cc.find_library('cap',    required: true),
+    cc.find_library('dl',     required: true),
+  ]
+endif
+
 ENABLE_PHY = get_option('enable_phy')
 
 subdir('virtuals')
@@ -119,6 +130,7 @@ configure_file(
     'ENABLE_LIBGZ' : ENABLE_LIBGZ ? 1 : 0,
     'ENABLE_LIBHW' : ENABLE_LIBHW ? 1 : 0,
     'ENABLE_LIBFUZZ' : ENABLE_LIBFUZZ ? 1 : 0,
+    'ENABLE_AFLNET' : ENABLE_AFLNET ? 1 : 0,
     'ENABLE_PHY' : ENABLE_PHY ? 1 : 0,
     'ENABLE_LIBPY' : ENABLE_LIBPY ? 1 : 0,
     'DEBUG_PRINT' : DEBUG_PRINT ? 1 : 0,

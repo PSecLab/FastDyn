@@ -47,7 +47,7 @@ _Atomic int64_t last_sim_time_ns = 0;
 #endif
 
 #include <virtuals/inspct.h>
-#include <virtuals/fuzz.h>
+#include <virtuals/virt_fuzz.h>
 #include <virtuals/phy.h>
 
 #define VIRTUALS_MAX_COUNT 256
@@ -569,7 +569,7 @@ int virtuals_init(int argc, char **argv, const char *schema_path) {
 		if ((status = phy_init(argc, argv)) < 0)
 				utils_warn("Physics Engine failed");
 #endif
-#if ENABLE_LIBFUZZ
+#if ENABLE_LIBFUZZ || ENABLE_AFLNET
 		if ((status = fuzz_init(argc, argv)) < 0)
 				utils_warn("Fuzzer Failed");
 #endif

@@ -45,7 +45,7 @@ int isdigit(int c);
 #endif
 
 #include <virtuals.h>  // For lookup_callback function
-#include <virtuals/fuzz.h> // Coverage handling whether built with fuzzer or not
+#include <virtuals/virt_fuzz.h> // Coverage handling whether built with fuzzer or not
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -714,6 +714,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
                             printf("	0x%lx \n", qemu_plugin_insn_vaddr(qemu_plugin_tb_get_insn(tb, iter)));
                     }
 #endif
+                    fuzz_bbl_observe((uint32_t)qemu_plugin_insn_vaddr(insn), (uint32_t)n);
+                    
                     qemu_plugin_u64 entry_tmp;
                     entry_tmp.offset = (size_t)&core_cc_ret.list->log_buf;
 
@@ -825,7 +827,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 #include <immintrin.h>
 
 static pthread_t thread;
-static int tracer_ready =0;
+static _Atomic int tracer_ready = 0;
+static _Atomic uint16_t tracer_consumed_index = 0;
 
 static void* tracer(void* arg) {
 	core_cc_list.count =1;
@@ -835,7 +838,8 @@ static void* tracer(void* arg) {
 	core_cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
 	uint16_t tracer_index =0;
 
-	tracer_ready=1;
+	atomic_store_explicit(&tracer_consumed_index, 0, memory_order_relaxed);
+	atomic_store_explicit(&tracer_ready, 1, memory_order_release);
 
 	//Maybe make read atomic
 	while(true) {
@@ -844,10 +848,24 @@ static void* tracer(void* arg) {
             fuzz_add_observed_value(value);
 
 			tracer_index +=4;//32bit PC
+			atomic_store_explicit(&tracer_consumed_index, tracer_index, memory_order_release);
 		}
 	}
 
     return NULL;
+}
+
+void core_wait_for_trace_drain(void) {
+    if (!coverage) return;
+
+    while (!atomic_load_explicit(&tracer_ready, memory_order_acquire)) {
+        _mm_pause();
+    }
+
+    uint16_t target = __atomic_load_n(&core_cc_list.log_buf.index, __ATOMIC_ACQUIRE);
+    while (atomic_load_explicit(&tracer_consumed_index, memory_order_acquire) != target) {
+        _mm_pause();
+    }
 }
 
 #define MAX_EXIT_HOOKS 32
