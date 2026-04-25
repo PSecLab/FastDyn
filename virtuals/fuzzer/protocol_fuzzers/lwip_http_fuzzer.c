@@ -12,7 +12,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <immintrin.h>
-#include <virtuals/fuzz.h>
+#include <virtuals/virt_fuzz.h>
 
 #include "core.h"
 #include "common.h"

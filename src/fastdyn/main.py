@@ -88,6 +88,72 @@ def run(config, map_file, work_dir, svd, persist_work_dir):
                            out_path=work_dir
                            )
 
+
+@cli.command('loop', help='Like run, but restarts automatically. On a clean exit the work directory is wiped; on a crash it is preserved (--persist-work-dir) so state can be inspected.')
+@click.option('-c','--config',required = True, type= click.Path(resolve_path=True,exists=True),
+                        help='The Path to the config file.',
+                        metavar= 'PATH')
+@click.option(
+    '-m', '--map-file',
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the symbol map file.',
+    default=None,
+    metavar='PATH'
+)
+@click.option('-o','--work-dir',default="./fastdyn_work",metavar='PATH',
+        show_default=True,
+        type=click.Path(resolve_path=True,writable=True),
+        help='Path to the work directory.')
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    metavar='PATH',
+    help='Optional path to an SVD file or directory.'
+)
+@click.option(
+    '-p', '--persist-work-dir',
+    is_flag=True,
+    default=False,
+    help='Optional Flag to persist the existing work directory on the first run.'
+)
+def loop(config, map_file, work_dir, svd, persist_work_dir):
+    if work_dir is None:
+        work_dir = "fastdyn_work"
+
+    svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
+
+    # persist_work_dir controls whether the *current* iteration wipes the dir.
+    # After a clean exit we reset to False (fresh start).
+    # After a crash we keep it True (preserve state).
+    keep_dir = persist_work_dir
+
+    while True:
+        if not keep_dir:
+            if os.path.exists(work_dir):
+                log.info(f"Deleting existing work directory at {os.path.abspath(work_dir)}")
+                shutil.rmtree(work_dir)
+            log.info(f"Creating work directory at {os.path.abspath(work_dir)}")
+            os.makedirs(work_dir)
+        else:
+            log.info(f"Running with existing work directory (crash recovery).")
+
+        try:
+            fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
+            for idx, machine in enumerate(fastdyn_handle.machines):
+                fastdyn_handle.run(machine_name=f"machine{idx}",
+                                   target="qemu",
+                                   out_path=work_dir)
+            # Clean exit
+            keep_dir = True
+        except KeyboardInterrupt:
+            log.info("Loop interrupted by user.")
+            break
+        except Exception as e:
+            log.error(f"Run crashed with exception: {e}. Restarting with work directory preserved.")
+            keep_dir = True
+
+
 @cli.command(
     'generate',
     help='Generates the LLM Prompt using the hardware log passed by the user. '

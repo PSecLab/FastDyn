@@ -39,6 +39,18 @@
 const static bool DEBUG = false;
 static bool READY = false;
 
+std::atomic<double> latest_time_s_{0.0};
+
+double read_latest_sim_time()
+{
+  return latest_time_s_.load(std::memory_order_relaxed);
+}
+
+void update_latest_sim_time(double new_time)
+{
+  latest_time_s_.store(new_time, std::memory_order_relaxed);
+}
+
 using json = nlohmann::json;
 
 struct Vec3NoiseModel {
@@ -280,6 +292,11 @@ private:
       ss << "  Mag match:   " << (mag_match ? "YES" : "NO") << "\n";
     }
 
+    // reset again to show that it produces the same sequence on the next call
+    gyro_noise_model.Reset();
+    accel_noise_model.Reset();
+    mag_noise_model.Reset();
+
     response.set_data(ss.str());
     return true;
   }
@@ -403,9 +420,9 @@ imu_data_t parse_imu_json(const std::string &input)
 
     // add noise to gyros (+)
     // noise from 0 to 0.001 rad/s
-    // imu.gyro_x += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
-    // imu.gyro_y += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
-    // imu.gyro_z += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    imu.gyro_x += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    imu.gyro_y += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
+    imu.gyro_z += static_cast<float>( (static_cast<double>(rand()) / RAND_MAX) * 0.001 );
 
     // imu.gyro_x  = std::to_string(gyro[0].get<double>());
     // imu.gyro_y  = std::to_string(gyro[1].get<double>());
@@ -535,17 +552,17 @@ private:
     const gz::math::Vector3d tmp = C_ws.Transposed() * m_raw;
     const gz::math::Vector3d m_corr = C_ws * (C_ww * tmp);
 
-    // double dt = 0.01; // assuming 100 Hz update rate
-    // gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, dt);
-    // std::cerr << "NEW READING:" << std::endl;
-    // std::cerr << "\tCorrected mag: " << m_corr.X() << ", " << m_corr.Y() << ", " << m_corr.Z() << std::endl;
-    // std::cerr << "\tNoisy mag: " << noisy_mag_corr.X() << ", " << noisy_mag_corr.Y() << ", " << noisy_mag_corr.Z() << std::endl;
-    // gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
+    double dt = 0.01; // assuming 100 Hz update rate
+    gz::math::Vector3d noisy_mag_corr = mag_noise_model.Apply(m_corr, read_latest_sim_time());
+    // // std::cerr << "NEW READING:" << std::endl;
+    // // std::cerr << "\tCorrected mag: " << m_corr.X() << ", " << m_corr.Y() << ", " << m_corr.Z() << std::endl;
+    // // std::cerr << "\tNoisy mag: " << noisy_mag_corr.X() << ", " << noisy_mag_corr.Y() << ", " << noisy_mag_corr.Z() << std::endl;
+    gz::math::Vector3d noisy_msg_corr = noisy_mag_corr;
 
     gz::msgs::Magnetometer latest_msg_corr_ = raw; // timestamp/frame_id 유지
-    // latest_msg_corr_.mutable_field_tesla()->set_x(noisy_msg_corr.X());
-    // latest_msg_corr_.mutable_field_tesla()->set_y(noisy_msg_corr.Y());
-    // latest_msg_corr_.mutable_field_tesla()->set_z(noisy_msg_corr.Z());
+    latest_msg_corr_.mutable_field_tesla()->set_x(noisy_msg_corr.X());
+    latest_msg_corr_.mutable_field_tesla()->set_y(noisy_msg_corr.Y());
+    latest_msg_corr_.mutable_field_tesla()->set_z(noisy_msg_corr.Z());
 
     rep = latest_msg_corr_;
     return true;
@@ -584,14 +601,14 @@ private:
       msg.field_tesla().y(),
       msg.field_tesla().z()
     );
-    // double dt = 0.01; // assuming 100 Hz update rate
-    // gz::math::Vector3d noisy_mag = mag_noise_model.Apply(true_mag, dt);
+    double dt = 0.01; // assuming 100 Hz update rate
+    gz::math::Vector3d noisy_mag = mag_noise_model.Apply(true_mag, read_latest_sim_time());
     std::lock_guard<std::mutex> lock(mutex_);
-    // gz::msgs::Magnetometer noisy_msg = msg;
-    // noisy_msg.mutable_field_tesla()->set_x(noisy_mag.X());
-    // noisy_msg.mutable_field_tesla()->set_y(noisy_mag.Y());
-    // noisy_msg.mutable_field_tesla()->set_z(noisy_mag.Z());
-    latest_msg_ = msg; // for now just return raw without noise
+    gz::msgs::Magnetometer noisy_msg = msg;
+    noisy_msg.mutable_field_tesla()->set_x(noisy_mag.X());
+    noisy_msg.mutable_field_tesla()->set_y(noisy_mag.Y());
+    noisy_msg.mutable_field_tesla()->set_z(noisy_mag.Z());
+    latest_msg_ = noisy_msg;
   }
 
   bool OnServiceRequest(const gz::msgs::Empty &,
@@ -873,7 +890,7 @@ public:
       if (start != std::string::npos && end != std::string::npos)
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        latest_time_s_ = std::stod(response.substr(start, end - start));
+        update_latest_sim_time(std::stod(response.substr(start, end - start)));
       }
     }
   }
@@ -1006,7 +1023,7 @@ private:
 
     // std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
 
-    while (run_until_time_s_ - latest_time_s_ > 0.1 )
+    while (run_until_time_s_ - read_latest_sim_time() > 0.1 )
     {
       // wait for the sim to catch up within 0.1 s
       // std::cout << "Waiting... latest_time_s_: " << latest_time_s_ << " s\n";
@@ -1035,12 +1052,12 @@ private:
     {
       {
         // std::lock_guard<std::mutex> lock(mutex_);
-        if (latest_time_s_ < run_until_time_s_)
+        if (read_latest_sim_time() < run_until_time_s_)
         {
           if (!toggle) {
               toggle = true;
               std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
-              std::cout << "Current latest_time_s_: " << latest_time_s_ << " s\n";
+              std::cout << "Current latest_time_s_: " << read_latest_sim_time() << " s\n";
           }
           // std::cout << "Advancing simulation to time: " << run_until_time_s_ << " s\n";
           SendServos();
@@ -1059,21 +1076,21 @@ private:
             if (start != std::string::npos && end != std::string::npos)
             {
               std::lock_guard<std::mutex> lock(mutex_);
-              latest_time_s_ = std::stod(response.substr(start, end - start));
+              update_latest_sim_time(std::stod(response.substr(start, end - start)));
             }
 
             imu_data_t imu = parse_imu_json(response);
             {
-              // gz::math::Vector3d true_accel(imu.accel_x, imu.accel_y, imu.accel_z);
-              // gz::math::Vector3d true_gyro(imu.gyro_x, imu.gyro_y, imu.gyro_z);
-              // gz::math::Vector3d noisy_accel = accel_noise_model.Apply(true_accel, 0.2);
-              // gz::math::Vector3d noisy_gyro  = gyro_noise_model.Apply(true_gyro, 0.2);
-              // imu.accel_x = noisy_accel.X();
-              // imu.accel_y = noisy_accel.Y();
-              // imu.accel_z = noisy_accel.Z();
-              // imu.gyro_x  = noisy_gyro.X();
-              // imu.gyro_y  = noisy_gyro.Y();
-              // imu.gyro_z  = noisy_gyro.Z();
+              gz::math::Vector3d true_accel(imu.accel_x, imu.accel_y, imu.accel_z);
+              gz::math::Vector3d true_gyro(imu.gyro_x, imu.gyro_y, imu.gyro_z);
+              gz::math::Vector3d noisy_accel = accel_noise_model.Apply(true_accel, read_latest_sim_time());
+              gz::math::Vector3d noisy_gyro  = gyro_noise_model.Apply(true_gyro, read_latest_sim_time());
+              imu.accel_x = noisy_accel.X();
+              imu.accel_y = noisy_accel.Y();
+              imu.accel_z = noisy_accel.Z();
+              imu.gyro_x  = noisy_gyro.X();
+              imu.gyro_y  = noisy_gyro.Y();
+              imu.gyro_z  = noisy_gyro.Z();
               std::lock_guard<std::mutex> lock(mutex_);
               imu_buffer_.push_back(imu);
             }
@@ -1193,7 +1210,7 @@ private:
   uint16_t frame_rate_;
   uint32_t frame_count_;
 
-  double latest_time_s_{0.0};
+  // double latest_time_s_{0.0};
   double run_until_time_s_{0.0};
   std::string last_response_;
   // std::vector<uint16_t> pwm_values_;
@@ -1603,30 +1620,25 @@ int main(int argc, char **argv)
   std::string pose_topic = "/model/r1_rover/pose";
   std::string altimeter_topic = "NONE";
   std::string imu_topic = "/world/runway/model/r1_rover/link/base_link/sensor/imu_sensor/imu";
-  std::string laserscan_topic = "/lidar";
   if (model_name == "gs_drone") {
     navsat_topic = "/world/runway/model/gs_drone/link/sensors/sensor/navsat_sensor/navsat";
     mag_topic = "/world/runway/model/gs_drone/link/sensors/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
-    laserscan_topic = "NONE";
   } else if (model_name == "iris") {
     navsat_topic = "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/iris_runway/model/iris_with_ardupilot/model/iris_with_standoffs/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/iris_with_ardupilot/pose";
-    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "bicopter") {
     navsat_topic = "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/bicopter_with_ardupilot/model/bicopter/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/bicopter_with_ardupilot/pose";
     joint_states_topic = "NONE";
-    laserscan_topic = "NONE";
   } else if (model_name == "vtail_plane") {
     navsat_topic = "/world/runway/model/skywalker_x8/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8/link/base_link/sensor/magnetometer_sensor/magnetometer";
     pose_topic = "/model/skywalker_x8/pose";
     imu_topic = "/world/runway/model/skywalker_x8/link/imu_link/sensor/imu_sensor/imu";
-    laserscan_topic = "NONE";
     // pose_topic = "/world/runway/dynamic_pose/info";
     // navsat_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/navsat_sensor/navsat";
     // mag_topic = "/world/runway/model/mini_talon_vtail/link/base_link/sensor/magnetometer_sensor/magnetometer";
@@ -1634,26 +1646,19 @@ int main(int argc, char **argv)
   } else if (model_name == "skywalker_x8_quad") {
     navsat_topic = "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/runway/model/skywalker_x8_quad/link/base_link/sensor/magnetometer_sensor/magnetometer";
-    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "blueboat") {
     navsat_topic = "/world/waves/model/blueboat/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/waves/model/blueboat/link/base_link/sensor/magnetometer_sensor/magnetometer";
-    laserscan_topic = "NONE";
     joint_states_topic = "NONE";
   } else if (model_name == "bluerov2") {
     navsat_topic = "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/navsat_sensor/navsat";
     mag_topic =    "/world/bluerov2_underwater/model/bluerov2/link/base_link/sensor/magnetometer_sensor/magnetometer";
     joint_states_topic = "NONE";
-    laserscan_topic = "NONE";
   }
 
   if (model_name == "r1_rover") {
     altimeter_topic = "/world/runway/altitude";
-  }
-  else 
-  {
-    altimeter_topic = "NONE";
   }
 
   const std::string sim_world_name = WorldNameFromNavsatTopic(navsat_topic);
@@ -1753,11 +1758,6 @@ int main(int argc, char **argv)
     mag_topic,
     "/get_corrected_mag_reading",
     mag_rpy
-  );
-
-  DeterministicNoiseTestService noiseTestService(
-    node,
-    "/get_deterministic_noise_test"
   );
 
   std::cout << "ArduPilot Services running...\n";

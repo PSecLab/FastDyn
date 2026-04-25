@@ -64,23 +64,11 @@ logger_content = """
 # output = stderr
 """
 
-# [[CPU.cpu0.virtuals]]
-# at = "0x08000eca"
-# instruction = "anchor"
-# args = ["0x40004404"]
-
-# [[CPU.cpu0.modifiers]]
-# at = "0x08000b0a"
-# patch = "r15 0x08000b54"
-
-# [[CPU.cpu0.modifiers]]
-# at = "0x08000ece"
-# patch = "r0 0"
-
-# [[CPU.cpu0.virtuals]]
-# at = "0x08000f7a"
-# instruction = "assert"
-# args = ["*0x0"]
+# Input character in UART
+[[CPU.cpu0.virtuals]]
+at = "0x8000cec"
+instruction = "anchor"
+args = ["1"]
 
 # ==============================================================================
 #                              Device Configuration

@@ -96,37 +96,209 @@ finline  = ""
   # output = stderr
   """
   # This anchor alters the http request in http_recv, anchor needs target specific modification
-    [[CPU.cpu0.virtuals]]
-    at          = "0x08008edc"
-    instruction = "anchor"
-    args        = [""]
+  #   [[CPU.cpu0.virtuals]]
+  #   at          = "0x08008edc"
+  #   instruction = "anchor"
+  #   args        = [""]
 
-  # These modifiers keep our http_recv in a loop
-    [[CPU.cpu0.modifiers]]
-    at          = "0x08008efa"
-    patch       = "r15 0x08008edc"
+  # # These modifiers keep our http_recv in a loop
+  #   [[CPU.cpu0.modifiers]]
+  #   at          = "0x08008efa"
+  #   patch       = "r15 0x08008edc"
 
-    [[CPU.cpu0.modifiers]]
-    at          = "0x08008f0e"
-    patch       = "r15 0x08008edc"
+  #   [[CPU.cpu0.modifiers]]
+  #   at          = "0x08008f0e"
+  #   patch       = "r15 0x08008edc"
 
-    [[CPU.cpu0.modifiers]]
-    at          = "0x080091ac"
-    patch       = "r15 0x08008edc"
+  #   [[CPU.cpu0.modifiers]]
+  #   at          = "0x080091ac"
+  #   patch       = "r15 0x08008edc"
 
-    [[CPU.cpu0.modifiers]]
-    at          = "0x080091b6"
-    patch       = "r15 0x08008edc"
+  #   [[CPU.cpu0.modifiers]]
+  #   at          = "0x080091b6"
+  #   patch       = "r15 0x08008edc"
 
-    [[CPU.cpu0.modifiers]]
-    at          = "0x0800935a"
-    patch       = "r15 0x08008edc"
+  #   [[CPU.cpu0.modifiers]]
+  #   at          = "0x0800935a"
+  #   patch       = "r15 0x08008edc"
 
-  # This assert triggers a restart on a hard fault
-    [[CPU.cpu0.virtuals]]
-    at          = "0x0800106a"
-    instruction = "assert"
-    args        = ["*0x0"]
+  # # This assert triggers a restart on a hard fault
+  #   [[CPU.cpu0.virtuals]]
+  #   at          = "0x0800106a"
+  #   instruction = "assert"
+  #   args        = ["*0x0"]
+
+  # ethernetif_input -> inject messages, right before pbuf is checked
+  [[CPU.cpu0.virtuals]]
+  at = "0x800088c"
+  instruction = "fuzz_eth_in"
+  args = [""]
+
+  # low_level_output -> extract responses
+  [[CPU.cpu0.virtuals]]
+  at = "0x8000798"
+  instruction = "fuzz_eth_out"
+  args = [""]
+
+#   [[CPU.cpu0.virtuals]]
+#   at = "0x800087e"
+#   instruction = "fuzz_snap_handler"
+#   args = [""]
+
+  [[CPU.cpu0.virtuals]]
+  at = "0x8004c10"
+  instruction = "fuzz_pbuf_free"
+  args = [""]
+
+  # Original modifier set retained for reference.
+  # skip hal_eth_readdata since we aren't using hal
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8000886"
+  # patch = "r15 0x800088a"
+
+  # hardcode initial sequence number
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8006060"
+  # patch = "r0 1234"
+
+  # skip printf call on null pbuf_free
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8004c24"
+  # patch = "r15 0x8004c28"
+
+  # skip writing to hal for output
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x80007c4"
+  # patch = "r15 0x80007c8"
+
+  # skip Ethernet_Link_Periodic_Handle
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8000fca"
+  # patch = "r15 0x8000fce"
+
+  # skip ADC_Handler by setting index to non 0
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8000bfc"
+  # patch = "r0 1"
+
+  # make sys_now return 0 (through HAL)
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8001684"
+  # patch = "r0 0"
+
+  # skip hardware initialization
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8000dea"
+  # patch = "r15 0x8000f2c"
+
+  # skip hal eth init
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8000ac6"
+  # patch = "r15 0x8000aca"
+
+  # skip other eth init stuff
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8000b02"
+  # patch = "r15 0x8000b1c"
+
+  # skip systeminit
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x8000666"
+  # patch = "r15 0x800066a"
+
+  # skip gpio write pin
+  # [[CPU.cpu0.modifiers]]
+  # at = "0x80027e2"
+  # patch = "r15 0x80027e4"
+
+  # Recommended modifier set:
+  # keep the lwIP software path intact, bypass raw hardware I/O,
+  # and force the netif into an initialized/up state without PHY access.
+
+  # ethernetif_input: our fuzzer supplies the pbuf instead of HAL_ETH_ReadData
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000886"
+  patch = "r15 0x800088a"
+
+  # tcp_next_iss: deterministic initial sequence numbers help reproducibility
+  [[CPU.cpu0.modifiers]]
+  at = "0x8006060"
+  patch = "r0 1234"
+
+  # skip the debug printf on pbuf_free assertion path
+  [[CPU.cpu0.modifiers]]
+  at = "0x8004c24"
+  patch = "r15 0x8004c28"
+
+  # low_level_output: extract packets via fuzz_eth_out and skip HAL transmit
+  [[CPU.cpu0.modifiers]]
+  at = "0x80007c4"
+  patch = "r15 0x80007c8"
+
+  # avoid periodic PHY polling once the netif has been forced up
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000fca"
+  patch = "r15 0x8000fce"
+
+  # avoid unrelated ADC-driven board logic
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000bfc"
+  patch = "r0 1"
+
+  # SystemInit only touches MCU bring-up state we do not need for software fuzzing
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000666"
+  patch = "r15 0x800066a"
+
+  # BSP LED writes are not relevant; keep later status logic intact
+  [[CPU.cpu0.modifiers]]
+  at = "0x80027e2"
+  patch = "r15 0x80027e4"
+
+  # Skip BSP_LED_Init after its prologue so it cleanly returns without GPIO setup
+  [[CPU.cpu0.modifiers]]
+  at = "0x80012fe"
+  patch = "r15 0x8001348"
+
+  # Replace the large main() skip with narrow "return success" patches
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000eca"
+  patch = "r15 0x8000ece"
+
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000ece"
+  patch = "r0 0"
+
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000ed4"
+  patch = "r15 0x8000ed8"
+
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000ed8"
+  patch = "r0 0"
+
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000ef4"
+  patch = "r15 0x8000ef8"
+
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000ef8"
+  patch = "r0 0"
+
+  # ethernetif_init: skip HAL_ETH_Init but keep the rest of lwIP/netif setup
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000ac6"
+  patch = "r15 0x8000aca"
+
+  # Force netif flags to UP|LINK_UP plus the original broadcast/ARP flags
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000ae0"
+  patch = "r3 0x0f"
+
+  # After software-side ETH setup, skip PHY registration/probing and return success
+  [[CPU.cpu0.modifiers]]
+  at = "0x8000b02"
+  patch = "r15 0x8000b1c"
 
 
 # ==============================================================================
@@ -166,12 +338,16 @@ tap_interface = "tap0"
 
     [[Device.ethernet.handlers]]
         model   = "elder"
-        enabled = true                          # Set to TRUE to use your generated .so
+        enabled = false                          # Set to TRUE to use your generated .so
         scroll = "boardrunner/boardrunner_sdk/build/model.so"  # UPDATE THIS PATH
 
     [[Device.ethernet.handlers]]
         model   = "passthrough"
         enabled = false                         # Disable passthrough so your model handles it
+
+    [[Device.ethernet.handlers]]
+        model   = "classic"
+        enabled = true                         # Disable passthrough so your model handles it
 
 [Device.unhandled_space]
     # Existing IRQ config remains the same
@@ -189,4 +365,8 @@ tap_interface = "tap0"
 
     [[Device.unhandled_space.handlers]]
         model = "passthrough"
+        enabled = false
+      
+    [[Device.unhandled_space.handlers]]
+        model = "classic"
         enabled = true

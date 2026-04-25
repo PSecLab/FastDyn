@@ -16,9 +16,11 @@
 #include "core.h"
 #include "common.h"
 #include "virtuals.h"
+#include "fuzz.h"
 #include "fuzz_bbl.h"
 #include "fuzz_trace.h"
 #include "protocol_fuzzers/protocol_fuzzers.h"
+#include "stateful_fuzzers/stateful_fuzzers.h"
 
 static int coverage = 0;
 
@@ -38,15 +40,17 @@ static uint32_t *wlist = NULL;
 
 // If testing stability with forced inputs, this will cause it to compare all runs and output when a different path taken
 static const bool forced_trace = false;
+extern bool g_trace_enabled;
 
-#define MAP_SIZE 65536 // should always match the rust definition
 extern uint8_t CVG[MAP_SIZE];
 extern AddressList core_cc_list; // in future, update so that we aren't using an extern global for this, maybe add core.c helper to consume inputs
 extern LoggerEntry core_cc_entry;
 extern LookupResult core_cc_ret;
 
 typedef void (*fuzz_anchor_callback_t)(char *buff, size_t len);
+typedef void (*fuzz_exit_callback_t)();
 static fuzz_anchor_callback_t g_fuzz_anchor_callback = NULL;
+static fuzz_exit_callback_t g_fuzz_exit_callback = NULL;
 
 typedef enum {
     FUZZ_EMPTY = 0, // buffer is ready for fuzzer to give an input
@@ -72,6 +76,10 @@ void fuzz_register_callback(fuzz_anchor_callback_t cb) {
     g_fuzz_anchor_callback = cb;
 }
 
+void fuzz_register_exit(fuzz_exit_callback_t cb) {
+    g_fuzz_exit_callback = cb;
+}
+
 static void fuzz_irq_entry(int irq) {
     core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFF;
     core_cc_list.log_buf.index = (uint16_t)(core_cc_list.log_buf.index + 4);
@@ -80,6 +88,13 @@ static void fuzz_irq_exit(int irq) {
     core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFD;
     core_cc_list.log_buf.index = (uint16_t)(core_cc_list.log_buf.index + 4);
 }
+
+static void fuzz_sync_coverage(void) {
+    core_wait_for_trace_drain();
+    g_prev_pc = 0;
+}
+
+#if ENABLE_LIBFUZZ
 
 int fuzz_libAFL_init(char *numbers);
 
@@ -97,7 +112,7 @@ bool fuzz_buffer_write(fuzz_input_t *input) {
 }
 
 // C function for retrieving input
-static int fuzz_buffer_read(char* out, size_t len) {
+int fuzz_buffer_read(char* out, size_t len) {
     while (atomic_load_explicit(&fuzz_buffer.state, memory_order_acquire) != FUZZ_READY) {
         _mm_pause();
     }
@@ -124,14 +139,10 @@ bool fuzz_check_empty() {
     return (atomic_load_explicit(&fuzz_buffer.state, memory_order_relaxed) == FUZZ_EMPTY);
 }
 
-static void fuzz_finish() {
-    // Wait until tracer catches up with the logged pc's, otherwise coverage is innacurate
-    uint16_t idx = (uint16_t)(core_cc_list.log_buf.index - 4);
-    uint32_t last_log = core_cc_list.log_buf.buffer[idx / 4];
-
-    while (g_prev_pc != last_log);
-
-    g_prev_pc = 0;
+void fuzz_finish() {
+    /* Ensure the async tracer has consumed the current run before we expose
+     * completion to the rest of the fuzzing pipeline. */
+    fuzz_sync_coverage();
 
     // if fuzzer not started, return
     if (fuzz_started == false) return;
@@ -155,54 +166,6 @@ static void fuzz_report_assert(bool fatal) {
     } else {
         atomic_store_explicit(&fuzz_buffer.assert, 1, memory_order_release);
     }
-}
-
-static uint32_t *fuzz_get_writable_ranges(const char *filename, size_t *out_count)
-{
-    FILE *f = fopen(filename, "r");
-    if (!f) {
-        perror("fopen");
-        return NULL;
-    }
-
-    size_t capacity = 16;          // initial number of uint32_t entries
-    size_t count = 0;
-    uint32_t *array = malloc(capacity * sizeof(uint32_t));
-    if (!array) {
-        fclose(f);
-        return NULL;
-    }
-
-    uint32_t a, b;
-
-    while (fscanf(f, "%x\t%x", &a, &b) == 2) {
-        if (count + 2 > capacity) {
-            capacity *= 2;
-            uint32_t *tmp = realloc(array, capacity * sizeof(uint32_t));
-            if (!tmp) {
-                free(array);
-                fclose(f);
-                return NULL;
-            }
-            array = tmp;
-        }
-
-        printf("Adding %x size %x\n", a, b);
-
-        array[count++] = a;
-        array[count++] = b;
-    }
-
-    // Doesn't include stack information
-    if (array[count-1] != 0) {
-        printf("No stack information\n");
-        return 0;
-    }
-
-    fclose(f);
-
-    *out_count = count;   // number of uint32_t entries (not pairs!)
-    return array;
 }
 
 // Initialization related things that should wait until anchor is reached
@@ -301,7 +264,7 @@ void anchor(unsigned int cpu_index, void *udata)
         for (int i = 1; i < wlist_count; i += 2) {
             total_mem += wlist[i]; // pairs of addresses + size
         }
-
+        
         membuff = malloc(total_mem);
         if (!membuff) {
             printf("Failed to malloc buffer\n");
@@ -343,7 +306,7 @@ void anchor(unsigned int cpu_index, void *udata)
     while (token && (idx + 4) <= read_count) {
         unsigned long value = strtoul(token, NULL, 0);
         if (value < 100) {
-            //vale < 100 means its a register number to write to
+            //value < 100 means its a register number to write to
             uint32_t write_value = 0;
             memcpy(&write_value, g_fuzzing_input + idx, 4);
             //printf("Writing %x to %d at pc = %x, lr = %x\n", write_value, value, qemu_get_register(15), qemu_get_register(14));
@@ -354,6 +317,100 @@ void anchor(unsigned int cpu_index, void *udata)
         idx +=4;
         token = strtok(NULL, ",");
     }
+}
+
+#endif // ENABLE_LIBFUZZ
+
+static uint32_t *fuzz_get_writable_ranges(const char *filename, size_t *out_count)
+{
+    FILE *f = fopen(filename, "r");
+    if (!f) {
+        perror("fopen");
+        return NULL;
+    }
+
+    size_t capacity = 16;          // initial number of uint32_t entries
+    size_t count = 0;
+    uint32_t *array = malloc(capacity * sizeof(uint32_t));
+    if (!array) {
+        fclose(f);
+        return NULL;
+    }
+
+    uint32_t a, b;
+
+    while (fscanf(f, "%x\t%x", &a, &b) == 2) {
+        if (count + 2 > capacity) {
+            capacity *= 2;
+            uint32_t *tmp = realloc(array, capacity * sizeof(uint32_t));
+            if (!tmp) {
+                free(array);
+                fclose(f);
+                return NULL;
+            }
+            array = tmp;
+        }
+
+        printf("Adding %x size %x\n", a, b);
+
+        array[count++] = a;
+        array[count++] = b;
+    }
+
+    // Doesn't include stack information
+    if (array[count-1] != 0) {
+        printf("No stack information\n");
+        return 0;
+    }
+
+    fclose(f);
+
+    *out_count = count;   // number of uint32_t entries (not pairs!)
+    return array;
+}
+
+static uint8_t *snap_membuff = NULL;
+int fuzz_restore_memory() {
+    if (!snap_membuff) return -1;
+
+    /* Snapshot restore is the true end-of-run barrier for extern_usage mode:
+     * don't restore or return until the async coverage tracer has caught up. */
+    fuzz_sync_coverage();
+
+    uint32_t total_mem = 0;
+    for (int i = 0; i < wlist_count; i += 2) {
+        qemu_plugin_write_memory(wlist[i], snap_membuff + total_mem, wlist[i+1]);
+        total_mem += wlist[i+1];
+    }
+
+    return 0;
+}
+
+int fuzz_snap_memory() {
+    uint32_t r15 = qemu_get_register(15);
+    // first, rewrite the stack part of the wlist with the actual stack base to top
+    wlist[wlist_count - 1] = wlist[wlist_count - 2] - r15; // size
+    wlist[wlist_count - 2] = r15; // stack pointer
+
+    uint32_t total_mem = 0;
+    for (int i = 1; i < wlist_count; i += 2) {
+        total_mem += wlist[i]; // pairs of addresses + size
+    }
+    
+    snap_membuff = malloc(total_mem);
+    if (!snap_membuff) {
+        printf("Failed to malloc buffer\n");
+        return -1;
+    }
+
+    // Save current memory
+    total_mem = 0;
+    for (int i = 0; i < wlist_count; i += 2) {
+        qemu_plugin_read_memory(wlist[i], snap_membuff + total_mem, wlist[i+1]);
+        total_mem += wlist[i+1];
+    }
+
+    return 0;
 }
 
 uint32_t fuzz_get_register(int reg) {
@@ -372,7 +429,7 @@ int fuzz_read_memory(unsigned long long addr, uint8_t *mem_buf, int len) {
 
 void fuzz_add_observed_value(uint32_t val) {
     static int irq_depth = 0;
-
+    
     if (val == 0xFFFFFFFF) {
         irq_depth++;
     } else if (val == 0xFFFFFFFD) {
@@ -386,6 +443,7 @@ void fuzz_add_observed_value(uint32_t val) {
             }
 
             if (forced_trace) fuzz_trace_add_value(val);
+            if (g_trace_enabled) fuzz_trace_record_pc(val);
             g_prev_pc = val;
         }
         fuzz_bbl_add(val);
@@ -431,6 +489,9 @@ static void fuzz_serialize_coverage(const char *filename) {
 }
 
 static void fuzz_destroy(void) {
+    if (g_fuzz_exit_callback) {
+        g_fuzz_exit_callback();
+    }
     fuzz_dump_bbl();
     fuzz_serialize_coverage(CVG_PATH);
 }
@@ -447,15 +508,24 @@ int fuzz_init(int argc, char **argv) {
 
     core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
 
-    fuzz_register_callback(fuzz_plugin_lwip_http_fuzzer);
-
     wlist = fuzz_get_writable_ranges(WLIST_PATH, &wlist_count);
     if (wlist == NULL || (wlist_count & 1)) {
-        utils_warn("[anchor] Couldn't parse writable memory definitions");
+        utils_die("[anchor] Couldn't parse writable memory definitions");
     }
 
+#if ENABLE_LIBFUZZ
     virtual_register("assert", virt_assert);
     virtual_register("anchor", anchor);
+#endif
+
+// // register any target specific callbacks for our fuzzing harness
+//     virtual_register("fuzz_snap_handler", fuzz_snap_handler);
+//     virtual_register("fuzz_eth_in", fuzz_eth_in);
+//     virtual_register("fuzz_eth_out", fuzz_eth_out);
+//     virtual_register("fuzz_pbuf_free", fuzz_pbuf_free);
+
+// // register an exit callback for fuzzing harness
+//     fuzz_register_exit(fuzz_plugin_lwip_ip_fuzzer_exit);
 
     return 0;
 }

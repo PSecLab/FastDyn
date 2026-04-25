@@ -12,6 +12,11 @@ uint64_t core_get_pc(void);
 uint64_t core_get_icount(void);
 
 /**
+ * @brief Wait for the tracer thread to catch up to the inline logger
+ */
+void core_wait_for_trace_drain(void);
+
+/**
  * @brief Read from RAM at the specified address.
  *
  * @param address The memory address to read from.

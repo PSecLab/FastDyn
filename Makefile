@@ -2,9 +2,11 @@
 
 qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
+aflnet_path  ?= ../aflnet
 LIBGZ        ?= false
 LIBHW        ?= false
 LIBFUZZ		 ?= false
+AFLNET 		 ?= false
 DEV          ?= false
 DEBUG_PRINT  ?= false
 LIBPY        ?= false
@@ -24,9 +26,11 @@ setup: clean fetch
 	meson setup build \
 	-Dqemu_path=$(abspath $(qemu_path)) \
 	-Dlibhw_path=$(abspath $(libhw_path)) \
+	-Daflnet_path=$(abspath $(aflnet_path)) \
 	-Denable_libhw=$(LIBHW) \
 	-Denable_libgz=$(LIBGZ) \
 	-Denable_libfuzz=$(LIBFUZZ) \
+	-Denable_aflnet=$(AFLNET) \
 	-Ddevice_models=$(DEV) \
 	-DDEBUG_PRINT=$(DEBUG_PRINT) \
 	-Denable_libpy=$(LIBPY) \
