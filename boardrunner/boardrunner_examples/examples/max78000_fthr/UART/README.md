@@ -32,10 +32,10 @@ No external wiring required. The firmware uses only:
 
 This is a single-model example. Only UART0 needs an elder model; all other peripherals are handled by passthrough.
 
-| Component   | Peripheral                          | Generated file                    | Compiled to   |
-| ----------- | ----------------------------------- | --------------------------------- | ------------- |
-| Model 1     | UART                                | `generated_models/uart_model.c`   | `model.so`    |
-| Passthrough | GPIO2 (LEDs), GCR, TMR, all others  | --                                | real hardware |
+| Component   | Peripheral                         | Generated file                  | Compiled to   |
+| ----------- | ---------------------------------- | ------------------------------- | ------------- |
+| Model 1     | UART                               | `generated_models/uart_model.c` | `model.so`    |
+| Passthrough | GPIO2 (LEDs), GCR, TMR, all others | --                              | real hardware |
 
 No inter-model signals, no external slave devices, no DMA.
 

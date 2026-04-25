@@ -14,59 +14,82 @@ hwaddr buffer_limit  = 0x20000200;
 hwaddr buffer_address;
 bool   start_buffering = false;
 int total_comes =0;
+static pthread_cond_t irq_cv = PTHREAD_COND_INITIALIZER;
+static int irq_pending;
 
 
 static uint64_t passthrough_read(void *opaque, hwaddr address, unsigned size, uint64_t pc) {
     (void)opaque;
     uint32_t value_read;
-
-    pthread_mutex_lock(&hw_mutex);
-    if (!hw) {
-        pthread_mutex_unlock(&hw_mutex);
-        utils_die("HW handle not initialized");
-    }
-
     int status;
-    if (size == 1) {
-        uint8_t byte_val;
-        status = hw_read8(hw, address, &byte_val);
-        value_read = byte_val;
-    } else {
-        status = hw_read32(hw, address, &value_read);
-    }
 
-    pthread_mutex_unlock(&hw_mutex);
+    for (int attempt = 0; ; attempt++) {
+        pthread_mutex_lock(&hw_mutex);
+        if (!hw) {
+            pthread_mutex_unlock(&hw_mutex);
+            utils_die("HW handle not initialized");
+        }
 
-    if (status != 0) {
+        if (size == 1) {
+            uint8_t byte_val;
+            status = hw_read8(hw, address, &byte_val);
+            value_read = byte_val;
+        } else {
+            status = hw_read32(hw, address, &value_read);
+        }
+
+        int halted = hw_board_halted(hw);
+        pthread_mutex_unlock(&hw_mutex);
+
+        if (status == 0)
+            return value_read;
+
+        // Board is halted for a pending IRQ — wait for the serve cycle to resume it
+        if (halted && attempt < 100) {
+            usleep(1000);
+            continue;
+        }
+
+        fprintf(stderr, "[passthrough] HW Read FAILED: addr=0x%08lx size=%u pc=0x%08lx irq_pending=%d halted=%d attempts=%d\n",
+                (unsigned long)address, size, (unsigned long)pc, irq_pending, halted, attempt);
         utils_die("HW Read Failed");
     }
-
-    return value_read;
 }
 
 static void passthrough_write(void *opaque, hwaddr address, uint64_t value, unsigned size, uint64_t pc) {
     (void)opaque;
-
-    pthread_mutex_lock(&hw_mutex);
-    if (!hw) {
-        pthread_mutex_unlock(&hw_mutex);
-        utils_die("HW handle not initialized");
-    }
-
     int status;
-    if (size ==1) {
-        status = hw_write8(hw, address, (uint32_t)value);
-    } else {
-        status = hw_write32(hw, address, (uint32_t)value);
-    }
-    pthread_mutex_unlock(&hw_mutex);
 
-    if (status != 0) {
+    for (int attempt = 0; ; attempt++) {
+        pthread_mutex_lock(&hw_mutex);
+        if (!hw) {
+            pthread_mutex_unlock(&hw_mutex);
+            utils_die("HW handle not initialized");
+        }
+
+        if (size == 1) {
+            status = hw_write8(hw, address, (uint32_t)value);
+        } else {
+            status = hw_write32(hw, address, (uint32_t)value);
+        }
+
+        int halted = hw_board_halted(hw);
+        pthread_mutex_unlock(&hw_mutex);
+
+        if (status == 0)
+            return;
+
+        // Board is halted for a pending IRQ — wait for the serve cycle to resume it
+        if (halted && attempt < 100) {
+            usleep(1000);
+            continue;
+        }
+
+        fprintf(stderr, "[passthrough] HW Write FAILED: addr=0x%08lx size=%u val=0x%08lx pc=0x%08lx irq_pending=%d halted=%d attempts=%d\n",
+                (unsigned long)address, size, (unsigned long)value, (unsigned long)pc, irq_pending, halted, attempt);
         utils_die("HW Write Failed");
     }
 }
-static pthread_cond_t irq_cv = PTHREAD_COND_INITIALIZER;
-static int irq_pending;
 
 static void* dev_thread_fn(void* arg) {
     (void)arg;

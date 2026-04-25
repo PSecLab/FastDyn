@@ -19,6 +19,58 @@ from ..utils import parse_config as svd_parser
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
+def _extract_mixed_access_fields(svd_device, peripheral_name):
+    """Return lines describing fields whose access type differs from the register default.
+
+    Tries exact peripheral name match first, then falls back to base-name
+    match (e.g. I2C1 -> I2C0) since SVD files often define registers on the
+    base instance only.
+    """
+    if svd_device is None:
+        return []
+
+    svd_periph = None
+    for p in svd_device.peripherals:
+        if p.name.upper() == peripheral_name.upper():
+            svd_periph = p
+            break
+    if svd_periph is None:
+        base = re.sub(r'\d+$', '', peripheral_name)
+        for p in svd_device.peripherals:
+            if re.sub(r'\d+$', '', p.name).upper() == base.upper():
+                svd_periph = p
+                break
+    if svd_periph is None:
+        return []
+
+    lines = []
+    for r in svd_periph.registers:
+        try:
+            fields = r.fields
+        except AttributeError:
+            continue
+        if not fields:
+            continue
+        reg_access = str(r.access) if r.access else None
+        # Check if this register has ANY mixed-access field
+        has_mixed = any(
+            getattr(f, 'access', None) and reg_access and str(getattr(f, 'access', None)) != reg_access
+            for f in fields
+        )
+        if has_mixed:
+            # Include ALL fields for this register so the LLM can see
+            # relationships between read-write control bits and read-only
+            # status bits (e.g. SCL_OUT controls SCL when SWOE=1).
+            lines.append(f'{r.name} (offset 0x{r.address_offset:02X}, register: {reg_access}):')
+            for f in fields:
+                f_access = getattr(f, 'access', None)
+                access_str = f' ({f_access})' if f_access and str(f_access) != reg_access else ''
+                desc = (f.description or '').strip().split('\n')[0][:100]
+                bits = f'bit {f.bit_offset}' if f.bit_width == 1 else f'bits [{f.bit_offset}:{f.bit_offset + f.bit_width - 1}]'
+                lines.append(f'  {bits}: {f.name}{access_str} — {desc}')
+    return lines
+
+
 def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_window, cm_dir_name, svd_device):
     fastdyn_log.info("Minimizing the context")
 
@@ -144,6 +196,18 @@ def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_win
                 for finding in peripheral_isr_findings:
                     f.write(f"{finding}\n")
             fastdyn_log.info(f"  ISR analysis saved to: {isr_file_path}")
+
+        # --- SVD bit field access types for mixed-access registers ---
+        svd_bitfield_lines = _extract_mixed_access_fields(svd_device, peripheral)
+        if svd_bitfield_lines:
+            svd_bf_path = os.path.join(peripheral_dir, "svd_bitfields.txt")
+            with open(svd_bf_path, 'w') as f:
+                f.write(f"# SVD Register Bit Field Access Types for {peripheral}\n")
+                f.write("# Per-field access types from the SVD for registers with mixed access.\n\n")
+                for line in svd_bitfield_lines:
+                    f.write(f"{line}\n")
+            fastdyn_log.debug(f"SVD bit fields saved to: {svd_bf_path}")
+
     fastdyn_log.info("Analysis complete and context minimized.")
 
     return output_dir
@@ -165,7 +229,15 @@ class MMIOAccess:
         ts_sec = self.timestamp_ns / 1e9
         access_str = f"[{ts_sec:10.6f}] {self.access_type.upper():<5} "
         if self.access_type == 'interrupt':
-            return f"[{ts_sec:10.6f}] INTERRUPT on {self.peripheral}, Vector={self.vector} (0x{self.vector:X})"
+            # self.vector stores the NVIC IRQ number (already adjusted from the
+            # raw trace's ARM exception number by subtracting 16). Show both
+            # forms explicitly so the LLM does not conflate them:
+            #   NVIC IRQn  : what ST's CMSIS header names (e.g. USART3_IRQn = 39)
+            #   Exception# : what qemu_plugin_raise_irq expects (NVIC IRQn + 16)
+            return (f"[{ts_sec:10.6f}] INTERRUPT on {self.peripheral}, "
+                    f"NVIC IRQn={self.vector} "
+                    f"(ARM exception #{self.vector+16} = 0x{self.vector+16:X}, "
+                    f"i.e. pass {self.vector+16} to qemu_plugin_raise_irq)")
         if self.peripheral and self.register:
             access_str += f"to {self.peripheral}->{self.register} (0x{self.address:08X}) value=0x{self.value:X}, pc=0x{self.pc:X}"
         else:
@@ -197,7 +269,13 @@ class MMIOAnalyzer:
         for (start, end), p in self.peripheral_map.items():
             if start <= addr < end:
                 for r in p.registers:
-                    if p.base_address + r.address_offset == addr: return p.name, r.name, r.description
+                    if hasattr(r, 'address_offset'):
+                        if p.base_address + r.address_offset == addr:
+                            return p.name, r.name, r.description
+                    elif hasattr(r, 'registers'):
+                        for sub_r in r.registers:
+                            if p.base_address + sub_r.address_offset == addr:
+                                return p.name, sub_r.name, sub_r.description
         return None, None, None
 
     def load_and_correlate_log(self, log_path: str) -> List[MMIOAccess]:
@@ -527,7 +605,16 @@ class MMIOAnalyzer:
                         else:
                              time_frequency_info = f"# Time Analysis: Aperiodic, average interval {mean_delta_ns / 1e6:.3f} ms (std dev: {std_dev_ns / 1e6:.3f} ms)\n"
 
-                header = (f"## Repeating ISR for Vector {interrupt_trigger.vector} (0x{interrupt_trigger.vector:X}) ##\n"
+                # interrupt_trigger.vector holds the NVIC IRQ number (already
+                # subtracted 16 from the raw ARM exception number at parse time).
+                # Show NVIC IRQn *and* ARM exception #, with the explicit value
+                # the model must pass to qemu_plugin_raise_irq, to avoid the
+                # common "LLM subtracts 16 again" failure mode.
+                nvic_irqn  = interrupt_trigger.vector
+                arm_excn   = interrupt_trigger.vector + 16
+                header = (f"## Repeating ISR — NVIC IRQn={nvic_irqn} "
+                          f"(ARM exception #{arm_excn} = 0x{arm_excn:X}) ##\n"
+                          f"# For qemu_plugin_raise_irq, pass NVIC IRQn + 16 = {arm_excn}.\n"
                           f"# Total Interrupts on this Vector: {total_interrupt_count}\n"
                           f"# Occurrences of this specific ISR trace: {trace_count}\n"
                           f"{time_frequency_info}")

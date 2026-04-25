@@ -354,7 +354,14 @@ static uint64_t twintrace_read(void *opaque, hwaddr address, unsigned size, uint
 
         pthread_mutex_lock(&hw_mutex);
         if (!hw) { pthread_mutex_unlock(&hw_mutex); utils_die("HW handle not initialized"); }
-        int status = hw_read32(hw, address, &value_read);
+        int status;
+        if (size == 1) {
+            uint8_t byte_val;
+            status = hw_read8(hw, address, &byte_val);
+            value_read = byte_val;
+        } else {
+            status = hw_read32(hw, address, &value_read);
+        }
         pthread_mutex_unlock(&hw_mutex);
 
         if (status != 0) utils_die("HW Read Failed");

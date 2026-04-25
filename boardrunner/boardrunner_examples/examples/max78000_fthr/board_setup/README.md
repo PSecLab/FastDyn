@@ -1,8 +1,8 @@
 You need to run this command in a separate terminal to run fastdyn:
 
 ```bash
-/path_to_maxim_openocd \
-  -s /work/Softwares/Maxim/Tools/OpenOCD/scripts \
+/scratch/Softwares/Maxim_Installation/Maxim_Installation_Folder/Tools/OpenOCD/bin/openocd \
+  -s /scratch/Softwares/Maxim_Installation/Maxim_Installation_Folder/Tools/OpenOCD/scripts \
   -f interface/cmsis-dap.cfg \
   -f target/max78000.cfg
 ```
