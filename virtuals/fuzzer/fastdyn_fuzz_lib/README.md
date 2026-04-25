@@ -1,6 +1,6 @@
 # FastDyn Unified Fuzzer
 
-This directory contains a unified fuzzer which allows to fuzz a Courbet system with CPFuzz.
+This directory contains a unified fuzzer which allows to fuzz a system.
 
 ## Building
 
@@ -14,12 +14,13 @@ docker build -t libafl .
 ```
 
 If you run into issues with this Dockerfile, try the following edits:
-- Update line 2 to 
- `FROM rust:1.91.0-bullseye AS libafl`
+
+- Update line 2 to
+  `FROM rust:1.91.0-bullseye AS libafl`
 - Remove the dependency `libgcc-12-dev:i386`
 - Add dependency `software-properties-common`
 - Add this line before qemu install:
- `RUN python3 -m pip install tomli`
+  `RUN python3 -m pip install tomli`
 - Try to build docker image again
 
 Then run the docker container with the following command:
@@ -56,4 +57,4 @@ Then, use the virtual instructions anchor and assert for fuzzing in the toml fil
     instruction = "assert"
     args        = "*0x08001000"
 
-When execution reaches that address, log a crash to the fuzzer, and set pc to the argument, which must start with a *
+When execution reaches that address, log a crash to the fuzzer, and set pc to the argument, which must start with a \*

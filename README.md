@@ -1,8 +1,11 @@
 # FastDyn Plugins
+
 ## How to run?
+
 Before running the setup, it is highly recommended to use a virtual environment to isolate dependencies.
 
 ### Install the venv package:
+
 ```bash
 sudo apt update
 sudo apt install python3-venv -y
@@ -11,26 +14,31 @@ sudo apt install python3-venv -y
 Create and activate the virtual environment:
 
 ### Create the environment (named 'venv')
+
 ```bash
 python3 -m venv fastdyn-env
 ```
+
 ### Activate it
+
 ```bash
 source fastdyn-env/bin/activate
 ```
 
 (Note: You can deactivate the environment later by simply running deactivate)
 
-
 ### Install `Fastdyn` as a package using:
+
 ```bash
 ./setup.sh
 ```
+
 You can pass the arguments using -c for configuration.toml, -m for symbol map file and -o for output dir. Further use:
 
 ```bash
 fastdyn --help
 ```
+
 to get more information about our great tool.
 
 1. Make sacrifice for debugging gods so your debugging and rehosting goes smoothly.
@@ -42,25 +50,31 @@ to get more information about our great tool.
    ```bash
    make qemu_path="/home/fastdyn-qemu"
    ```
+
    if you don't pass the `qemu_path` argument, then, it will use the `../qemu` as the path for the QEMU.
    The Makefile will set up the build and run `ninja`.
    also,
    #TODO: Update this later to be more efficient
+
    ```bash
    export LD_LIBRARY_PATH=/home/FastDyn/build:Fastdyn/FastDyn/device_models/postmartem/verifier
    ```
 
-3. By default the libraries like `libhw` and `libgz` disabled. To enable them, please go to `Makefile` and change the respective flags.
+4. By default the libraries like `libhw` and `libgz` disabled. To enable them, please go to `Makefile` and change the respective flags.
 
 ### Extras Update the readme later
+
 We expect the `cmsis-svd-data` to be placed for the generator and verifier wherever you are the running the command!
 We recommend running the command from the main directory of fastdyn. (Do we need to update this?)
 
+## Fuzzer
 
+For the fuzzer setup, please refer to `virtuals/fuzzer/fastdyn_fuzz_lib/README.md`.
 
 ## Required OS Dependencies
 
 For Sundial build of Fastdyn:
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y libsundials-dev pkg-config
@@ -130,17 +144,17 @@ fastdyn llm -d fastdyn_work_adc -o model.c --no-stateless
 
 ### Command Reference
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-d` / `--work-dir` | (required) | Work directory with prompt files |
-| `-o` / `--output` | (required) | Model .c file path |
-| `--model` | `gpt-4o` | OpenAI model name |
-| `--env-file` | `~/.fastdyn.env` | Path to .env file with API key |
-| `--temperature` | `0.2` | Sampling temperature |
-| `--stateless` / `--no-stateless` | `--stateless` | Keep or strip the conversation reset line |
-| `--compile` / `--no-compile` | `--no-compile` | Compile model after writing |
-| `--sdk-dir` | `boardrunner/boardrunner_sdk` | Path to boardrunner SDK |
-| `--max-retries` | `1` | Max retry attempts on failure |
+| Option                           | Default                       | Description                               |
+| -------------------------------- | ----------------------------- | ----------------------------------------- |
+| `-d` / `--work-dir`              | (required)                    | Work directory with prompt files          |
+| `-o` / `--output`                | (required)                    | Model .c file path                        |
+| `--model`                        | `gpt-4o`                      | OpenAI model name                         |
+| `--env-file`                     | `~/.fastdyn.env`              | Path to .env file with API key            |
+| `--temperature`                  | `0.2`                         | Sampling temperature                      |
+| `--stateless` / `--no-stateless` | `--stateless`                 | Keep or strip the conversation reset line |
+| `--compile` / `--no-compile`     | `--no-compile`                | Compile model after writing               |
+| `--sdk-dir`                      | `boardrunner/boardrunner_sdk` | Path to boardrunner SDK                   |
+| `--max-retries`                  | `1`                           | Max retry attempts on failure             |
 
 ### How It Works
 
