@@ -244,7 +244,60 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         #create a binary for faster parsing of hardware log for the replayer
         replay_binary = os.path.join(out_path, "replay_bin.ttbin")
         print(replay_hardware_log)
-        twintrace.convert(replay_hardware_log, replay_binary, only_model=None)
+
+        # Decide what to put in the .ttbin based on the TOML's replay-time
+        # routing. Two replay modes the framework supports (per paper §RQ2,
+        # tab:rq1_sixcase_f103, columns "Replay (all trace)" vs
+        # "Replay (target model only)"):
+        #
+        #   * All-trace:    every peripheral routes through twintrace at
+        #                   replay time. The .ttbin must contain every
+        #                   recorded event. Heuristic: no device has the
+        #                   passthrough handler enabled.
+        #
+        #   * Target-only:  only the target peripheral(s) replay; the rest
+        #                   stay on passthrough (live HW). The .ttbin must
+        #                   contain only the target's events, otherwise
+        #                   replay's index walks past records that QEMU
+        #                   never delivers (bookkeeping divergence at idx=0).
+        #                   Heuristic: at least one device has the
+        #                   passthrough handler enabled.
+        #
+        # The filter axis is **address range / IRQ vector**, NOT the
+        # [model] tag in the io.log. Tags reflect the recording-time
+        # routing (often "everything on twintrace" so the same trace can
+        # serve both replay columns); ranges/IRQs reflect the replay-time
+        # routing the user is configuring now.
+        twintrace_devices = [
+            dev for dev in machine.devices.values()
+            if any(h.model == "twintrace" and h.enabled for h in dev.handlers)
+        ]
+        if not twintrace_devices:
+            raise ValueError(
+                "twintrace = 'replay' requires at least one [Device.X] "
+                "with a twintrace handler enabled; none found."
+            )
+
+        passthrough_enabled = any(
+            h.model == "passthrough" and h.enabled
+            for dev in machine.devices.values()
+            for h in dev.handlers
+        )
+
+        target_ranges = None
+        target_irqs = None
+        if passthrough_enabled:
+            target_ranges = []
+            target_irqs = []
+            for dev in twintrace_devices:
+                for r in (dev.supported_ranges or []):
+                    target_ranges.append((int(r[0]), int(r[1])))
+                for v in (dev.irq_range or []):
+                    target_irqs.append(int(v))
+
+        twintrace.convert(replay_hardware_log, replay_binary,
+                          target_ranges=target_ranges,
+                          target_irqs=target_irqs)
         #quick verification
         twintrace.replay_binary_verifier(replay_binary)
     elif twintrace_opt == "None":
