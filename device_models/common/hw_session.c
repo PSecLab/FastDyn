@@ -99,7 +99,6 @@ static void *hw_session_poll_thread(void *arg)
             dev_debug("Register%d: 0x%lx\n", 15, hw_read_reg(s->hw, 15));
             pthread_mutex_unlock(&s->hw_mutex);
 
-            printf("the irq is %d\n", firing_line);
             qemu_plugin_raise_irq(firing_line + IRQ_QEMU_VECTOR_BASE, false);
         } else {
             pthread_mutex_unlock(&s->hw_mutex);

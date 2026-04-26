@@ -1,3 +1,4 @@
+import sys
 import tomli
 import logging
 
@@ -156,6 +157,25 @@ def parser(out_dir, machine_name, toml_config, svd_path):
                 scroll=handler.get('scroll',None),
                 type=handler.get('type', None)
             )
+
+        # Reject configs that enable more than one hardware-talking
+        # backend on the same device range. passthrough and twintrace
+        # both forward MMIO to the probe, so enabling both means every
+        # firmware write becomes two probe writes to the same address
+        # (corrupts clear-on-write registers, FIFO data registers,
+        # etc.). Pick exactly one.
+        HW_BACKENDS = {"passthrough", "twintrace"}
+        hw_enabled = [h.model for h in device_handler.handlers
+                      if h.enabled and h.model in HW_BACKENDS]
+        if len(hw_enabled) > 1:
+            fastdyn_log.error(
+                f"[Device.{device}] enables multiple hardware-talking "
+                f"backends on the same range: {hw_enabled}. "
+                f"passthrough and twintrace both issue MMIO to the "
+                f"physical probe; enabling both duplicates every write. "
+                f"Set 'enabled = false' on all but one."
+            )
+            sys.exit(1)
 
         #add device ranges
         for range in device_info.get('ranges'):
