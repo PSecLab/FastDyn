@@ -15,8 +15,10 @@
 #include "fuzz_trace.h"
 
 bool                g_trace_enabled    = false;
+#if ENABLE_AFLNET
 static bool         g_trace_run_started = false;
 static bool         g_trace_has_prev = false;
+#endif
 
 // ----------------------------------------------------------------------------------------------
 // Purpose of this file, when forced_trace = true in fuzz.c, it will trace all blocks,

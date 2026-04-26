@@ -44,7 +44,7 @@ void fuzz_trace_compare(void);
 /* Reset the baseline so the next non-empty run becomes the new reference. */
 void fuzz_trace_reset(void);
 #else
-static void fuzz_trace_record_pc(uint32_t pc) {
+static inline void fuzz_trace_record_pc(uint32_t pc) {
     (void)pc;
 }
 #endif

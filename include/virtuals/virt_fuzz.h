@@ -7,6 +7,10 @@
 // Need this include for the ENABLE_LIBFUZZ definition
 #include <config.h>
 
+#if ENABLE_LIBFUZZ || ENABLE_AFLNET
+int  fuzz_init(int argc, char **argv);
+#endif
+
 #if ENABLE_LIBFUZZ
 
 void fuzz_bbl_observe(uint32_t pc, uint32_t size);

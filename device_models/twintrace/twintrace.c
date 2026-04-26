@@ -1,9 +1,10 @@
 // device_models/twintrace.c
 
 #include <device.h>
-#include <hw.h>
 #include <utils.h>
 #include <core.h>
+
+#include "../common/hw_session.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -51,13 +52,9 @@ _Static_assert(sizeof(tt_hdr_t) == 20, "tt_hdr_t must be 20 bytes");
 _Static_assert(sizeof(tt_rec_t) == 40, "tt_rec_t must be 40 bytes");
 
 // -----------------------
-// Record mode: hardware backend (passthrough semantics)
+// Record mode: shared hw_session (see device_models/common/hw_session.h)
 // -----------------------
-static hw_t *hw = NULL;
-static pthread_t dev_thread;
-static pthread_mutex_t hw_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t irq_cv = PTHREAD_COND_INITIALIZER;
-static int irq_pending;
+static hw_session_t *s_session;
 
 // -----------------------
 // Replay mode: mapped tape
@@ -249,41 +246,10 @@ next_iter:
     }
 }
 
-// -----------------------
-// IRQ thread (record mode only, same idea as passthrough)
-// -----------------------
-static void* dev_thread_fn(void* arg)
-{
-    (void)arg;
-    while (1) {
-        pthread_mutex_lock(&hw_mutex);
-        while (irq_pending) {
-            pthread_cond_wait(&irq_cv, &hw_mutex);
-        }
-
-        if (hw_board_halted(hw)) {
-            int firing_line = (int)hw_read_reg(hw, 0);
-            irq_pending = firing_line;
-            pthread_mutex_unlock(&hw_mutex);
-            qemu_plugin_raise_irq(firing_line + 16, false);
-        } else {
-            pthread_mutex_unlock(&hw_mutex);
-            sleep(5);
-        }
-    }
-    return NULL;
-}
-
 static int twintrace_serve(int line)
 {
     if (g_mode == TT_RECORD) {
-        pthread_mutex_lock(&hw_mutex);
-        hw_write_reg(hw, 1, line);
-        hw_board_run(hw);
-        irq_pending = 0;
-        pthread_cond_signal(&irq_cv);
-        pthread_mutex_unlock(&hw_mutex);
-        return 0;
+        return hw_session_serve(s_session, line);
     }
 
     if (g_mode != TT_REPLAY) return 0;
@@ -350,22 +316,11 @@ static uint64_t twintrace_read(void *opaque, hwaddr address, unsigned size, uint
     (void)opaque;
 
     if (g_mode == TT_RECORD) {
-        uint32_t value_read = 0;
-
-        pthread_mutex_lock(&hw_mutex);
-        if (!hw) { pthread_mutex_unlock(&hw_mutex); utils_die("HW handle not initialized"); }
-        int status;
-        if (size == 1) {
-            uint8_t byte_val;
-            status = hw_read8(hw, address, &byte_val);
-            value_read = byte_val;
-        } else {
-            status = hw_read32(hw, address, &value_read);
+        uint64_t value = 0;
+        if (hw_session_read(s_session, address, size, &value, pc) != 0) {
+            utils_die("HW Read Failed");
         }
-        pthread_mutex_unlock(&hw_mutex);
-
-        if (status != 0) utils_die("HW Read Failed");
-        return value_read;
+        return value;
     }
 
     // replay
@@ -406,16 +361,9 @@ static void twintrace_write(void *opaque, hwaddr address, uint64_t value, unsign
     (void)opaque;
 
     if (g_mode == TT_RECORD) {
-        pthread_mutex_lock(&hw_mutex);
-        if (!hw) { pthread_mutex_unlock(&hw_mutex); utils_die("HW handle not initialized"); }
-
-        int status;
-        if (size == 1) status = hw_write8(hw, address, (uint32_t)value);
-        else           status = hw_write32(hw, address, (uint32_t)value);
-
-        pthread_mutex_unlock(&hw_mutex);
-
-        if (status != 0) utils_die("HW Write Failed");
+        if (hw_session_write(s_session, address, value, size, pc) != 0) {
+            utils_die("HW Write Failed");
+        }
         return;
     }
 
@@ -499,14 +447,9 @@ static void* twintrace_init(ConfigSection* model_info)
             model_info->backend ? model_info->backend : "(null)");
 
     if (g_mode == TT_RECORD) {
-        // behave like passthrough
-        hw = hw_connect(model_info->backend, NULL, 0);
-        if (!hw) utils_die("HW connection failed");
-
-        if (pthread_create(&dev_thread, NULL, dev_thread_fn, NULL) != 0) {
-            perror("Failed to create IRQ thread");
-            return NULL;
-        }
+        // behave like passthrough; share the probe via hw_session
+        s_session = hw_session_acquire(model_info->backend);
+        if (!s_session) utils_die("HW connection failed");
     } else if (g_mode == TT_REPLAY) {
         if (!g_bin_path || !g_bin_path[0]) utils_die("twintrace_bin missing for replay");
         tt_replay_open(g_bin_path);
