@@ -1,32 +1,11 @@
 #!/usr/bin/env python3
 """
-modbus_bridge.py — Host-side pymodbus driver for the Nucleo-F103RB Modbus
-RTU slave example.
-
-This script *is* the application-layer test for the firmware. It exercises a
-representative spread of FreeMODBUS function codes so that:
-
-  - Step 0 passthrough captures a hardware trace covering FC 01/02/03/04/
-    05/06/0F/10 (coils + discrete + holding + input registers, single + multi).
-  - Step 3 elder-mode driving uses the same byte sequence end-to-end so the
-    BoardRunner-generated USART2 model is validated against the same surface
-    it was synthesized from.
-  - Later fuzz campaigns can swap pymodbus for a structured mutator hitting
-    the exact same UART, with the firmware unchanged.
+modbus_bridge.py — Host-side Modbus RTU driver for the Nucleo-F103RB
+slave example. Exercises FC 01/02/03/04/05/06/0F/10.
 
 Usage:
-    Passthrough (real board, ST-Link VCP):
-        python3 modbus_bridge.py --serial /dev/ttyACM0
-
-    Elder mode (socat-spliced PTY pair from the BoardRunner model side):
-        python3 modbus_bridge.py --serial /tmp/host_modbus
-
-Bug-attribution discipline: the script never assumes a specific response
-shape beyond what pymodbus already validates. Any divergence between
-hardware-trace and elder-mode behaviour indicates a bug in the BoardRunner-
-generated USART2 model. Any FreeMODBUS-side crash under fuzzing is a
-genuine FreeMODBUS finding because this driver only sends well-formed
-frames during the passthrough/elder steps.
+    python3 modbus_bridge.py --serial /dev/ttyACM0   # real board (ST-Link VCP)
+    python3 modbus_bridge.py --serial /tmp/host_modbus  # elder-mode PTY
 """
 import argparse
 import logging
@@ -41,6 +20,33 @@ except ImportError:
         "    pip3 install --user 'pymodbus>=3.0'\n"
     )
     sys.exit(1)
+
+import serial
+
+
+def install_paced_write(pace_ms: float) -> None:
+    """Patch serial.Serial.write so every TX call sends bytes one at a
+    time with `pace_ms` of sleep between them. Stays well under
+    FreeMODBUS RTU's t3.5 (~59 ms at 600 baud), so the chip still sees
+    a single contiguous frame."""
+    if pace_ms <= 0.0:
+        return
+    original_write = serial.Serial.write
+    delay_s = pace_ms / 1000.0
+
+    def _paced_write(self, data):
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            buf = bytes(data)
+            for i, byte in enumerate(buf):
+                original_write(self, bytes([byte]))
+                self.flush()
+                if i + 1 < len(buf):
+                    time.sleep(delay_s)
+            return len(buf)
+        return original_write(self, data)
+
+    serial.Serial.write = _paced_write
+
 
 SLAVE_ID = 0x0A   # matches modbus_app.c:SLAVE_ID
 
@@ -63,10 +69,8 @@ def expect(label, ok, detail=""):
 
 
 def exercise(client):
-    """Hit every register-callback path FreeMODBUS exposes, plus a few
-    application-layer behaviours. Each call lights up a different branch
-    in the FreeMODBUS dispatcher; cumulatively they cover FC 01/02/03/04/
-    05/06/0F/10."""
+    """Run one pass over every register-callback path FreeMODBUS exposes,
+    covering FC 01/02/03/04/05/06/0F/10."""
     failures = 0
 
     banner("Read input registers (FC 04) — sanity / liveness")
@@ -163,16 +167,21 @@ def main():
     p = argparse.ArgumentParser(description="Modbus RTU slave host driver")
     p.add_argument("--serial", default="/dev/ttyACM0",
                    help="Serial port (real ST-Link VCP or socat'd PTY)")
-    p.add_argument("--baud", type=int, default=1200)
-    p.add_argument("--timeout", type=float, default=3.0,
-                   help="pymodbus per-frame timeout in seconds (1200 baud is slow)")
+    p.add_argument("--baud", type=int, default=600)
+    p.add_argument("--timeout", type=float, default=5.0,
+                   help="pymodbus per-frame timeout in seconds")
     p.add_argument("--repeat", type=int, default=1,
                    help="Run the exercise N times back-to-back to grow the trace")
+    p.add_argument("--pace-ms", type=float, default=20.0,
+                   help="Inter-byte gap on TX in ms (0 = back-to-back). "
+                        "Must stay below FreeMODBUS RTU t3.5.")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
+
+    install_paced_write(args.pace_ms)
 
     client = ModbusSerialClient(port=args.serial, baudrate=args.baud,
                                 bytesize=8, parity="N", stopbits=1,
