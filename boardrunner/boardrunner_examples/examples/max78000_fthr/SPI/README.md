@@ -1,56 +1,39 @@
 # SPI — Transmit/Receive Byte (Loopback)
 
-**Firmware:** SPI0 master polling mode. Transmits 16 bytes of `0xA5` at 100 kHz (8-bit width) and receives them back via an external MOSI-to-MISO loopback wire. Verifies all 16 received bytes match the transmitted data. LED green = pass, LED red = fail.
-
 **Board:** MAX78000FTHR
 
-**Required model goal:**
+The firmware uses SPI0 in master polling mode to transmit 16 bytes of `0xA5` and receive them back over an external MOSI-to-MISO loopback wire. PASS if all 16 received bytes match.
 
-1. Transmit a byte
-2. Receive a byte
+## Hardware Connections
 
----
-
-## Hardware Wiring
-
-| Connection | Pin | Header | Notes |
-|-----------|-----|--------|-------|
-| MOSI | P0.5 | J8 pin 12 | Wire to MISO |
-| MISO | P0.6 | J8 pin 13 | Wire from MOSI |
+| Connection | Pin                | Header     | Notes              |
+| ---------- | ------------------ | ---------- | ------------------ |
+| MOSI       | P0.5               | J8 pin 12  | Wire to MISO       |
+| MISO       | P0.6               | J8 pin 13  | Wire from MOSI     |
 
 Connect MOSI to MISO with a jumper wire to create the loopback path.
 
-**LED indicators (on-board):**
+## Expected Output
 
-| LED | Meaning |
-|-----|---------|
-| Green LED | Data verified — test passed |
-| Red LED | Data mismatch — test failed |
-| Console prints "Test PASSED" / "Test FAILED" | UART semihosting output |
+- Console prints transmitted and received byte sequence, then `PASSED`
+- Green LED on
 
----
+## Test Scope
+
+- Transmit a byte
+- Receive a byte
 
 ## Compositional Model Split
 
-Two models: SPI0 master controller + loopback slave. All other peripherals are passthrough.
+| Component   | Peripheral             | Compiled to     |
+| ----------- | ---------------------- | --------------- |
+| Elder model | SPI0 (master)          | `model.so`      |
+| Elder slave | loopback (CS 0)        | `slave.so`      |
+| Passthrough | UART, GCR, GPIO, all others | real hardware |
 
-| Component | Peripheral | Generated file | Compiled to |
-|-----------|-----------|----------------|-------------|
-| Model 1 | SPI0 (master controller) | `generated_models/spi0_model.c` | `model.so` |
-| Slave model | Loopback wire | `generated_models/loopback_slave.c` | `slave.so` |
-| Passthrough | GPIO0 (SPI AF pins), GPIO2 (LEDs), GCR, UART, TMR, all others | -- | real hardware |
+## Commands
 
-**CS control:** SPI0's model infers CS from the SPI register trace. The slave exports the fixed symbols `slave_spi_transfer` and `slave_spi_set_cs`.
-
-**Loopback slave behavior:** `slave_spi_transfer(byte)` returns the same byte it receives. `slave_spi_set_cs(level)` is a no-op (wire has no CS logic).
-
----
-
-## Prerequisites
-
-### OpenOCD (required for passthrough)
-
-Before running any `fastdyn run` command, start OpenOCD in a **separate terminal**:
+### Start OpenOCD (separate terminal)
 
 ```bash
 /scratch/Softwares/Maxim_Installation/Maxim_Installation_Folder/Tools/OpenOCD/bin/openocd \
@@ -59,26 +42,18 @@ Before running any `fastdyn run` command, start OpenOCD in a **separate terminal
   -f target/max78000.cfg
 ```
 
-Keep this terminal open for the duration of the passthrough or hybrid run.
-
-### Idle firmware
-
-Ensure the idle firmware is flashed to the board:
+### Flash the idle firmware
 
 ```bash
 boardrunner/boardrunner_examples/examples/max78000_fthr/board_setup/flash.sh \
   tests/idle_firmwares/prebuilt/idle_firmware_max78000.elf
 ```
 
----
-
 ## Step-by-Step Workflow
 
-### Step 0 -- Passthrough run (collect hardware I/O trace)
+### Step 0 — Passthrough run (collect hardware I/O trace)
 
-Run the firmware against real hardware in passthrough mode. FastDyn records every peripheral register access to `hardware_log/io.log`.
-
-> **TOML state:** Before running this step, temporarily set the SPI0 elder handler to `enabled = false` and the passthrough handler to `enabled = true` in `spi_config.toml`. Restore elder mode (elder `enabled = true`, passthrough `enabled = false`) before Step 3.
+> **TOML state:** Set SPI0 elder handler to `enabled = false` and passthrough handler to `enabled = true` in `spi_config.toml`. Restore elder mode before Step 5.
 
 ```bash
 fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/SPI/spi_config.toml \
@@ -87,24 +62,18 @@ fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/SPI/spi_c
 
 Output: `hardware_log/io.log`
 
-### Step 1a -- Generate loopback slave model
-
-Generate the slave model **first** -- the SPI0 model depends on it at runtime (the slave is loaded by `api_spi_init_bus` inside the SPI0 model).
-
-The loopback slave is trivial: it echoes back whatever byte the master sends. Two inputs drive slave model generation:
-- `--firmware-code (-fc)`: the master's `main.c` -- shows the transaction structure and expected loopback behavior
-- `--reference-model (-rm)`: the STM32 BME280 `slave.c` -- structural reference for the SPI slave callback pattern
+### Step 1 — Generate slave model prompt
 
 ```bash
 fastdyn generate --slave-model \
   -b Max78000 \
   -p SPI0 \
-  -fc /scratch/Fastdyn/saved_maxim_examples/Examples/MAX78000/SPI/main.c \
+  -fc ../saved_maxim_examples/Examples/MAX78000/SPI/main.c \
   -rm boardrunner/boardrunner_examples/examples/STM32H753zi/SPI/generated_models/bme280_slave.c \
   -o ./fastdyn_work_loopback
 ```
 
-Send the generated slave prompt to the LLM and compile:
+### Step 2 — Compile slave model
 
 ```bash
 fastdyn llm -d fastdyn_work_loopback \
@@ -113,11 +82,7 @@ fastdyn llm -d fastdyn_work_loopback \
   --evaluate
 ```
 
-> The generated slave must export exactly `slave_spi_transfer` and `slave_spi_set_cs` -- the framework resolves these fixed symbols via `dlsym` when loading `slave.so`.
-
-### Step 1b -- Generate LLM prompt for SPI0 master model
-
-Encode the hardware trace for SPI0. The Encoder extracts init vs. steady-state patterns and computes per-register entropy.
+### Step 3 — Generate master model prompt
 
 ```bash
 fastdyn generate -hw hardware_log/io.log -b Max78000 \
@@ -127,7 +92,7 @@ fastdyn generate -hw hardware_log/io.log -b Max78000 \
   -o ./fastdyn_work_spi0
 ```
 
-### Step 2 -- Synthesize and compile the SPI0 model
+### Step 4 — Compile master model
 
 ```bash
 fastdyn llm -d fastdyn_work_spi0 \
@@ -136,24 +101,14 @@ fastdyn llm -d fastdyn_work_spi0 \
   --evaluate
 ```
 
-### Step 3 -- Run with both models (elder mode)
-
-> **TOML state:** The TOML ships in elder mode (elder `enabled = true`, passthrough `enabled = false` for SPI0). If you changed it for Step 0, restore it now.
-
-Both `model.so` (SPI0) and `slave.so` (loopback) must be compiled before running. The SPI0 model loads the slave automatically at init via `api_spi_init_bus`.
+### Step 5 — Run with the generated elder models
 
 ```bash
 fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/SPI/spi_config.toml \
   -s boardrunner/boardrunner_examples/examples/max78000_fthr
 ```
 
-Output: `io.log` (emulation trace)
-
-Expected behavior: Console prints "Test PASSED" and green LED lights.
-
-### Step 4 -- Verify against hardware trace
-
-> **Note:** Only SPI0 is passed to `-p`. Do NOT include passthrough-only peripherals (GPIO, GCR, UART, TMR, etc.) -- they would produce false mismatches.
+### Step 6 — Verify against hardware trace
 
 ```bash
 fastdyn verifier -hw hardware_log/io.log \
@@ -168,8 +123,6 @@ fastdyn verifier -hw hardware_log/io.log \
 
 #### Apply LLM correction patches (if mismatches found)
 
-If the Verifier writes `fastdyn_work/revised_prompt.txt`, send it back to the LLM:
-
 ```bash
 fastdyn llm -d fastdyn_work \
   -o boardrunner/boardrunner_sdk/model/model.c \
@@ -177,9 +130,7 @@ fastdyn llm -d fastdyn_work \
   --stateless --evaluate
 ```
 
-Repeat Steps 3-4 until the Verifier reports no mismatches. Capped at 6 iterations for the ablation study.
-
-Once verified, copy the final models to the example's generated_models directory:
+Once verified, snapshot both models:
 
 ```bash
 cp boardrunner/boardrunner_sdk/model/model.c \
@@ -188,11 +139,3 @@ cp boardrunner/boardrunner_sdk/model/model.c \
 cp boardrunner/boardrunner_sdk/model/slave.c \
    boardrunner/boardrunner_examples/examples/max78000_fthr/SPI/generated_models/loopback_slave.c
 ```
-
----
-
-## Configuration
-
-Platform configuration: [`spi_config.toml`](spi_config.toml)
-
-All FastDyn CLI options are documented in `src/fastdyn/main.py`.

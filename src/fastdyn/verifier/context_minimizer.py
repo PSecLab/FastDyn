@@ -83,6 +83,13 @@ def minimize_context(out_dir, log_file, platform, method, peripheral, n, isr_win
 
     accesses_by_peripheral = defaultdict(list)
     for acc in all_accesses:
+        # irq_served events are internal markers used only for ISR-window
+        # boundary detection in analyze_isr_behavior; they have no MMIO
+        # payload (no address/value/pc), so excluding them from the
+        # per-peripheral analysis avoids __repr__ crashes and keeps the
+        # init/runtime/loop files exactly as they were before.
+        if acc.access_type == 'irq_served':
+            continue
         accesses_by_peripheral[acc.peripheral].append(acc)
 
     with open(os.path.join(output_dir, "summary.txt"), 'w') as f:
@@ -295,25 +302,31 @@ class MMIOAnalyzer:
             r'(?:icount=(?P<icount>\d+)\s+)?'
             r'Interrupt Taken:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)'
         )
+        irq_served_pattern = re.compile(
+            r'\[\s*(?P<timestamp>\d+\.\d+)\s*\]\s*'
+            r'(?:icount=(?P<icount>\d+)\s+)?'
+            r'Interrupt Served:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)'
+        )
         enriched_accesses = []
         try:
             with open(log_path, 'r') as f:
                 for line_num, line in enumerate(f, 1):
                     match = log_pattern.match(line.strip())
                     interrupt_match = interrupt_pattern.match(line.strip())
-                    if interrupt_match:
-                        data = interrupt_match.groupdict()
+                    served_match = irq_served_pattern.match(line.strip())
+                    if interrupt_match or served_match:
+                        m = interrupt_match if interrupt_match else served_match
+                        data = m.groupdict()
                         vector = int(data['vector'], 16) - 16   #Map to the actual interrupt number
                         if vector < 0:
                             continue    #not an external interrupt, ignore!
                         p_name = self.interrupt_map.get(vector)
                         if p_name is None:
                             fastdyn_log.warn(f"On log line {line_num}: Failed to map interrupt vector {vector} (0x{vector:X}) to any SVD peripheral.")
-                            # sys.exit(1)
                             continue
                         access = MMIOAccess(
                             timestamp_ns=int(float(data['timestamp']) * 1e9),
-                            access_type='interrupt',
+                            access_type='interrupt' if interrupt_match else 'irq_served',
                             icount=icount,
                             peripheral=p_name,
                             vector=vector
@@ -556,8 +569,16 @@ class MMIOAnalyzer:
                 subsequent_event = all_events[j]
                 time_delta = subsequent_event.timestamp_ns - interrupt_event.timestamp_ns
 
+                # Hard boundary: stop at the matching IRQ-Served event for this vector.
+                # This is more accurate than a fixed time window — in fast emulation,
+                # post-ISR polling can fall inside the window and corrupt the abstract
+                # trace (causing each ISR occurrence to look unique → no findings).
+                if (subsequent_event.access_type == 'irq_served'
+                        and subsequent_event.vector == interrupt_event.vector):
+                    break
+
                 if 0 < time_delta <= isr_window_ns:
-                    if subsequent_event.access_type != 'interrupt':
+                    if subsequent_event.access_type not in ('interrupt', 'irq_served'):
                         isr_trace_concrete.append(subsequent_event)
                 elif time_delta > isr_window_ns:
                     break

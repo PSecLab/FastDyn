@@ -130,12 +130,37 @@ def diff_isr_analysis(diff_data, periph_hw, periph_em):
             if isr_hw[isr_iter] != isr_sw[isr_iter]:
                 fastdyn_log.warn(f"ISR Loop iteration {isr_iter} by the emulated device model does not match exactly with hardware - Warning only")
 
-    diff_data.isr_analysis_data = f'''
-    Hardware ISR Analysis
-    {isr_hw}
+    # Cap the dumped ISR data so an ISR storm in emulation cannot balloon the
+    # revised prompt past the LLM's per-message size limit. The encoder already
+    # deduplicates by abstract trace pattern; here we additionally bound the
+    # iteration count and per-iteration event count for prompt sanity.
+    MAX_ISR_ITERS  = 15
+    MAX_EVENTS_PER = 60
 
-    Emulated Model ISR Analysis
-    {isr_sw}
+    def _shrink(iters):
+        out = []
+        for it in iters[:MAX_ISR_ITERS]:
+            if len(it) > MAX_EVENTS_PER:
+                out.append(it[:MAX_EVENTS_PER] + [
+                    ['...', f'{len(it) - MAX_EVENTS_PER} more events truncated']
+                ])
+            else:
+                out.append(it)
+        return out
+
+    hw_show = _shrink(isr_hw)
+    sw_show = _shrink(isr_sw)
+    hw_omitted = max(0, len(isr_hw) - MAX_ISR_ITERS)
+    sw_omitted = max(0, len(isr_sw) - MAX_ISR_ITERS)
+
+    diff_data.isr_analysis_data = f'''
+    Hardware ISR Analysis ({len(isr_hw)} iterations total, showing first {len(hw_show)})
+    {hw_show}
+    {f"# ... {hw_omitted} more iterations omitted (identical pattern)" if hw_omitted else ""}
+
+    Emulated Model ISR Analysis ({len(isr_sw)} iterations total, showing first {len(sw_show)})
+    {sw_show}
+    {f"# ... {sw_omitted} more iterations omitted (identical pattern)" if sw_omitted else ""}
 
     '''
 

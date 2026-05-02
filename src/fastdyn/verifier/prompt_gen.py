@@ -280,8 +280,8 @@ implement self-clearing/auto-transitioning bits in that register!
 
 # Base QEMU/FastDyn APIs (always available, even in --no-vio ablation mode)
 qemu_base_api_list = """
-- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes `len` bytes from `mem_buf` to guest memory at `addr`. Valid for RAM addresses only; calls targeting an address inside the SoC's MMIO window are blocked by QEMU's per-MemoryRegion re-entrancy guard and return zero with a `Blocked re-entrant IO` warning.
-- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads `len` bytes from guest memory at `addr` into `mem_buf`. Same RAM-only restriction as `qemu_plugin_write_memory`.
+- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes `len` bytes from `mem_buf` to guest memory at `addr`. Returns **0 on success, non-zero on error** — does NOT return the byte count (unlike POSIX read/write). Valid for RAM addresses only; calls targeting an address inside the SoC's MMIO window are blocked by QEMU's per-MemoryRegion re-entrancy guard and return zero with a `Blocked re-entrant IO` warning.
+- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads `len` bytes from guest memory at `addr` into `mem_buf`. Returns **0 on success, non-zero on error** — does NOT return the byte count. Same RAM-only restriction as `qemu_plugin_write_memory`.
 - `int qemu_plugin_read_register(int reg, uint8_t *buf)`: Reads a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_raise_irq(int irq, false)`: Raises an interrupt line, MUST: use interrupt + 16, here false means non-secure interrupt, dont change it to true!.
@@ -294,8 +294,8 @@ qemu_base_api_list = """
 
 # Define the full QEMU API context (base + VIO)
 qemu_api_list = """
-- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes `len` bytes from `mem_buf` to guest memory at `addr`. Valid for RAM addresses only; calls targeting an address inside the SoC's MMIO window are blocked by QEMU's per-MemoryRegion re-entrancy guard and return zero with a `Blocked re-entrant IO` warning.
-- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads `len` bytes from guest memory at `addr` into `mem_buf`. Same RAM-only restriction as `qemu_plugin_write_memory`.
+- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes `len` bytes from `mem_buf` to guest memory at `addr`. Returns **0 on success, non-zero on error** — does NOT return the byte count (unlike POSIX read/write). Valid for RAM addresses only; calls targeting an address inside the SoC's MMIO window are blocked by QEMU's per-MemoryRegion re-entrancy guard and return zero with a `Blocked re-entrant IO` warning.
+- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads `len` bytes from guest memory at `addr` into `mem_buf`. Returns **0 on success, non-zero on error** — does NOT return the byte count. Same RAM-only restriction as `qemu_plugin_write_memory`.
 - `int qemu_plugin_read_register(int reg, uint8_t *buf)`: Reads a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_raise_irq(int irq, false)`: Raises an interrupt line, MUST: use interrupt + 16, here false means non-secure interrupt, dont change it to true!.

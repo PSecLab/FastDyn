@@ -41,7 +41,7 @@ finline      = ""
 
 
   # ---------------------------------------------------------------------------
-  # Extra memory banks (optional)
+  # Extra memory banks (optional)  (your old "shared RAM")
   # ---------------------------------------------------------------------------
   [[Memory.ram1]]
   id           = "ram1"
@@ -66,7 +66,7 @@ finline      = ""
   machine = "cortexm"
   cpu     = "cortex-m4"
 
-  binary      = "boardrunner/boardrunner_examples/examples/max78000_fthr/GPIO_INT/firmware/GPIO_INT.elf"
+  binary      = "boardrunner/boardrunner_examples/examples/max78000_fthr/TIMER/firmware/TMR.elf"
 
   init_nsvtor = "0x10000000"
 
@@ -111,55 +111,53 @@ finline      = ""
 
 # --- Peripheral Definitions ---
 
-# GPIO0 — Input pin with interrupt for button press detection.
-# The firmware configures P0.2 (SW1) as input with pull-up and falling-edge
-# interrupt. When the button is pressed, GPIO0 IRQ 24 fires, the ISR clears
-# INTFL and toggles the LED on GPIO2. This is the primary model target.
-# Key registers: EN0, INEN, INTEN, INTPOL, INTMODE, INTFL, INTFL_CLR, PADCTRL0/1
-[Device.gpio0]
-  ranges       = [["0x40008000", "0x400080FF"]]
-  irq = [['1','100']]
-  description  = "GPIO Port 0: input pin P0.2 (SW1 button). Falling-edge interrupt (IRQ 24) triggers callback that toggles LED on GPIO2."
+# TMR1 — 32-bit timer in continuous mode (20 Hz, IBRO clock, prescaler 4).
+# Firmware reads the counter register (CNT) and uses the update interrupt
+# (IRQ 6) to fire a callback. Registers: CNT, CMP, PWM, INTFL, CTRL0,
+# NOLCMP, CTRL1, WKFL.
+[Device.tmr1]
+  ranges       = [["0x40011000", "0x40011FFF"]]
+  irq          = [['1', '150']]
+  description  = "Timer 1: 32-bit continuous mode, 20 Hz. Counter read + interrupt callback test. IRQ 6."
   read_priority = "elder"
 
-  [[Device.gpio0.handlers]]
+  [[Device.tmr1.handlers]]
   model   = "elder"
   enabled = true
   scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
-  [[Device.gpio0.handlers]]
+  [[Device.tmr1.handlers]]
   model   = "classic"
   enabled = false
 
-  [[Device.gpio0.handlers]]
+  [[Device.tmr1.handlers]]
   model   = "passthrough"
   enabled = false
 
-  [[Device.gpio0.handlers]]
+  [[Device.tmr1.handlers]]
   model   = "twintrace"
   enabled = false
 
 # Remaining memory regions passed through to real hardware.
-# GPIO2 (P2.0 LED) is passthrough so that MXC_GPIO_OutToggle in the ISR
-# writes to real hardware and the physical LED toggles on the board.
 # Includes:
-#   GCR     (0x40000000) — clock/reset control
+#   GCR     (0x40000000) — clock/reset control (touched during MXC_TMR_Init)
+#   GPIO0   (0x40008000) — not used by this firmware
 #   GPIO1   (0x40009000) — not used by this firmware
-#   GPIO2   (0x40080400) — LED output, passthrough to real hardware
-#   TMR0-3  (0x40010000-0x40013FFF) — not used (no MXC_Delay)
+#   GPIO2   (0x40080400) — LED output (red/green)
+#   TMR0    (0x40010000) — not used by this firmware
+#   TMR2-3  (0x40012000-0x40013FFF) — not used
 #   I2C0-2  (0x4001D000-0x4001FFFF) — not used
 #   UART0-2 (0x40042000-0x40044FFF) — printf console output
 #   SPI1    (0x40046000) — not used
 [Device.passthrough_space]
-  irq = [['1','100']]
-
+  irq = [['1','150']]
   ranges = [
-    ["0x40000000", "0x40007FFF"],   # all peripherals before GPIO0
-    ["0x40008100", "0xE00FFFFF"],   # everything after GPIO0 (including GPIO2, UART, etc.)
+    ["0x40000000", "0x40010FFF"],   # all peripherals before TMR1
+    ["0x40012000", "0xE00FFFFF"],   # all peripherals after TMR1 (includes GPIO2, UART, etc.)
     ["0xE0000000", "0xEFFFFFFF"]    # Cortex-M4 system space (NVIC, SysTick, SCB)
   ]
 
-  description = "Memory regions handled by passthrough. Includes GCR, UART (printf), and all non-modeled peripherals."
+  description = "Memory regions handled by passthrough. Includes GCR, GPIO2 (LEDs), UART (printf), and all non-modeled peripherals."
 
   [[Device.passthrough_space.handlers]]
   model   = "classic"

@@ -1,28 +1,29 @@
-# GPIO — Set/Clear Pin
+# TIMER — Counter Read + Interrupt Callback
 
 **Board:** MAX78000FTHR
 
-The firmware toggles the on-board red LED (P2.0) every 500 ms.
+The firmware runs TMR1 in continuous mode at 20 Hz, polls the counter, and waits for at least 20 timer interrupts before exiting.
 
 ## Hardware Connections
 
-None. On-board red LED on P2.0.
+None. On-board green LED on PASS, red on FAIL.
 
 ## Expected Output
 
-- Red LED blinks at 1 Hz (500 ms on / 500 ms off)
-- Console prints alternating `Pin set` / `Pin cleared`
+- Console prints `Counter: <n>`, `Callbacks: 20`, `Callback counter: <n>`, then `PASSED`
+- Green LED on
 
 ## Test Scope
 
-- Set/Clear a pin
+- Execute callback after interrupt
+- Read counter value
 
 ## Compositional Model Split
 
 | Component   | Peripheral             | Compiled to     |
 | ----------- | ---------------------- | --------------- |
-| Elder model | GPIO2                  | `model.so`      |
-| Passthrough | UART, GCR, all others  | real hardware   |
+| Elder model | TMR1                   | `model.so`      |
+| Passthrough | UART, GCR, GPIO, all others | real hardware |
 
 ## Commands
 
@@ -46,10 +47,10 @@ boardrunner/boardrunner_examples/examples/max78000_fthr/board_setup/flash.sh \
 
 ### Step 0 — Passthrough run (collect hardware I/O trace)
 
-> **TOML state:** Set GPIO2 elder handler to `enabled = false` and passthrough handler to `enabled = true` in `gpio_config.toml`. Restore elder mode before Step 3.
+> **TOML state:** Set TMR1 elder handler to `enabled = false` and passthrough handler to `enabled = true` in `timer_config.toml`. Restore elder mode before Step 3.
 
 ```bash
-fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/GPIO/gpio_config.toml \
+fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/TIMER/timer_config.toml \
   -s boardrunner/boardrunner_examples/examples/max78000_fthr
 ```
 
@@ -60,15 +61,15 @@ Output: `hardware_log/io.log`
 ```bash
 fastdyn generate -hw hardware_log/io.log -b Max78000 \
   -s boardrunner/boardrunner_examples/examples/max78000_fthr/board_setup/max78000.svd \
-  -p GPIO2 \
-  -mname "GPIO2" -ms "GPIO2" \
-  -o ./fastdyn_work_gpio2
+  -p TMR1 \
+  -mname "TMR1" -ms "TMR1" \
+  -o ./fastdyn_work_tmr1
 ```
 
 ### Step 2 — Send prompt to LLM and compile model
 
 ```bash
-fastdyn llm -d fastdyn_work_gpio2 \
+fastdyn llm -d fastdyn_work_tmr1 \
   -o boardrunner/boardrunner_sdk/model/model.c \
   --compile --model gpt-5.4 --reasoning-effort medium \
   --evaluate
@@ -77,7 +78,7 @@ fastdyn llm -d fastdyn_work_gpio2 \
 ### Step 3 — Run with the generated elder model
 
 ```bash
-fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/GPIO/gpio_config.toml \
+fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/TIMER/timer_config.toml \
   -s boardrunner/boardrunner_examples/examples/max78000_fthr
 ```
 
@@ -88,9 +89,9 @@ fastdyn verifier -hw hardware_log/io.log \
   -em io.log \
   -b Max78000 \
   -s boardrunner/boardrunner_examples/examples/max78000_fthr/board_setup/max78000.svd \
-  -p GPIO2 \
-  -mname GPIO2 \
-  -d GPIO2:boardrunner/boardrunner_sdk/model/model.c
+  -p TMR1 \
+  -mname TMR1 \
+  -d TMR1:boardrunner/boardrunner_sdk/model/model.c
 ```
 
 #### Apply LLM correction patches (if mismatches found)
@@ -106,5 +107,5 @@ Once verified, snapshot the model:
 
 ```bash
 cp boardrunner/boardrunner_sdk/model/model.c \
-   boardrunner/boardrunner_examples/examples/max78000_fthr/GPIO/generated_models/gpio2_model.c
+   boardrunner/boardrunner_examples/examples/max78000_fthr/TIMER/generated_models/tmr1_model.c
 ```
