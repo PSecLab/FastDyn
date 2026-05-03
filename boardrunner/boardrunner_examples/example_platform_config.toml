@@ -103,7 +103,7 @@ internal_model = "uart_model"
     [[Device.uart.handlers]]
         model   = "elder"
         enabled = true
-        scroll = "/home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so"
+        scroll = "<path/to>/data/fastdyn/device_models/postmartem/verifier/gen.so"
 
     [[Device.uart.handlers]]
         model   = "passthrough"
@@ -118,7 +118,7 @@ internal_model = "uart_model"
         # to the 'scroll_config' defined above.
         model   = "elder"
         enabled = true
-        scroll = "/home/faculty/abk6349/data/fastdyn/device_models/postmartem/verifier/gen.so"
+        scroll = "<path/to>/data/fastdyn/device_models/postmartem/verifier/gen.so"
 
 [Device.unhandled_space]
     ranges = ["0x40000000-0x40010FFF", "0xE0000000-0xEFFFFFFF"]

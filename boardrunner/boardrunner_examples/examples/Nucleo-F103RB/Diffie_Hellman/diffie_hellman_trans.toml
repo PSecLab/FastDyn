@@ -51,9 +51,9 @@ machine = "cortexm"
 cpu = "cortex-m3"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "/home/hammad/work/rehosting/stm_repo/STM32CubeF1/Projects/STM32F103RB-Nucleo/Examples/UART/UART_TwoBoards_ComPolling/SW4STM32/STM32F103RB_Nucleo/Debug/STM32F103RB_Nucleo.elf"
+binary = "<path/to>/STM32CubeF1/Projects/STM32F103RB-Nucleo/Examples/UART/UART_TwoBoards_ComPolling/SW4STM32/STM32F103RB_Nucleo/Debug/STM32F103RB_Nucleo.elf"
 init_nsvtor = "0x08000000"
-map_file = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
+map_file = "courbet/rover_v422_map.txt"
 twintrace = "replay" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 

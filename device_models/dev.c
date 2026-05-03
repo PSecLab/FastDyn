@@ -43,8 +43,14 @@ static inline unsigned dev_addr_to_slot(hwaddr addr, hwaddr REGION_BASE)
     return (addr - REGION_BASE) / SLOT_SIZE;
 }
 
-//Interrupt LUT
-static DeviceModel *irq_lut[MAX_INTERRUPTS] = {0}; //Initialize all to NULL
+//Interrupt LUT: each slot is the head of a singly-linked list of DeviceModel
+//handlers registered for that IRQ number. List semantics mirror device_lut
+//(MMIO) registration so that multiple device-model backends (e.g. passthrough
+//+ twintrace, or learned models layered with passthrough fallbacks) can each
+//receive the interrupt event. dev_register_interrupt_device_model dedups the
+//same DeviceModel against the list head; dev_notify_irq / dev_irqret_hook
+//walk the list and dispatch to every registered handler.
+static DeviceNode *irq_lut[MAX_INTERRUPTS] = {0}; //Initialize all to NULL
 
 static inline void dev_get_timestamp(time_t *sec, long *usec) {
 	struct timespec ts;
@@ -221,12 +227,15 @@ void dev_notify_irq(int number) {
 	time_t sec;
     long usec;
     dev_get_timestamp(&sec, &usec);
-	DeviceModel* dev = irq_lut[number];
+	DeviceNode *head = irq_lut[number];
 #ifdef DEV_LOGGER
         if (twintrace_mode != TT_OFF) {
             uint64_t icount = core_get_icount();
             if (number != 15) { //Let's ignore the timer interrupt for now as it is very noisy and not useful for replay
-                const char *dev_name = (dev && dev->name) ? dev->name : "unregistered";
+                /* Tag with the head model's name; downstream parsers
+                 * (twintrace.convert) read a single bracketed tag per line. */
+                const char *dev_name = (head && head->dev && head->dev->name)
+                                       ? head->dev->name : "unregistered";
                 utils_log_to_file(io_logger, "[%5ld.%06ld] icount=%" PRIu64" [%s] Interrupt Taken: \t Vector = 0x%08X\n",
                         sec, usec, icount, dev_name, number);
             }
@@ -235,8 +244,12 @@ void dev_notify_irq(int number) {
                     sec, usec, number);
         }
 #endif
-	if (dev != NULL) {
-		dev->interrupt(number);
+	if (head != NULL) {
+		for (DeviceNode *n = head; n != NULL; n = n->next) {
+			if (n->dev && n->dev->interrupt) {
+				n->dev->interrupt(number);
+			}
+		}
 	}
 	else {
 #ifdef DEV_LOGGER
@@ -262,9 +275,13 @@ void dev_irqret_hook(int number) {
                     sec, usec, number);
         }
 #endif
-	DeviceModel* dev = irq_lut[number];
-	if (dev != NULL) {
-		dev->serve(number);
+	DeviceNode *head = irq_lut[number];
+	if (head != NULL) {
+		for (DeviceNode *n = head; n != NULL; n = n->next) {
+			if (n->dev && n->dev->serve) {
+				n->dev->serve(number);
+			}
+		}
 	}
 	else {
 #ifdef DEV_LOGGER
@@ -305,8 +322,26 @@ void dev_register_interrupt_device_model(int irq_num, DeviceModel *dev) {
         printf("ERROR! IRQ NUM: %d not supported for the given device!\n", irq_num);
 		utils_die("Reconfigure the device model\n");
     }
+    if (!dev) return;
 
-    irq_lut[irq_num] = dev;  // register the device
+    /* Dedup: if `dev` is already in this slot's list, this registration is
+     * a no-op. Prevents duplicate dispatch when the same DeviceModel is
+     * registered multiple times for the same IRQ (e.g. two [Device.X]
+     * blocks both routed to passthrough listing the same IRQ). */
+    for (DeviceNode *n = irq_lut[irq_num]; n != NULL; n = n->next) {
+        if (n->dev == dev) {
+            return;
+        }
+    }
+
+    /* Prepend a new node, mirroring dev_register_device_model. */
+    DeviceNode *newNode = (DeviceNode *)malloc(sizeof(DeviceNode));
+    if (!newNode) {
+        utils_die("Failed to allocate memory for IRQ device node");
+    }
+    newNode->dev  = dev;
+    newNode->next = irq_lut[irq_num];
+    irq_lut[irq_num] = newNode;
 }
 
 char* dev_read_json_file(const char* filename) {

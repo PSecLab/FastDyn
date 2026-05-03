@@ -288,3 +288,147 @@ class TestNoRca:
 
         used_rca = not_match and not no_rca
         assert used_rca is False
+
+
+# ---------------------------------------------------------------------------
+# generate_prompt_no_encoder: model_name / model_sources parameters
+# ---------------------------------------------------------------------------
+
+class TestNoEncoderModelName:
+    """Coverage for the compositional model_name/model_sources parameters
+    added to generate_prompt_no_encoder. Validates both backward compatibility
+    (callers that pass only peripheral_name) and forward compatibility
+    (callers that supply -mname and multiple -ms peripherals).
+    """
+
+    @pytest.fixture
+    def fake_io_log(self, tmp_path):
+        log_path = tmp_path / "io.log"
+        log_path.write_text(
+            "[  0.1] Read:  address = 0x40020000, size = 4 bytes, value = 0x0, pc=0x8001\n"
+            "[  0.2] Write: address = 0x40020800, size = 4 bytes, value = 0x9, pc=0x8002\n"
+        )
+        return str(log_path)
+
+    def test_backward_compat_peripheral_name_only(self, fake_io_log):
+        """Existing callers (single peripheral, no model_name) still work."""
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="UART0",
+            platform_name="Max78000",
+        )
+        assert "UART0" in prompt
+        # Skeleton uses peripheral_name as the prefix when no model_name given.
+        assert "uart0_read" in prompt
+        assert "uart0_write" in prompt
+        assert "uart0_init" in prompt
+
+    def test_forward_compat_model_name_overrides_skeleton(self, fake_io_log):
+        """When -mname is provided, the skeleton uses it instead of peripheral_name."""
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="DMA1",  # first -ms; would be wrong as the prefix
+            platform_name="STM32H753x",
+            model_name="DMA_with_DMAMUX1",
+            model_sources=("DMA1", "DMAMUX1"),
+        )
+        # Skeleton uses model_name, not peripheral_name.
+        assert "dma_with_dmamux1_read" in prompt
+        assert "dma_with_dmamux1_write" in prompt
+        assert "dma_with_dmamux1_init" in prompt
+        assert "DMA_with_DMAMUX1State" in prompt
+        # Wrong prefix from peripheral_name MUST NOT appear in the skeleton.
+        assert "dma1_read(" not in prompt
+        assert "dma1_init(" not in prompt
+
+    def test_model_sources_list_appears_in_prompt(self, fake_io_log):
+        """All -ms entries are listed in the 'Peripherals to Model' section."""
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="ADC1",
+            platform_name="STM32H753x",
+            model_name="ADC",
+            model_sources=("ADC1", "ADC2", "ADC12_Common"),
+        )
+        # Each -ms entry rendered as a bullet under the Peripherals to Model section.
+        assert "## Peripherals to Model" in prompt
+        sources_section = prompt.split("## Peripherals to Model")[1].split("##")[0]
+        assert "- ADC1" in sources_section
+        assert "- ADC2" in sources_section
+        assert "- ADC12_Common" in sources_section
+
+    def test_empty_model_sources_falls_back_to_peripheral(self, fake_io_log):
+        """An empty/None model_sources defaults to [peripheral_name]."""
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="UART0",
+            platform_name="Max78000",
+            model_sources=(),  # empty tuple should fall back
+        )
+        sources_section = prompt.split("## Peripherals to Model")[1].split("##")[0]
+        assert "- UART0" in sources_section
+
+    def test_model_name_label_renders_with_correct_header(self, fake_io_log):
+        """The 'Model Name' header is the canonical label, not 'Peripheral Name'."""
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="DMA1",
+            platform_name="STM32H753x",
+            model_name="DMA_with_DMAMUX1",
+            model_sources=("DMA1", "DMAMUX1"),
+        )
+        # Old single-peripheral template had `## Peripheral Name:`. Ensure
+        # we emit the new compositional header instead.
+        assert "## Model Name" in prompt
+        # The legacy skeleton placeholder MUST NOT appear with the wrong prefix.
+        assert "// Device Model for DMA_with_DMAMUX1" in prompt
+
+    def test_model_name_used_in_intro_paragraph(self, fake_io_log):
+        """The intro paragraph references the model name (not the first source)."""
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="DMA1",
+            platform_name="STM32H753x",
+            model_name="DMA_with_DMAMUX1",
+            model_sources=("DMA1", "DMAMUX1"),
+        )
+        # The intro is the text before "## Available APIs". It must reference
+        # the model identifier, not just the first -ms peripheral.
+        intro = prompt.split("## Available APIs")[0]
+        assert "dma_with_dmamux1" in intro.lower()
+        assert "DMA_with_DMAMUX1" in prompt  # original-case appears later too
+
+    def test_no_vio_combines_with_model_name(self, fake_io_log):
+        """no_vio still strips VIO APIs when model_name is also set."""
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="DMA1",
+            platform_name="STM32H753x",
+            model_name="DMA_with_DMAMUX1",
+            model_sources=("DMA1", "DMAMUX1"),
+            no_vio=True,
+        )
+        api_start = prompt.index("## Available APIs")
+        api_end = prompt.index("```", prompt.index("```", api_start) + 3) + 3
+        api_section = prompt[api_start:api_end]
+        assert "api_dma_register_stream" not in api_section
+        assert "api_pty_fd_gen" not in api_section
+        # Skeleton naming still honors model_name.
+        assert "dma_with_dmamux1_read" in prompt
+
+    def test_skeleton_does_not_carry_legacy_BASE_subtraction(self, fake_io_log):
+        """Compositional skeletons should not hard-code a single base address.
+
+        For a model covering multiple peripherals (DMA1 + DMAMUX1), there is no
+        single _BASE; the LLM must dispatch by address range. The skeleton was
+        intentionally simplified to reflect that.
+        """
+        prompt = generate_prompt_no_encoder(
+            hardware_log=fake_io_log,
+            peripheral_name="DMA1",
+            platform_name="STM32H753x",
+            model_name="DMA_with_DMAMUX1",
+            model_sources=("DMA1", "DMAMUX1"),
+        )
+        # Skeleton must not reference DMA_WITH_DMAMUX1_BASE (which doesn't exist).
+        assert "DMA_WITH_DMAMUX1_BASE" not in prompt

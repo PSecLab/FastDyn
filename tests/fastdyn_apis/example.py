@@ -19,10 +19,10 @@ cpu0 = machine0.add_cpu(
 
 #Optional: add a platform svd file -- helps for irq resolution in Virtual instructions and modifiers
 #Either specify the exact path to the svd for the platform, or just add the path of the svd and add the name of platform used from machine.
-machine0.add_cmsis_svd(cmsis_svd="/home/hammad/work/rehosting/FastDyn/cmsis-svd-data")
+machine0.add_cmsis_svd(cmsis_svd="<path/to>/FastDyn/cmsis-svd-data")
 
 #Optional: add map file -- helpful for creating virtual instructions and modifiers just using the symbols instead of hardcoded addresses
-cpu0.add_map_file("/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt")
+cpu0.add_map_file("<path/to>/FastDyn/courbet/rover_v422_map.txt")
 # print(machine0.irq_map)
 
 #VI can be created using four options:
@@ -182,5 +182,5 @@ sys.exit(1)
 
 fastdyn.run(target="qemu",
             machine="machine0",
-            out_path="/home/hammad/work/rehosting/FastDyn/fastdyn_work")               #run fastdyn machine that you want to run
+            out_path="<path/to>/FastDyn/fastdyn_work")               #run fastdyn machine that you want to run
 fastdyn.shutdown()          #shutdown fastdyn machine :: Wont work rn, just press CTRL+C in terminal

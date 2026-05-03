@@ -110,7 +110,14 @@ reverse-engineering the register logic — it is NOT a lookup table to copy from
 - DO derive read return values from current state, not from trace constants.
 - DO keep the logic minimal — only implement behavior the trace evidence supports.
   Do not invent complex state machines, timers, or hardware features beyond what
-  the trace implies.
+  the trace implies. However, you SHOULD use your knowledge of the peripheral's
+  reference manual for **bit field semantics only**: which bits within a register
+  are read-only vs read-write, what individual fields represent (e.g. status
+  flags, line state), and reset values. The trace is AUTHORITATIVE for register
+  offsets, addresses, and runtime values — never override trace-derived offsets
+  with reference manual memory maps. The reference manual helps you interpret
+  WHY a bit behaves a certain way (e.g. a bit is read-only because it reflects
+  hardware line state and must not be echoed from software writes).
 
 ### 4. Initialization and ConfigSection
 The `_init` function receives a `ConfigSection* model_info` pointer that contains
@@ -119,6 +126,37 @@ numbers, bus connections, etc.). Use it when calling bus-init APIs like
 `api_i2c_init_bus(model_info)` or `api_spi_init_bus(model_info)`. Do not
 hardcode values that can be read from the configuration.
 """
+
+def _strip_vio_from_rules(rules: str) -> str:
+    """Remove VIO API references from framework_rules for A3 ablation."""
+    import re
+    result = rules
+    # Rule 2b: replace VIO API examples with timer-only
+    result = result.replace(
+        'such as `api_signal_register`,\n`api_dma_register_stream`, or `qemu_plugin_timer_new_ns`',
+        'such as `qemu_plugin_timer_new_ns`'
+    )
+    # Rule 2b: strip VIO callback types from the list
+    result = result.replace(
+        'This applies to ALL inter-peripheral / timer callbacks: timer callbacks, signal\n  handlers, DMA request handlers, and any other API',
+        'This applies to ALL timer callbacks: timer callbacks and any other API'
+    )
+    # Rule 2b: rename section header to remove inter-peripheral reference
+    result = result.replace(
+        '#### 2b. Inter-peripheral / timer callbacks',
+        '#### 2b. Timer callbacks'
+    )
+    # Rule 4: strip bus-init API references
+    result = re.sub(
+        r'### 4\. Initialization and ConfigSection.*?(?=\n"""|\Z)',
+        '### 4. Initialization and ConfigSection\n'
+        'The `_init` function receives a `ConfigSection* model_info` pointer that contains\n'
+        'the peripheral\'s configuration from the platform description (base address, IRQ\n'
+        'numbers, etc.). Do not hardcode values that can be read from the configuration.',
+        result, flags=re.DOTALL
+    )
+    return result
+
 
 observability_guidance = """\
 ## Observability & Host I/O
@@ -197,7 +235,7 @@ wrong data, not ACK-ing correctly, or mishandling a protocol sequence):
    correct it alongside the master model.
 
 The slave model will have the following callback interface that MUST NOT be changed:
-- For I2C slaves: `slave_i2c_event`, `slave_i2c_send`, `slave_i2c_recv`
+- For I2C slaves: `slave_i2c_event`, `slave_i2c_send`, `slave_i2c_receive`
 - For SPI slaves: `slave_spi_set_cs`, `slave_spi_transfer`
 """
 
@@ -242,13 +280,13 @@ implement self-clearing/auto-transitioning bits in that register!
 
 # Base QEMU/FastDyn APIs (always available, even in --no-vio ablation mode)
 qemu_base_api_list = """
-- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes guest memory.
-- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads guest memory.
+- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes `len` bytes from `mem_buf` to guest memory at `addr`. Returns **0 on success, non-zero on error** — does NOT return the byte count (unlike POSIX read/write). Valid for RAM addresses only; calls targeting an address inside the SoC's MMIO window are blocked by QEMU's per-MemoryRegion re-entrancy guard and return zero with a `Blocked re-entrant IO` warning.
+- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads `len` bytes from guest memory at `addr` into `mem_buf`. Returns **0 on success, non-zero on error** — does NOT return the byte count. Same RAM-only restriction as `qemu_plugin_write_memory`.
 - `int qemu_plugin_read_register(int reg, uint8_t *buf)`: Reads a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_raise_irq(int irq, false)`: Raises an interrupt line, MUST: use interrupt + 16, here false means non-secure interrupt, dont change it to true!.
-- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Accepts a timer's handle and an absolute nanosecond timestamp to arm that timer to fire at the specified moment for one shot.
-- `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
+- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Accepts a timer's handle and an absolute nanosecond timestamp to arm that timer to fire at the specified moment for one shot. **Important:** timer callbacks only fire at translation-block boundaries, not during back-to-back MMIO accesses. If firmware polls a register in a tight loop, virtual time barely advances and a scheduled alarm may not fire before the loop ends. For peripherals with compare-match or timeout logic, also check the condition synchronously inside the relevant read callback (e.g. when firmware reads a counter register, compare the computed count against the threshold and raise the IRQ immediately if crossed).
+- `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system. **Note:** this clock only advances at translation-block boundaries; consecutive calls during rapid MMIO accesses within the same block may return the same value.
 - `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
 - `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
 - `void dev_debug(char *str)`: Any debug messages must be logged using this function.
@@ -256,13 +294,13 @@ qemu_base_api_list = """
 
 # Define the full QEMU API context (base + VIO)
 qemu_api_list = """
-- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes guest memory.
-- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads guest memory.
+- `int qemu_plugin_write_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Writes `len` bytes from `mem_buf` to guest memory at `addr`. Returns **0 on success, non-zero on error** — does NOT return the byte count (unlike POSIX read/write). Valid for RAM addresses only; calls targeting an address inside the SoC's MMIO window are blocked by QEMU's per-MemoryRegion re-entrancy guard and return zero with a `Blocked re-entrant IO` warning.
+- `int qemu_plugin_read_memory(unsigned long long addr, uint8_t *mem_buf, int len)`: Reads `len` bytes from guest memory at `addr` into `mem_buf`. Returns **0 on success, non-zero on error** — does NOT return the byte count. Same RAM-only restriction as `qemu_plugin_write_memory`.
 - `int qemu_plugin_read_register(int reg, uint8_t *buf)`: Reads a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_set_register(uint8_t *mem_buf, int reg)`: Writes a register of VM. reg is number of register 0 is R0 in ARM.
 - `void qemu_plugin_raise_irq(int irq, false)`: Raises an interrupt line, MUST: use interrupt + 16, here false means non-secure interrupt, dont change it to true!.
-- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Accepts a timer's handle and an absolute nanosecond timestamp to arm that timer to fire at the specified moment for one shot.
-- `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system.
+- `void qemu_plugin_timer_alarm(uint64_t timer_fd, uint64_t delay_ns)`: Accepts a timer's handle and an absolute nanosecond timestamp to arm that timer to fire at the specified moment for one shot. **Important:** timer callbacks only fire at translation-block boundaries, not during back-to-back MMIO accesses. If firmware polls a register in a tight loop, virtual time barely advances and a scheduled alarm may not fire before the loop ends. For peripherals with compare-match or timeout logic, also check the condition synchronously inside the relevant read callback (e.g. when firmware reads a counter register, compare the computed count against the threshold and raise the IRQ immediately if crossed).
+- `int64_t qemu_plugin_get_virtual_timer(void)`: Returns virtual clock (monotonic up counter) of the system. **Note:** this clock only advances at translation-block boundaries; consecutive calls during rapid MMIO accesses within the same block may return the same value.
 - `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
 - `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
 - `void dev_debug(char *str)`: Any debug messages must be logged using this function.
@@ -278,8 +316,10 @@ qemu_api_list = """
 - `SPIBus api_spi_init_bus(ConfigSection* model_info)`: Takes a ConfigSection pointer, parses the SPI configuration, loads all specified slave device models, and returns a populated SPIBus structure.
 - `uint32_t api_spi_transfer(SPIBus *bus, uint32_t val)`: Performs a full-duplex transfer on the bus by sending val (MOSI) to the currently selected slave and returning the uint32_t value received from it (MISO).
 - `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
-- `void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque)`: Called by a DMA model. Takes a `stream_id`, a `handler` callback, and an `opaque` data pointer. Registers the handler to be called when a peripheral triggers a request for that stream.
-- `void api_dma_request(int stream_id)`: Called by a peripheral model (e.g., ADC). Takes a `stream_id` to trigger. This function looks up the corresponding handler (registered via `api_dma_register_stream`).
+- `void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque)`: Registers a no-payload handler for `stream_id`.
+- `void api_dma_request(int stream_id)`: Triggers a no-payload DMA request on `stream_id`; the registered handler is invoked synchronously.
+- `void api_dma_register_stream_data(int stream_id, void (*handler)(void *opaque, const uint8_t *data, int len), void *opaque)`: Registers a payload-carrying handler for `stream_id`. The handler receives the bytes submitted via `api_dma_request_data`.
+- `int api_dma_request_data(int stream_id, const uint8_t *data, int len)`: Triggers a DMA request on `stream_id` with `len` payload bytes (max 8) passed to the registered handler. Returns 0 on success, negative on error.
 - `void api_signal_register(int signal_id, signal_handler_t handler, void *opaque)`: Called by a sink peripheral model (for example EXTI). Registers a callback for a logical signal line such as EXTI line 13.
 - `void api_signal_set(int signal_id, bool level)`: Called by a source peripheral model (for example GPIO). Publishes the logical level for a signal line. The API is level-based; edge detection belongs in the receiving model.
 - `int api_fifo_open(const char *path)`: Creates and opens a named pipe (FIFO) at the specified path using O_RDWR to prevent EOF when the external writer disconnects.
@@ -366,7 +406,8 @@ def initial_prompt_gen_multiple_periphs(analysis_dir, model_name, peripherals, o
         model_name=model_name,
         peripherals=peripherals,
         qemu_api_list=api_list,
-        model_sources=model_sources
+        model_sources=model_sources,
+        no_vio=no_vio,
     )
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -396,85 +437,68 @@ def initial_prompt_gen(analysis_dir, peripheral, out_dir, no_vio=False):
 
 
 
-def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path, show_prompt=True, max_model_chars=120000):
-    '''
-    Based on the difference object, create a correction prompt using SEARCH/REPLACE
-    blocks. This is consistent with the multi-peripheral verifier flow.
-    '''
-    platform_name = diff_obj.platform_name
-    peripheral_name = peripheral
-    device_model = ''
-    if not show_prompt:
-        fastdyn_log.warning(
-            "show_prompt=False: model source will be hidden from LLM. "
-            "SEARCH/REPLACE corrections will likely fail."
-        )
-    model_filename = os.path.basename(device_model_path)
+def _build_analysis_section(diff_obj, state_data_with_instructions, no_encoder, hardware_log, emulation_log, peripheral_name, peripheral_ranges):
+    """Build the analysis data section for the correction prompt.
 
-    if show_prompt:
-        device_model = Path(device_model_path).read_text(encoding="utf-8", errors="replace")
-        if max_model_chars and len(device_model) > max_model_chars:
-            device_model = device_model[:max_model_chars] + "\n/* ... truncated ... */"
+    When no_encoder is False (default), returns the structured encoder analysis
+    (init, loops, entropy, rare transitions, state, ISR).
 
-    # Build the state data with LLM-facing instructions appended
-    state_data_with_instructions = diff_obj.diff_state_data
-    if state_data_with_instructions and not state_data_with_instructions.strip().startswith("[NO DATA"):
-        state_data_with_instructions += "\n" + polling_interpretation_instructions
+    When no_encoder is True (A1 ablation), returns the raw hardware I/O trace
+    filtered to the target peripheral's address range.
+    """
+    if no_encoder and hardware_log:
+        # A1 ablation: full raw traces without any filtering or SVD-based
+        # address resolution. The LLM must identify the target peripheral's
+        # registers on its own — using SVD to filter would leak Encoder
+        # knowledge. Both hardware and emulation traces are included so the
+        # LLM can compare them directly.
+        # We only strip internal emulator bookkeeping lines (SysTick IRQ
+        # taken/served) that are not MMIO accesses and carry no register info.
+        def _read_trace_strip_irq_noise(log_path):
+            lines = []
+            with open(log_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.rstrip()
+                    if 'Vector = 0x0000000F' in stripped:
+                        continue
+                    lines.append(stripped)
+            return '\n'.join(lines)
 
-    final_prompt = f'''
-Take this prompt independent from previous prompt history.
+        raw_hw_trace = _read_trace_strip_irq_noise(hardware_log)
+        hw_line_count = raw_hw_trace.count('\n') + 1
 
-You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name} peripheral.
-Your task is to analyze the following summary of MMIO trace data and correct the existing C device model.
+        em_section = ""
+        if emulation_log:
+            raw_em_trace = _read_trace_strip_irq_noise(emulation_log)
+            em_lines = raw_em_trace.split('\n')
+            # Cap emulation trace to 2x hardware trace length to prevent
+            # infinite-loop models from blowing up the prompt. This is not
+            # Encoder-derived filtering — just a mechanical size cap based
+            # on the expected execution length.
+            if len(em_lines) > hw_line_count * 2:
+                truncated_count = len(em_lines)
+                em_lines = em_lines[:hw_line_count * 2]
+                raw_em_trace = '\n'.join(em_lines)
+                raw_em_trace += f"\n\n[TRUNCATED: emulation trace had {truncated_count} lines, capped at {hw_line_count * 2} (2x hardware trace). The model likely contains an infinite polling loop.]"
 
-## Backward-pass/Correction
-Below is the current device model. The logs show mismatches between hardware and emulation; identify the root cause and fix it.
+            em_section = f"""
 
-## Model Under Correction
-You may produce SEARCH/REPLACE blocks for this file:
-- `{peripheral_name}` -> `{model_filename}`
-Each SEARCH/REPLACE block MUST begin with a comment identifying its target file:
-`// FILE: {model_filename}`
-
---- START OF CURRENT MODEL ---
-
-## Model: `{peripheral_name}`  |  File: `{model_filename}`
-```c
-{device_model}
+## Raw Emulated Model I/O Trace
+The following is the emulated model's full trace. Compare this against the
+hardware trace above to identify where the model's behavior diverges.
 ```
+{raw_em_trace}
+```"""
 
---- END OF CURRENT MODEL ---
-
-## Available APIs
-You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
-```c
-{qemu_api_list.strip()}
+        return f"""## Raw Hardware I/O Trace
+The following is the complete raw hardware trace. Use this to identify
+register behavior, value transitions, and expected read/write patterns for {peripheral_name}.
 ```
+{raw_hw_trace}
+```{em_section}"""
 
-{api_missing_note}
-
-{framework_rules}
-
-{observability_guidance}
-
-{inter_peripheral_guidance}
-
-{slave_bug_blocker}
-
-{host_io_section}
-
-## Trace Log Schema:
-The logs below are formatted as arrays containing the following fields: [Operation, Peripheral, Register, Memory Address, Register Value, Program Counter (PC)]. Pay close attention to the Register Value differences between Hardware and the Emulated Model.
-
---- START OF ANALYSIS DATA ---
-
-## Platform:
-{platform_name}
-
-## Peripheral Name:
-{peripheral_name}
-
-## Initialization Sequence (`init.txt`):
+    # Default: structured encoder analysis
+    return f"""## Initialization Sequence (`init.txt`):
 This file contains all accesses that occur before the main runtime loop begins.
 ```
 {diff_obj.diff_init_data}
@@ -513,9 +537,183 @@ This file contains information about IRQs.
 {diff_obj.isr_analysis_data}
 ```
 
+{diff_obj.svd_bitfields_data}"""
+
+
+def iteration_prompt_gen(diff_obj, peripheral, out_dir, device_model_path, show_prompt=True, max_model_chars=120000,
+                         no_encoder=False, hardware_log=None, emulation_log=None, peripheral_ranges=None, no_vio=False,
+                         no_rca=False):
+    '''
+    Based on the difference object, create a correction prompt using SEARCH/REPLACE
+    blocks. This is consistent with the multi-peripheral verifier flow.
+
+    When no_encoder=True, the structured analysis sections (init, loop patterns,
+    entropy, rare transitions, state) are replaced with the raw hardware I/O trace,
+    preserving the SEARCH/REPLACE correction strategy.
+    '''
+    platform_name = diff_obj.platform_name
+    peripheral_name = peripheral
+    device_model = ''
+    if not show_prompt:
+        fastdyn_log.warning(
+            "show_prompt=False: model source will be hidden from LLM. "
+            "SEARCH/REPLACE corrections will likely fail."
+        )
+    model_filename = os.path.basename(device_model_path)
+
+    if show_prompt:
+        device_model = Path(device_model_path).read_text(encoding="utf-8", errors="replace")
+        if max_model_chars and len(device_model) > max_model_chars:
+            device_model = device_model[:max_model_chars] + "\n/* ... truncated ... */"
+
+    # Build the state data with LLM-facing instructions appended
+    state_data_with_instructions = diff_obj.diff_state_data
+    if state_data_with_instructions and not state_data_with_instructions.strip().startswith("[NO DATA"):
+        state_data_with_instructions += "\n" + polling_interpretation_instructions
+
+    if no_rca:
+        # No RCA ablation: show the Verifier's diffs (HW vs EM comparison)
+        # but without RCA's targeted diagnostic narrative or SEARCH/REPLACE
+        # strategy. The LLM sees what diverged but must figure out the fix
+        # on its own via full model regeneration.
+        final_prompt = f'''
+Take this prompt independent from previous prompt history.
+
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name} peripheral.
+Your task is to analyze the following summary of MMIO trace data and generate a complete C device model.
+
+## Available APIs
+You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
+```c
+{(qemu_base_api_list if no_vio else qemu_api_list).strip()}
+```
+
+{"" if no_vio else api_missing_note}
+
+{_strip_vio_from_rules(framework_rules) if no_vio else framework_rules}
+
+{"" if no_vio else observability_guidance}
+
+{"" if no_vio else inter_peripheral_guidance}
+
+{"" if no_vio else host_io_section}
+
+## Trace Log Schema:
+The logs below are formatted as arrays containing the following fields: [Operation, Peripheral, Register, Memory Address, Register Value, Program Counter (PC)]. Pay close attention to the Register Value differences between Hardware and the Emulated Model.
+
+--- START OF ANALYSIS DATA ---
+
+## Platform:
+{platform_name}
+
+## Peripheral Name:
+{peripheral_name}
+
+{_build_analysis_section(diff_obj, state_data_with_instructions, no_encoder, hardware_log, emulation_log, peripheral_name, peripheral_ranges)}
+
 --- END OF ANALYSIS DATA ---
 
-Based **only** on the data provided above, output:
+## Correction Required
+A previous model was generated but failed verification. The trace comparison above shows where the hardware and emulated model behaviors diverge. Please generate a corrected complete C device model that faithfully reproduces the observed hardware behavior.
+
+## Required Output Format:
+
+### 1. Previous Model Failure Analysis
+A concise, one-paragraph summary explaining the most likely reason for the mismatches.
+
+### 2. Register Analysis
+A bulleted list of the important registers mentioned in the traces and their inferred functions.
+
+### 3. C Device Model Source Code
+The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs i mentioned.
+
+```c
+// Device Model for {peripheral_name}
+
+// Inferred Register Functions:
+// ... add registers here ...
+
+static {peripheral_name}State g_{peripheral_name.lower()};
+
+// This function will emulate all device reads
+uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    // ... return register value based on offset ...
+}}
+
+// This function will emulate all device writes
+void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
+    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
+    // ... update register state based on offset and value ...
+}}
+
+// MUST return pointer to state — framework passes it as opaque to _read/_write
+void* {peripheral_name.lower()}_init(ConfigSection* model_info) {{
+    memset(&g_{peripheral_name.lower()}, 0, sizeof(g_{peripheral_name.lower()}));
+    // ... initialize state from model_info (bus inits, etc.) ...
+    return &g_{peripheral_name.lower()};
+}}
+```
+'''
+    else:
+        final_prompt = f'''
+Take this prompt independent from previous prompt history.
+
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name} peripheral.
+Your task is to analyze the following summary of MMIO trace data and correct the existing C device model.
+
+## Backward-pass/Correction
+Below is the current device model. The logs show mismatches between hardware and emulation; identify the root cause and fix it.
+
+## Model Under Correction
+You may produce SEARCH/REPLACE blocks for this file:
+- `{peripheral_name}` -> `{model_filename}`
+Each SEARCH/REPLACE block MUST begin with a comment identifying its target file:
+`// FILE: {model_filename}`
+
+--- START OF CURRENT MODEL ---
+
+## Model: `{peripheral_name}`  |  File: `{model_filename}`
+```c
+{device_model}
+```
+
+--- END OF CURRENT MODEL ---
+
+## Available APIs
+You **must** use the following APIs to construct the device model. Pay close attention to the read/write callback signatures.
+```c
+{(qemu_base_api_list if no_vio else qemu_api_list).strip()}
+```
+
+{"" if no_vio else api_missing_note}
+
+{_strip_vio_from_rules(framework_rules) if no_vio else framework_rules}
+
+{"" if no_vio else observability_guidance}
+
+{"" if no_vio else inter_peripheral_guidance}
+
+{slave_bug_blocker}
+
+{"" if no_vio else host_io_section}
+
+## Trace Log Schema:
+The logs below are formatted as arrays containing the following fields: [Operation, Peripheral, Register, Memory Address, Register Value, Program Counter (PC)]. Pay close attention to the Register Value differences between Hardware and the Emulated Model.
+
+--- START OF ANALYSIS DATA ---
+
+## Platform:
+{platform_name}
+
+## Peripheral Name:
+{peripheral_name}
+
+{_build_analysis_section(diff_obj, state_data_with_instructions, no_encoder, hardware_log, emulation_log, peripheral_name, peripheral_ranges)}
+
+--- END OF ANALYSIS DATA ---
+
+Based on the trace data provided above and your knowledge of the peripheral's register definitions from the reference manual (bit field access types, reset values, hardware-owned vs software-writable bits), output:
 
 ## Required Output Format:
 
@@ -527,8 +725,10 @@ A bulleted list of the important registers mentioned in the traces and their inf
 
 {search_replace_prompting}
 '''
+
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    output_path = Path(out_dir) / "revised_prompt.txt"
+    output_filename = "initial_prompt.txt" if no_rca else "revised_prompt.txt"
+    output_path = Path(out_dir) / output_filename
     output_path.write_text(final_prompt + "\n", encoding="utf-8")
 
     fastdyn_log.info(f"Prompt generated and can be accessed in the file {output_path}")
@@ -591,6 +791,7 @@ def generate_prompt(peripheral_directory: str, no_vio: bool = False) -> str:
     rare_transitions_data = read_file_content(os.path.join(peripheral_directory, "rare_transitions.txt"))
     loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
     isr_analysis_data = read_file_content(isr_analysis)
+    svd_bitfields_data = read_file_content(os.path.join(peripheral_directory, "svd_bitfields.txt"))
 
     loop_data_list = []
     if not loop_files:
@@ -602,6 +803,13 @@ def generate_prompt(peripheral_directory: str, no_vio: bool = False) -> str:
 
     # Select API list based on ablation mode
     active_api_list = qemu_base_api_list if no_vio else qemu_api_list
+    # When VIO APIs are stripped (A3 ablation), remove all VIO-referencing
+    # guidance so the LLM has no hints about PTY/I2C/SPI/signal APIs.
+    active_api_missing_note = "" if no_vio else api_missing_note
+    active_observability = "" if no_vio else observability_guidance
+    active_inter_periph = "" if no_vio else inter_peripheral_guidance
+    active_host_io = "" if no_vio else host_io_section
+    active_framework_rules = _strip_vio_from_rules(framework_rules) if no_vio else framework_rules
 
     # Assemble the prompt, escaping literal curly braces {{ and }} in the C code example
     prompt = f"""
@@ -616,15 +824,15 @@ You **must** use the following APIs to construct the device model. Pay close att
 {active_api_list.strip()}
 ```
 
-{api_missing_note}
+{active_api_missing_note}
 
-{framework_rules}
+{active_framework_rules}
 
-{observability_guidance}
+{active_observability}
 
-{inter_peripheral_guidance}
+{active_inter_periph}
 
-{host_io_section}
+{active_host_io}
 
 --- START OF ANALYSIS DATA ---
 
@@ -670,9 +878,11 @@ This file contains information about IRQs.
 {isr_analysis_data}
 ```
 
+{svd_bitfields_data}
+
 --- END OF ANALYSIS DATA ---
 
-Based **only** on the data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
+Based on the trace data provided above and your knowledge of the peripheral's register definitions from the reference manual (bit field access types, reset values, hardware-owned vs software-writable bits), generate the complete C source code for the device model. Follow the required output format precisely.
 
 ## Required Output Format:
 
@@ -696,14 +906,12 @@ static {peripheral_name}State g_{peripheral_name.lower()};
 // This function will emulate all device reads
 uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
     {peripheral_name}State *s = ({peripheral_name}State *)opaque;
-    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
     // ... return register value based on offset ...
 }}
 
 // This function will emulate all device writes
 void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
     {peripheral_name}State *s = ({peripheral_name}State *)opaque;
-    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
     // ... update register state based on offset and value ...
 }}
 
@@ -718,7 +926,8 @@ void* {peripheral_name.lower()}_init(ConfigSection* model_info) {{
     return prompt.strip()
 
 def generate_prompt_no_encoder(hardware_log: str, peripheral_name: str, platform_name: str,
-                               peripheral_ranges: list = None, no_vio: bool = False) -> str:
+                               peripheral_ranges: list = None, no_vio: bool = False,
+                               model_name: str = None, model_sources=None) -> str:
     """Generate a prompt using the raw I/O trace instead of the Encoder's compact automaton.
 
     This is the A1 ablation variant. The prompt contains:
@@ -734,44 +943,36 @@ def generate_prompt_no_encoder(hardware_log: str, peripheral_name: str, platform
         platform_name: Platform identifier (e.g., "Max78000").
         peripheral_ranges: Optional list of (start, end) address tuples to filter trace lines.
         no_vio: If True, also strip VIO APIs (combines A1+A3 ablation).
+        model_name: Compositional model name from `-mname`; falls back to peripheral_name.
+        model_sources: Iterable of peripherals from `-ms`; falls back to [peripheral_name].
     """
-    # Read the raw trace
+    # Read the raw trace, stripping only internal emulator bookkeeping
+    # (SysTick IRQ taken/served) that are not MMIO accesses.
+    # No SVD-based address filtering — the LLM must identify the target
+    # peripheral's registers on its own for a clean A1 ablation.
+    lines = []
     with open(hardware_log, "r", encoding="utf-8") as f:
-        raw_trace = f.read()
-
-    # Filter to peripheral address range if provided
-    if peripheral_ranges:
-        filtered_lines = []
-        for line in raw_trace.splitlines():
-            # Check if any address in the line falls within the peripheral ranges
-            keep = False
-            for start, end in peripheral_ranges:
-                if f"0x{start:08X}" in line.upper() or f"0x{start:08x}" in line.lower():
-                    keep = True
-                    break
-                # Also try matching the address field directly
-                if "address" in line.lower() or "0x" in line:
-                    try:
-                        # Extract hex address from the line
-                        import re
-                        addr_match = re.search(r'address\s*=\s*(0x[0-9a-fA-F]+)', line)
-                        if addr_match:
-                            addr = int(addr_match.group(1), 16)
-                            if start <= addr <= end:
-                                keep = True
-                                break
-                    except (ValueError, AttributeError):
-                        pass
-            if keep or not peripheral_ranges:
-                filtered_lines.append(line)
-        raw_trace = "\n".join(filtered_lines)
+        for line in f:
+            if 'Vector = 0x0000000F' in line:
+                continue
+            lines.append(line.rstrip())
+    raw_trace = "\n".join(lines)
 
     active_api_list = qemu_base_api_list if no_vio else qemu_api_list
+    active_api_missing_note = "" if no_vio else api_missing_note
+    active_observability = "" if no_vio else observability_guidance
+    active_inter_periph = "" if no_vio else inter_peripheral_guidance
+    active_host_io = "" if no_vio else host_io_section
+    active_framework_rules = _strip_vio_from_rules(framework_rules) if no_vio else framework_rules
+
+    effective_model_name = model_name if model_name else peripheral_name
+    sources_list = list(model_sources) if model_sources else [peripheral_name]
+    sources_section = "\n".join(f"- {p}" for p in sources_list)
 
     prompt = f"""
 Take this prompt independent from previous prompt history.
 
-You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {peripheral_name.lower()} peripheral.
+You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals. You have read the reference manual for {platform_name} with special familiarity with {effective_model_name.lower()} peripheral.
 Your task is to analyze the following raw MMIO I/O trace and generate a complete C device model.
 
 ## Available APIs
@@ -780,17 +981,26 @@ You **must** use the following APIs to construct the device model. Pay close att
 {active_api_list.strip()}
 ```
 
-{api_missing_note}
+{active_api_missing_note}
 
-{framework_rules}
+{active_framework_rules}
+
+{active_observability}
+
+{active_inter_periph}
+
+{active_host_io}
 
 --- START OF RAW I/O TRACE ---
 
 ## Platform:
 {platform_name}
 
-## Peripheral Name:
-{peripheral_name}
+## Model Name (use as the prefix for `_init` / `_read` / `_write`):
+{effective_model_name}
+
+## Peripherals to Model (covered by this single C file):
+{sources_section}
 
 ## Raw Hardware I/O Trace:
 The following is the raw MMIO trace captured during hardware execution.
@@ -802,7 +1012,7 @@ You must infer the register layout, initialization sequence, runtime behavior, a
 
 --- END OF RAW I/O TRACE ---
 
-Based **only** on the trace data provided above, generate the complete C source code for the device model. Follow the required output format precisely.
+Based on the trace data provided above and your knowledge of the peripheral's register definitions from the reference manual (bit field access types, reset values, hardware-owned vs software-writable bits), generate the complete C source code for the device model. Follow the required output format precisely.
 
 ## Required Output Format:
 
@@ -813,35 +1023,33 @@ A concise, one-paragraph summary of this peripheral's likely purpose and overall
 A bulleted list of the important registers mentioned in the traces and their inferred functions.
 
 ### 3. C Device Model Source Code
-The C source code for MMIO read and write callback for {peripheral_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs i mentioned.
+The C source code for MMIO read and write callback for {effective_model_name} emulation and any initialization you need for the emulation only. The code must be fully self-contained and ready to be compiled. Including <device.h> and <boardrunner/vio.h> will give you access to all APIs i mentioned.
 
 ```c
-// Device Model for {peripheral_name}
+// Device Model for {effective_model_name}
 
 // Inferred Register Functions:
 // ... add registers here ...
 
-static {peripheral_name}State g_{peripheral_name.lower()};
+static {effective_model_name}State g_{effective_model_name.lower()};
 
 // This function will emulate all device reads
-uint64_t {peripheral_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
-    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
-    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+uint64_t {effective_model_name.lower()}_read(void *opaque, hwaddr addr, unsigned size) {{
+    {effective_model_name}State *s = ({effective_model_name}State *)opaque;
     // ... return register value based on offset ...
 }}
 
 // This function will emulate all device writes
-void {peripheral_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
-    {peripheral_name}State *s = ({peripheral_name}State *)opaque;
-    hwaddr offset = addr - {peripheral_name.upper()}_BASE;
+void {effective_model_name.lower()}_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {{
+    {effective_model_name}State *s = ({effective_model_name}State *)opaque;
     // ... update register state based on offset and value ...
 }}
 
 // MUST return pointer to state — framework passes it as opaque to _read/_write
-void* {peripheral_name.lower()}_init(ConfigSection* model_info) {{
-    memset(&g_{peripheral_name.lower()}, 0, sizeof(g_{peripheral_name.lower()}));
+void* {effective_model_name.lower()}_init(ConfigSection* model_info) {{
+    memset(&g_{effective_model_name.lower()}, 0, sizeof(g_{effective_model_name.lower()}));
     // ... initialize state from model_info (bus inits, etc.) ...
-    return &g_{peripheral_name.lower()};
+    return &g_{effective_model_name.lower()};
 }}
 ```
 """
@@ -906,7 +1114,7 @@ def slave_model_gen(peripheral_name, platform_name, out_dir, slave_firmware_path
     Do not rename them or add new registration functions.
     - `slave_i2c_event`
     - `slave_i2c_send`
-    - `slave_i2c_recv`
+    - `slave_i2c_receive`
 """
 
     slave_gen_prompt = f"""
@@ -960,7 +1168,7 @@ static void load_defaults(<name>_state_t *s) {{ ... }}
 static void lazy_init(void) {{ ... }}
 
 // 4. The REQUIRED callback symbols (do NOT rename):
-//    I2C: slave_i2c_event, slave_i2c_send, slave_i2c_recv
+//    I2C: slave_i2c_event, slave_i2c_send, slave_i2c_receive
 //    SPI: slave_spi_set_cs, slave_spi_transfer
 
 // 5. Optional name-based aliases: <name>_send, <name>_receive, etc.
@@ -1023,10 +1231,14 @@ def _resolve_roles(peripherals, model_name, model_sources=None):
 
     return roles, sources
 
-def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list, model_sources):
+def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_list, model_sources, no_vio=False):
     """
     Generates a detailed prompt for an LLM based on analysis files in a directory.
     `peripherals` can be a tuple/list (Click multiple=True) or a single string.
+
+    When ``no_vio`` is True, VIO APIs and the VIO-specific framework rules /
+    observability / inter-peripheral / host-I/O guidance sections are stripped
+    so the prompt advertises only base QEMU APIs.
     """
     if isinstance(peripherals, str):
         peripherals = [peripherals]
@@ -1055,6 +1267,7 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
 
         isr_path = os.path.join(peripheral_directory, "isr_analysis.txt")
         isr_analysis_data = read_file_content(isr_path)
+        svd_bitfields_data = read_file_content(os.path.join(peripheral_directory, "svd_bitfields.txt"))
 
         loop_files = sorted(glob.glob(os.path.join(peripheral_directory, "loop_pattern_*.txt")))
         if not loop_files:
@@ -1116,6 +1329,8 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
         ```
         {isr_analysis_data}
         ```
+
+        {svd_bitfields_data}
         """)
         blocks.append(block)
 
@@ -1151,17 +1366,17 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     {qemu_api_list.strip()}
     ```
 
-    {api_missing_note}
+    {"" if no_vio else api_missing_note}
 
-    {framework_rules}
+    {_strip_vio_from_rules(framework_rules) if no_vio else framework_rules}
 
-    {observability_guidance}
+    {"" if no_vio else observability_guidance}
 
-    {inter_peripheral_guidance}
+    {"" if no_vio else inter_peripheral_guidance}
 
-    {context_peripheral_instructions}
+    {"" if no_vio else context_peripheral_instructions}
 
-    {host_io_section}
+    {"" if no_vio else host_io_section}
 
     --- START OF ANALYSIS DATA ---
 
@@ -1176,14 +1391,14 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     prompt_end = textwrap.dedent(f"""\
     --- END OF ANALYSIS DATA ---
 
-    Based **only** on the data above, generate the complete C source for `{model_name}`.
+    Based on the trace data above and your knowledge of the peripheral's register definitions from the reference manual (bit field access types, reset values, hardware-owned vs software-writable bits), generate the complete C source for `{model_name}`.
 
     ## Required Output Format
 
     ### 1. Dependency Summary
     - Target model: `{model_name}`
-    - Context peripheral(s) and their role (e.g., "DMA — `{model_name}` calls `api_dma_request(stream_id)` after conversion complete")
-    - Inter-peripheral APIs used and why
+    - Context peripheral(s) and their role (e.g., "DMA — `{model_name}` triggers a DMA request after conversion complete")
+    {"" if no_vio else "- Inter-peripheral APIs used and why"}
 
     ### 2. Register Analysis
     Bulleted list of important registers and their inferred functions.
@@ -1231,54 +1446,16 @@ def generate_prompt_multiple(analysis_dir, model_name, peripherals, qemu_api_lis
     ).strip()
 
 
-def iteration_prompt_gen_multiple_periph(
-    cm_path_hardware,
-    cm_path_emulation,
-    peripherals,           # all -p values, used for diff generation
-    model_names,           # all -mname values
-    model_to_path,         # {model_name: file_path}
-    out_dir,
-    show_prompt=True,
-    max_model_chars=120000,
-):
+def _build_compositional_model_source_blocks(model_to_path, show_prompt, max_model_chars):
+    """Read each model file and format it as a labeled markdown source block.
+
+    Returns a list of strings, one per entry in ``model_to_path``, suitable for
+    joining with newlines and embedding in a prompt. Sources are truncated at
+    ``max_model_chars``; when ``show_prompt`` is False the bodies are stubbed
+    out (and a warning is logged because SEARCH/REPLACE corrections need the
+    real source).
     """
-    Generates a single unified correction prompt containing:
-    - All model source files (labeled by name and filename)
-    - All peripheral diffs (labeled MISMATCH or PASSING)
-    - Instruction for LLM to output SEARCH/REPLACE blocks per file
-    """
-    if isinstance(peripherals, str):
-        peripherals = [peripherals]
-    else:
-        peripherals = list(peripherals)
-
-    summary_path = os.path.join(cm_path_hardware, "summary.txt")
-    platform_name = parse_summary_file(summary_path).get("Platform", "Unknown Platform")
-
-    # ── 1. Run verification for all peripherals ──────────────────────────────
-    peripheral_results = {}   # {periph: (not_match, diff_obj)}
-    any_mismatch = False
-
-    for periph in peripherals:
-        not_match, diff_obj = verify.verify_automata(
-            automata1=cm_path_hardware,
-            automata2=cm_path_emulation,
-            peripheral=periph
-        )
-        peripheral_results[periph] = (not_match, diff_obj)
-        if not_match:
-            any_mismatch = True
-
-    if not any_mismatch:
-        fastdyn_log.info("All peripherals passing — no correction prompt needed.")
-        return None
-
-    # ── 2. Build model source blocks ─────────────────────────────────────────
-    # Iterate all -d entries so every provided model is embedded and patchable,
-    # not just the -mname ones. This handles cases like slave models (BME280)
-    # or signal-connected peripherals (GPIOD) that have no trace data but are
-    # still relevant for the LLM to reason about and potentially correct.
-    model_source_blocks = []
+    blocks = []
     for model_name, path in model_to_path.items():
         filename = os.path.basename(path)
         if show_prompt:
@@ -1291,25 +1468,55 @@ def iteration_prompt_gen_multiple_periph(
                 f"show_prompt=False: model source for '{model_name}' will be hidden. "
                 "SEARCH/REPLACE corrections will likely fail."
             )
-
-        model_source_blocks.append(
+        blocks.append(
             f"## Model: `{model_name}`  |  File: `{filename}`\n"
             f"```c\n"
             f"{source}\n"
             f"```"
         )
+    return blocks
 
-    # ── 3. Build peripheral diff blocks ──────────────────────────────────────
-    peripheral_diff_blocks = []
+
+def _render_apis_and_rules(api_list, fw_rules, no_vio):
+    """Assemble the APIs + framework rules + (optional VIO-side guidance) section.
+
+    When ``no_vio`` is True, the VIO-specific guidance blocks (observability,
+    inter-peripheral, host I/O, context-peripheral) are omitted because they
+    reference APIs that are no longer available.
+    """
+    parts = [
+        "## Available APIs",
+        "```c",
+        api_list.strip(),
+        "```",
+        "" if no_vio else api_missing_note,
+        fw_rules,
+    ]
+    if not no_vio:
+        parts.extend([
+            observability_guidance,
+            inter_peripheral_guidance,
+            context_peripheral_instructions,
+            host_io_section,
+        ])
+    return "\n\n".join(p for p in parts if p)
+
+
+def _build_compositional_diff_blocks(peripherals, peripheral_results):
+    """Format per-peripheral encoder diff data as MISMATCH/PASSING markdown blocks.
+
+    ``peripheral_results`` maps each peripheral to ``(not_match, diff_obj)`` as
+    produced by ``verify.verify_automata``. The output is consumed by the
+    default and no_rca branches of ``iteration_prompt_gen_multiple_periph``.
+    """
+    blocks = []
     for periph in peripherals:
         not_match, diff_obj = peripheral_results[periph]
         status = "MISMATCH" if not_match else "PASSING"
-
         state_data_section = diff_obj.diff_state_data
         if state_data_section and not state_data_section.strip().startswith("[NO DATA"):
             state_data_section += "\n" + polling_interpretation_instructions
-
-        peripheral_diff_blocks.append(textwrap.dedent(f"""\
+        blocks.append(textwrap.dedent(f"""\
         ## Peripheral: `{periph}`  [{status}]
         {"> This peripheral has trace mismatches that require a fix." if not_match else "> This peripheral is currently passing — do not regress it."}
 
@@ -1349,17 +1556,409 @@ def iteration_prompt_gen_multiple_periph(
 ```
         {diff_obj.isr_analysis_data}
 ```
-        """).strip())
 
-    # ── 4. Build file target reference ───────────────────────────────────────
+        {diff_obj.svd_bitfields_data}
+        """).strip())
+    return blocks
+
+
+def _read_trace_strip_systick(log_path):
+    """Read an io.log and drop the SysTick IRQ-taken/served bookkeeping lines.
+
+    Those lines are not MMIO accesses and carry no register information; they
+    are the only filter applied — no SVD-based address resolution, so this is
+    safe to use for the no_encoder ablation path.
+    """
+    lines = []
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.rstrip()
+            if "Vector = 0x0000000F" in stripped:
+                continue
+            lines.append(stripped)
+    return "\n".join(lines)
+
+
+def _write_prompt(out_dir, filename, content):
+    """Persist a generated prompt to ``out_dir/filename`` and return the path."""
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    output_path = Path(out_dir) / filename
+    output_path.write_text(content + "\n", encoding="utf-8")
+    fastdyn_log.info(f"Unified correction prompt written to {output_path}")
+    return str(output_path)
+
+
+def _validate_model_sources_map(model_sources_map, model_to_path, flag_name):
+    """Ensure every -mname has an entry in model_sources_map.
+
+    Raises ValueError on any missing/empty mapping. Returns the validated
+    dict for convenience.
+    """
+    if not model_sources_map:
+        raise ValueError(
+            f"{flag_name} on a compositional (multi -mname) run requires "
+            "model_sources_map (the --ms-map flag). Without it, each model's "
+            "correction prompt cannot be built independently and the "
+            "orchestration that RCA provides is preserved by accident."
+        )
+    missing = [m for m in model_to_path if not model_sources_map.get(m)]
+    if missing:
+        raise ValueError(
+            f"{flag_name}: model_sources_map missing entries for "
+            f"{missing}. Provide --ms-map MNAME=PERIPH1,PERIPH2,... for each --mname."
+        )
+    return model_sources_map
+
+
+def _per_model_correction_prompt(
+    *,
+    mname, model_path, sources, peripheral_results, platform_name,
+    apis_and_rules, mode,
+):
+    """Build the body of a per-model correction prompt for ``no_rca`` or
+    ``no_verifier`` in compositional mode.
+
+    ``mode`` is ``"no_rca"`` (diff data shown, full regen ask) or
+    ``"no_verifier"`` (no diff data, generic regen ask). The prompt sees only
+    this model's source and only this model's peripherals' diffs — it has no
+    visibility into the other compositional model.
+    """
+    filename = os.path.basename(model_path)
+    model_blocks = _build_compositional_model_source_blocks(
+        {mname: model_path}, show_prompt=True, max_model_chars=120000,
+    )
+
+    if mode == "no_rca":
+        # Filter peripheral_results to just this model's sources.
+        model_results = {p: peripheral_results[p] for p in sources if p in peripheral_results}
+        diff_blocks = _build_compositional_diff_blocks(sources, model_results)
+        mismatch_list = [p for p, (nm, _) in model_results.items() if nm]
+        if not mismatch_list:
+            return None  # nothing to correct in this model
+        analysis_section = textwrap.dedent(f"""\
+        ## Your Task
+        The following peripheral(s) covered by this model have trace mismatches: {", ".join(f"`{p}`" for p in mismatch_list)}.
+        The Verifier diffs are shown below. Use them and the platform reference manual to produce a corrected complete C source file. Do not attempt SEARCH/REPLACE patches — output the full file content.
+
+        ## Trace Log Schema
+        Arrays of: [Operation, Peripheral, Register, Address, Value, PC].
+
+        --- START OF ANALYSIS DATA ---
+
+        ## Platform: {platform_name}
+
+        {chr(10).join(diff_blocks)}
+
+        --- END OF ANALYSIS DATA ---""")
+    elif mode == "no_verifier":
+        analysis_section = textwrap.dedent("""\
+        ## Your Task
+        The model file below was generated previously and failed verification against the hardware. No diff data is available. Use the platform reference manual and the broken model source to produce a corrected complete C source file.""")
+    else:
+        raise ValueError(f"Unknown per-model correction mode: {mode!r}")
+
+    return textwrap.dedent(f"""\
+    Take this prompt independent from previous prompt history.
+
+    You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
+    You have read the reference manual for {platform_name} with special familiarity with {", ".join(sources)}.
+
+    {analysis_section}
+
+    ## Model File Under Correction
+    - `{mname}` → `{filename}`
+
+    {apis_and_rules}
+
+    --- START OF CURRENT MODEL ---
+
+    {chr(10).join(model_blocks)}
+
+    --- END OF CURRENT MODEL ---
+
+    Output a complete corrected C source file in a ```c fenced block prefixed by `// FILE: {filename}`.
+    """).strip()
+
+
+def iteration_prompt_gen_multiple_periph(
+    cm_path_hardware,
+    cm_path_emulation,
+    peripherals,           # all -p values, used for diff generation
+    model_names,           # all -mname values
+    model_to_path,         # {model_name: file_path}
+    out_dir,
+    show_prompt=True,
+    max_model_chars=120000,
+    # Ablation flags. All default to non-ablation (full pipeline) behavior.
+    no_encoder=False,
+    no_rca=False,
+    no_verifier=False,
+    no_vio=False,
+    # Required when no_encoder=True (raw traces feed the prompt). Optional but
+    # informative for no_verifier.
+    hardware_log=None,
+    emulation_log=None,
+    # {mname: [periph_name, ...]} — required for no_rca and no_verifier in
+    # compositional (multi-mname) mode. Identifies which peripherals each
+    # model is responsible for, enabling per-model independent correction
+    # prompts so cross-model orchestration is also ablated.
+    model_sources_map=None,
+):
+    """
+    Generates correction prompts for the compositional multi-model verifier
+    flow. Default mode produces a single unified prompt with structured per-
+    peripheral diff blocks plus SEARCH/REPLACE instructions. The ablation
+    flags select alternative correction strategies:
+
+    - no_verifier: drop diff data entirely; show only the broken model source +
+      a generic regeneration request (full code blocks). In compositional mode
+      with model_sources_map set, splits into one prompt per model.
+    - no_encoder: keep SEARCH/REPLACE strategy, but replace structured per-
+      peripheral diff blocks with the raw hardware + emulation I/O traces.
+      Joint by necessity (the raw trace cannot be split per peripheral).
+    - no_rca:     keep structured diff blocks, but ask for full regeneration
+      instead of SEARCH/REPLACE patches and drop the targeted RCA narrative.
+      In compositional mode with model_sources_map set, splits into one
+      prompt per model so cross-model orchestration is also ablated.
+    - no_vio:     orthogonal lens; strips VIO APIs and VIO-specific framework
+      rules from whichever branch is selected above.
+
+    Returns a single path string for joint prompts, or a {mname: path} dict
+    when no_rca/no_verifier produce per-model splits.
+    """
+    if isinstance(peripherals, str):
+        peripherals = [peripherals]
+    else:
+        peripherals = list(peripherals)
+
+    summary_path = os.path.join(cm_path_hardware, "summary.txt")
+    platform_name = parse_summary_file(summary_path).get("Platform", "Unknown Platform")
+
+    # ── Shared building blocks (used by every branch below) ──────────────────
+    model_source_blocks = _build_compositional_model_source_blocks(
+        model_to_path, show_prompt, max_model_chars
+    )
     file_reference = "\n    ".join(
         f"- `{model_name}` → `{os.path.basename(path)}`"
         for model_name, path in model_to_path.items()
     )
+    api_list = qemu_base_api_list if no_vio else qemu_api_list
+    fw_rules = _strip_vio_from_rules(framework_rules) if no_vio else framework_rules
+    apis_and_rules = _render_apis_and_rules(api_list, fw_rules, no_vio)
 
+    # ── Branch: no_verifier — broken sources + generic "regenerate" message ──
+    # In compositional mode, split into per-model independent prompts so the
+    # cross-model orchestration that RCA provides is also ablated. In single-
+    # mname mode, fall through to the joint prompt below.
+    if no_verifier and len(model_to_path) > 1:
+        _validate_model_sources_map(model_sources_map, model_to_path, "--no-verifier")
+        out_paths = {}
+        for mname, model_path in model_to_path.items():
+            prompt = _per_model_correction_prompt(
+                mname=mname,
+                model_path=model_path,
+                sources=model_sources_map[mname],
+                peripheral_results={},  # unused in no_verifier mode
+                platform_name=platform_name,
+                apis_and_rules=apis_and_rules,
+                mode="no_verifier",
+            )
+            # Sibling of out_dir, not subdir — survives verifier rmtree on next iter.
+            base = Path(out_dir)
+            sibling_dir = str(base.parent / f"{base.name}_{mname}")
+            out_paths[mname] = _write_prompt(sibling_dir, "initial_prompt.txt", prompt)
+        return out_paths
+
+    # No diff data, no analysis. Written as initial_prompt.txt so the LLM
+    # produces fresh full code blocks rather than SEARCH/REPLACE patches.
+    if no_verifier:
+        prompt = textwrap.dedent(f"""\
+        Take this prompt independent from previous prompt history.
+
+        You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
+        You have read the reference manual for {platform_name} with special familiarity with {", ".join(peripherals)}.
+
+        ## Your Task
+        The model files below were generated previously and failed verification against the hardware. No diff data is available. Use the platform reference manual and the broken model sources to produce corrected complete C source code for every model file listed below.
+
+        ## Model Files Under Correction
+        {file_reference}
+
+        {apis_and_rules}
+
+        --- START OF CURRENT MODELS ---
+
+        {chr(10).join(model_source_blocks)}
+
+        --- END OF CURRENT MODELS ---
+
+        Output a complete corrected C source file for each model above, in its own ```c fenced block prefixed by `// FILE: <filename>` so the framework can route each block to the right file.
+        """).strip()
+        return _write_prompt(out_dir, "initial_prompt.txt", prompt)
+
+    # ── Branch: no_encoder — raw HW/EM traces in place of encoder diffs ──────
+    # SEARCH/REPLACE strategy preserved. Skips verify_automata entirely
+    # because we are not using its structured output.
+    if no_encoder:
+        if not hardware_log:
+            raise ValueError(
+                "iteration_prompt_gen_multiple_periph: no_encoder=True requires hardware_log"
+            )
+        raw_hw = _read_trace_strip_systick(hardware_log)
+        em_section = ""
+        if emulation_log:
+            raw_em = _read_trace_strip_systick(emulation_log)
+            # Cap emulation trace at 2× hardware length to defend against
+            # infinite-loop models flooding the prompt.
+            hw_lines = raw_hw.count("\n") + 1
+            em_lines = raw_em.split("\n")
+            if len(em_lines) > hw_lines * 2:
+                truncated = len(em_lines)
+                raw_em = "\n".join(em_lines[: hw_lines * 2])
+                raw_em += (
+                    f"\n\n[TRUNCATED: emulation trace had {truncated} lines, "
+                    f"capped at {hw_lines * 2} (2x hardware trace). "
+                    "The model likely contains an infinite polling loop.]"
+                )
+            em_section = (
+                "\n\n## Raw Emulated Model I/O Trace\n"
+                "Compare against the hardware trace above to identify divergence points.\n"
+                f"```\n{raw_em}\n```"
+            )
+
+        prompt = textwrap.dedent(f"""\
+        Take this prompt independent from previous prompt history.
+
+        You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
+        You have read the reference manual for {platform_name} with special familiarity with {", ".join(peripherals)}.
+
+        ## Your Task
+        The peripheral models below failed verification. Compare the raw hardware and emulated I/O traces to identify the divergence and produce SEARCH/REPLACE patches against the model files. A mismatch attributed to one peripheral may originate in a *different* model file — reason across all models before deciding where the fix belongs.
+
+        ## Model Files Under Correction
+        You may produce SEARCH/REPLACE blocks for any or all of these files:
+        {file_reference}
+        Each SEARCH/REPLACE block MUST begin with a comment identifying its target file:
+        `// FILE: <filename>`
+
+        {apis_and_rules}
+
+        --- START OF CURRENT MODELS ---
+
+        {chr(10).join(model_source_blocks)}
+
+        --- END OF CURRENT MODELS ---
+
+        --- START OF RAW TRACES ---
+
+        ## Platform: {platform_name}
+
+        ## Raw Hardware I/O Trace
+        ```
+        {raw_hw}
+        ```{em_section}
+
+        --- END OF RAW TRACES ---
+
+        {search_replace_prompting}
+        """).strip()
+        return _write_prompt(out_dir, "revised_prompt.txt", prompt)
+
+    # ── 1. Run verification for all peripherals ──────────────────────────────
+    peripheral_results = {}   # {periph: (not_match, diff_obj)}
+    any_mismatch = False
+
+    for periph in peripherals:
+        not_match, diff_obj = verify.verify_automata(
+            automata1=cm_path_hardware,
+            automata2=cm_path_emulation,
+            peripheral=periph
+        )
+        peripheral_results[periph] = (not_match, diff_obj)
+        if not_match:
+            any_mismatch = True
+
+    if not any_mismatch:
+        fastdyn_log.info("All peripherals passing — no correction prompt needed.")
+        return None
+
+    # ── Branch: no_rca — diffs shown, generic message, full regeneration ─────
+    # In compositional mode, split into per-model independent prompts so the
+    # cross-model orchestration RCA provides is also ablated. Each LLM call
+    # sees only its own model's source + only its peripherals' diff blocks
+    # and has no awareness of the other model.
+    if no_rca and len(model_to_path) > 1:
+        _validate_model_sources_map(model_sources_map, model_to_path, "--no-rca")
+        out_paths = {}
+        for mname, model_path in model_to_path.items():
+            sources = model_sources_map[mname]
+            prompt = _per_model_correction_prompt(
+                mname=mname,
+                model_path=model_path,
+                sources=sources,
+                peripheral_results=peripheral_results,
+                platform_name=platform_name,
+                apis_and_rules=apis_and_rules,
+                mode="no_rca",
+            )
+            if prompt is None:
+                fastdyn_log.info(
+                    f"  No-RCA: skipping `{mname}` — no mismatches in its peripherals."
+                )
+                continue
+            # Sibling of out_dir, not subdir — survives verifier rmtree on next iter.
+            base = Path(out_dir)
+            sibling_dir = str(base.parent / f"{base.name}_{mname}")
+            out_paths[mname] = _write_prompt(sibling_dir, "initial_prompt.txt", prompt)
+        if not out_paths:
+            fastdyn_log.info("All peripherals passing — no correction prompt needed.")
+            return None
+        return out_paths
+
+    if no_rca:
+        diff_blocks = _build_compositional_diff_blocks(peripherals, peripheral_results)
+        mismatch_list = [p for p, (nm, _) in peripheral_results.items() if nm]
+        prompt = textwrap.dedent(f"""\
+        Take this prompt independent from previous prompt history.
+
+        You are an expert reverse engineer specializing in embedded systems and writing C emulation for peripherals.
+        You have read the reference manual for {platform_name} with special familiarity with {", ".join(peripherals)}.
+
+        ## Your Task
+        The following peripheral(s) have trace mismatches: {", ".join(f"`{p}`" for p in mismatch_list)}.
+        The Verifier diffs are shown below. Use them and the platform reference manual to produce corrected complete C source code for every model file listed. Do not attempt SEARCH/REPLACE patches — output full file content for each model.
+
+        ## Model Files Under Correction
+        {file_reference}
+
+        {apis_and_rules}
+
+        ## Trace Log Schema
+        Arrays of: [Operation, Peripheral, Register, Address, Value, PC].
+        Pay close attention to Value differences between Hardware and Emulated.
+
+        --- START OF CURRENT MODELS ---
+
+        {chr(10).join(model_source_blocks)}
+
+        --- END OF CURRENT MODELS ---
+
+        --- START OF ANALYSIS DATA ---
+
+        ## Platform: {platform_name}
+
+        {chr(10).join(diff_blocks)}
+
+        --- END OF ANALYSIS DATA ---
+
+        Output a complete corrected C source file for each model above, in its own ```c fenced block prefixed by `// FILE: <filename>` so the framework can route each block to the right file.
+        """).strip()
+        return _write_prompt(out_dir, "initial_prompt.txt", prompt)
+
+    # ── Default branch: structured per-peripheral diffs + SEARCH/REPLACE ─────
+    peripheral_diff_blocks = _build_compositional_diff_blocks(peripherals, peripheral_results)
     mismatch_list = [p for p, (nm, _) in peripheral_results.items() if nm]
 
-    # ── 5. Assemble prompt ───────────────────────────────────────────────────
     prompt_start = textwrap.dedent(f"""\
     Take this prompt independent from previous prompt history.
 
@@ -1381,22 +1980,7 @@ a DMA model failure). Reason across all models before deciding where the fix bel
     Each SEARCH/REPLACE block MUST begin with a comment identifying its target file:
     `// FILE: <filename>`
 
-    ## Available APIs
-```c
-    {qemu_api_list.strip()}
-```
-
-    {api_missing_note}
-
-    {framework_rules}
-
-    {observability_guidance}
-
-    {inter_peripheral_guidance}
-
-    {context_peripheral_instructions}
-
-    {host_io_section}
+    {apis_and_rules}
 
     ## Trace Log Schema
     Arrays of: [Operation, Peripheral, Register, Address, Value, PC].
@@ -1417,7 +2001,7 @@ a DMA model failure). Reason across all models before deciding where the fix bel
     prompt_end = textwrap.dedent(f"""\
     --- END OF ANALYSIS DATA ---
 
-    Based **only** on the data above, output:
+    Based on the trace data above and your knowledge of the peripheral's register definitions from the reference manual (bit field access types, reset values, hardware-owned vs software-writable bits), output:
 
     ### 1. Cross-Model Failure Analysis
     For each [MISMATCH] peripheral, identify:
@@ -1437,8 +2021,4 @@ a DMA model failure). Reason across all models before deciding where the fix bel
         + prompt_end
     ).strip()
 
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
-    output_path = Path(out_dir) / "revised_prompt.txt"
-    output_path.write_text(final_prompt + "\n", encoding="utf-8")
-    fastdyn_log.info(f"Unified correction prompt written to {output_path}")
-    return str(output_path)
+    return _write_prompt(out_dir, "revised_prompt.txt", final_prompt)

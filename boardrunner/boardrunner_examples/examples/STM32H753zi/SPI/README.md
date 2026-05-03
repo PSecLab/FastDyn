@@ -1,92 +1,62 @@
-# SPI — Full-Duplex Polling with BME280
+# SPI — Transmit/Receive Byte (BME280, Full-Duplex)
 
-**Firmware:** SPI1 master polling mode. Waits for a button press, then performs a single 2-byte full-duplex `TransmitReceive` with a BME280 sensor (reads the chip ID register 0xD0). Hardware chip select on PA4 (SPI1_NSS, AF5). Verifies the returned chip ID (0x60) and lights LEDs accordingly.
+**Board:** NUCLEO-H753ZI
 
-**Board:** NUCLEO-H753ZI (STM32H753ZI)
-
-**Model goal:** Transmit a byte, receive a byte (full-duplex) with correct CS framing across the full transaction.
-
-> **Hardware wiring note:** BME280 CS must be connected to **PA4** (SPI1_NSS). The firmware uses hardware NSS (`SPI_NSS_HARD_OUTPUT`), so the SPI peripheral drives PA4 automatically — no separate GPIO toggle required.
-
----
+The firmware uses SPI1 in master polling mode. After a user-button press it performs a 2-byte full-duplex transfer with a BME280, reading the chip ID register `0xD0` (expects `0x60`). Hardware NSS on PA4.
 
 ## Hardware Connections
 
-**Sensor:** BME280 (Bosch environmental sensor — SPI mode. Common breakout boards: Adafruit BME280, SparkFun BME280, or any BME280 module with SPI pads exposed.)
+**Sensor:** BME280 (SPI mode).
 
-| BME280 pin | NUCLEO-H753ZI pin | Connector | Notes |
-|-----------|-------------------|-----------|-------|
-| VCC / VDD | 3.3V | CN8 pin 7 or CN6 pin 4 | 3.3 V supply only — do not use 5 V |
-| GND | GND | CN8 pin 11 or CN6 pin 6 | |
-| SCK / SCL | **D13** (PA5, SPI1_SCK, AF5) | CN9 pin 2 | Arduino header |
-| SDO / MISO | **D12** (PA6, SPI1_MISO, AF5) | CN9 pin 4 | Arduino header |
-| SDI / MOSI | **D11** (PB5, SPI1_MOSI, AF5) | CN9 pin 6 | Arduino header |
-| CSB / CS | **CN7 pin 17** (PA4, SPI1_NSS, AF5) | Morpho connector | **Not Arduino D10** — firmware uses hardware NSS on PA4 |
+| BME280 pin | NUCLEO-H753ZI pin                   | Connector       | Notes                          |
+| ---------- | ----------------------------------- | --------------- | ------------------------------ |
+| VCC / VDD  | 3.3V                                | CN8 pin 7       | 3.3 V only                     |
+| GND        | GND                                 | CN8 pin 11      |                                |
+| SCK / SCL  | **D13** (PA5, SPI1_SCK, AF5)        | CN9 pin 2       |                                |
+| SDO / MISO | **D12** (PA6, SPI1_MISO, AF5)       | CN9 pin 4       |                                |
+| SDI / MOSI | **D11** (PB5, SPI1_MOSI, AF5)       | CN9 pin 6       |                                |
+| CSB / CS   | **CN7 pin 17** (PA4, SPI1_NSS, AF5) | Morpho header   | **Not Arduino D10** — uses HW NSS |
 
-> **CS wiring is critical:** the firmware uses `SPI_NSS_HARD_OUTPUT` so the SPI peripheral drives PA4 directly. If you wire CS to Arduino D10 (PD14) instead of CN7 pin 17 (PA4), the sensor will never be selected and all reads will return 0xFF.
+> CS must go to PA4 (CN7 pin 17), not Arduino D10. The firmware uses `SPI_NSS_HARD_OUTPUT` so the SPI peripheral drives PA4 directly.
 
-**User interaction:** Press the **blue button (PC13)** on the NUCLEO board after power-on to trigger the SPI transaction.
+Press the user button (PC13) to start the transaction.
 
-**LED indicators (on-board):**
-| LED | Pin | Meaning |
-|-----|-----|---------|
-| LED1 (green) | PB0 | Chip ID 0x60 received correctly — pass |
-| LED3 (red) | PB14 | Wrong chip ID or transfer error — fail |
+## Expected Output
 
----
+- LED1 (PB0) on if the chip ID `0x60` was received correctly
+- LED3 (PB14) on if the transfer failed or returned an unexpected value
 
-## Firmware Check
+## Test Scope
 
-The firmware achieves the required model goal:
-- **Transmit:** sends `{0xD0, 0x00}` (register address + dummy byte) via `HAL_SPI_TransmitReceive`
-- **Receive:** receives 2 bytes from the sensor in the same call (full-duplex)
-- Uses **polling mode** — no DMA, no interrupts for SPI data transfer
-- **Hardware CS:** PA4 (SPI1_NSS, `SSOE=1` in CFG2) — asserted when CSTART fires, deasserted at EOT
+- Transmit a byte
+- Receive a byte
 
----
+## Compositional Model Split
 
-## Model Split
-
-Two models are required. SPI1 owns the CS line directly via hardware NSS — no separate GPIO model is needed.
-
-| Component | Peripheral | Generated file | Compiled to |
-|-----------|-----------|----------------|-------------|
-| Model 1 | SPI1 (master controller + hardware NSS) | `generated_models/spi_model.c` | `model.so` |
-| Slave model | BME280 sensor | `generated_models/bme280_slave.c` | `slave.so` |
-| Passthrough | GPIOA (PA4/PA5/PA6), GPIOB (PB5/LED), GPIOC (button), GPIOE (LED), RCC, PWR, SYSCFG | — | real hardware |
-
-**CS control:** SPI1's model infers CS from `CSTART` (assert) and `EOT` (deassert) — both visible directly in the SPI1 register trace. No cross-peripheral signal chain required.
-
-**Slave calling convention:** The framework loads `slave.so` and resolves the fixed symbols `slave_spi_transfer` and `slave_spi_set_cs`. The slave model generated by `fastdyn generate --slave-model` exports exactly these names.
-
-> **Note:** During the emulation run, GPIOC PC13 (user button) is in passthrough. The firmware waits for a button press before starting the SPI transaction. Press the physical button on the board to proceed, or use a PTY-based GPIOC model (similar to the GPIO_INT example) to simulate it in software.
-
----
+| Component   | Peripheral                       | Compiled to     |
+| ----------- | -------------------------------- | --------------- |
+| Elder model | SPI1 (master + hardware NSS)     | `model.so`      |
+| Elder slave | BME280                           | `slave.so`      |
+| Passthrough | RCC, GPIO (button + LEDs), all others | real hardware |
 
 ## Step-by-Step Workflow
 
 ### Step 0 — Passthrough run (collect hardware I/O trace)
 
-Run the firmware in passthrough mode with real hardware. FastDyn logs every SPI1 register access to `hardware_log/io.log`.
+> **TOML state:** Set SPI1 elder handler to `enabled = false` and passthrough handler to `enabled = true` in `spi_config.toml`. Restore elder mode before Step 5.
 
 ```bash
-fastdyn run -c boardrunner/boardrunner_examples/examples/STM32H753zi/SPI/spi_config.toml
+boardrunner run -c boardrunner/boardrunner_examples/examples/STM32H753zi/SPI/spi_config.toml
 ```
 
-Press the blue user button on the NUCLEO board when LED1 lights up to trigger the SPI transaction.
+Press the user button when prompted by the LEDs.
 
-### Step 1 — Generate BME280 slave model
+Output: `hardware_log/io.log`
 
-Generate the slave model **first** — the SPI1 model depends on it at runtime (the slave is loaded by `api_spi_init_bus` inside the SPI1 model).
-
-> **Why slave models are not generated from traces:** BoardRunner's HITL trace captures MMIO accesses to on-chip STM32 peripherals only. The BME280 is an external device on the other side of the SPI wire — its internal register behavior never appears in `io.log`. Slave models therefore cannot be (and are not expected to be) inferred from traces. This is not a limitation of BoardRunner; the framework's *G3 Low Manual Effort* goal applies to on-chip MCU peripheral modeling. External slave models are a necessary complement, written once per device type and reused across firmwares.
-
-Two inputs drive slave model generation:
-- `--firmware-code (-fc)`: the **master's** `main.c` — shows exactly what commands are sent (`0xD0` for chip ID, expecting `0x60` back) and the transaction structure
-- `--reference-model (-rm)`: the F103RB `slave.c` — a structural reference showing the BME280 register model pattern to follow
+### Step 1 — Generate slave model prompt
 
 ```bash
-fastdyn generate --slave-model \
+boardrunner generate --slave-model \
   -b STM32H753x \
   -p SPI1 \
   -fc SPI_FIrmware_tmp/Src/main.c \
@@ -94,49 +64,43 @@ fastdyn generate --slave-model \
   -o ./fastdyn_work_bme280
 ```
 
-Send the generated slave prompt to the LLM and compile:
+### Step 2 — Compile slave model
 
 ```bash
-fastdyn llm -d fastdyn_work_bme280 \
+boardrunner llm -d fastdyn_work_bme280 \
   -o boardrunner/boardrunner_sdk/model/slave.c \
   --compile --model gpt-5.4 --reasoning-effort medium
 ```
 
-> The generated slave must export exactly `slave_spi_transfer` and `slave_spi_set_cs` — the framework resolves these fixed symbols via `dlsym` when loading `slave.so`.
+> The generated slave must export `slave_spi_transfer` and `slave_spi_set_cs`.
 
-### Step 2 — Generate LLM prompt for SPI1 master model
-
-The Encoder processes `io.log` for SPI1. The LLM infers CS control directly from the SPI1 trace: `CSTART=1` asserts NSS, `EOT` in SR deasserts it.
+### Step 3 — Generate master model prompt
 
 ```bash
-fastdyn generate -hw hardware_log/io.log -b STM32H753x \
+boardrunner generate -hw hardware_log/io.log -b STM32H753x \
   -p SPI1 \
   -mname "SPI1" -ms "SPI1" \
   -o ./fastdyn_work_spi
 ```
 
-### Step 3 — Synthesize and compile the SPI1 model
+### Step 4 — Compile master model
 
 ```bash
-fastdyn llm -d fastdyn_work_spi \
+boardrunner llm -d fastdyn_work_spi \
   -o boardrunner/boardrunner_sdk/model/model.c \
   --compile --model gpt-5.4 --reasoning-effort medium
 ```
 
-### Step 4 — Run with both models
-
-`model.so` (SPI1) and `slave.so` (BME280) must both be compiled before running. The SPI1 model loads the slave automatically at init via `api_spi_init_bus`.
+### Step 5 — Run with the generated elder models
 
 ```bash
-fastdyn run -c boardrunner/boardrunner_examples/examples/STM32H753zi/SPI/spi_config.toml
+boardrunner run -c boardrunner/boardrunner_examples/examples/STM32H753zi/SPI/spi_config.toml
 ```
 
-Press the blue button to trigger the SPI transaction. LED1 lights on success (chip ID 0x60 received); LED3 lights on failure.
-
-### Step 5 — Verify against hardware trace
+### Step 6 — Verify against hardware trace
 
 ```bash
-fastdyn verifier -hw hardware_log/io.log \
+boardrunner verifier -hw hardware_log/io.log \
   -em io.log \
   -b STM32H753x \
   -p SPI1 \
@@ -145,23 +109,20 @@ fastdyn verifier -hw hardware_log/io.log \
   -d BME280:boardrunner/boardrunner_sdk/model/slave.c
 ```
 
-`-d BME280:...` provides the slave source as context for the LLM correction prompt so it can inspect the full transaction when generating patches.
-
-#### Apply LLM correction patches (if verification finds mismatches)
+#### Apply LLM correction patches (if mismatches found)
 
 ```bash
-fastdyn llm -d fastdyn_work \
+boardrunner llm -d fastdyn_work \
   -o boardrunner/boardrunner_sdk/model/model.c \
-  -o boardrunner/boardrunner_sdk/model/slave.c \
   --compile --model gpt-5.4 --reasoning-effort medium --stateless
 ```
 
-Repeat Steps 4–5 until the Verifier reports no mismatches.
+Once verified, snapshot both models:
 
----
+```bash
+cp boardrunner/boardrunner_sdk/model/model.c \
+   boardrunner/boardrunner_examples/examples/STM32H753zi/SPI/generated_models/spi_model.c
 
-## Configuration
-
-Platform configuration: [`spi_config.toml`](spi_config.toml)
-
-All FastDyn CLI options are documented in `src/fastdyn/main.py`.
+cp boardrunner/boardrunner_sdk/model/slave.c \
+   boardrunner/boardrunner_examples/examples/STM32H753zi/SPI/generated_models/bme280_slave.c
+```

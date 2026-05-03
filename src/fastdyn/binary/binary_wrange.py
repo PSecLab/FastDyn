@@ -19,28 +19,37 @@ def get_readelf_output(elf_path):
     )
     return result.stdout.splitlines()
 
-def get_initial_stack_pointer(elf_path):
-    result = subprocess.run(
-        ["arm-none-eabi-objdump", "-s", "-j", ".isr_vector", elf_path],
-        capture_output=True,
-        text=True,
-        check=True
-    )
-
-    for line in result.stdout.splitlines():
-        # Match a line containing the vector table bytes
+def _parse_first_word_le(stdout):
+    for line in stdout.splitlines():
         m = re.search(r'^\s*[0-9a-fA-F]+\s+([0-9a-fA-F]{8})', line)
         if m:
-            word = m.group(1)
+            return int.from_bytes(bytes.fromhex(m.group(1)), "little")
+    return None
 
-            # objdump shows bytes in order like: 00c00720
-            # which corresponds to bytes: 00 c0 07 20
-            # little-endian -> reverse
-            b = bytes.fromhex(word)
-            sp = int.from_bytes(b, "little")
+def get_initial_stack_pointer(elf_path):
+    # Vector-table section name varies across toolchains:
+    #   STM32 HAL / CMSIS startup files: ".isr_vector"
+    #   Zephyr (any board):              "rom_start"
+    #   Some bare-metal LDs:             ".vectors"
+    # Some SDKs (e.g. MAX78000) place the vectors at the top of .text without a
+    # dedicated section — fall back to reading the first word of .text in that case.
+    candidate_sections = [".isr_vector", "rom_start", ".vectors", ".text"]
+    for section in candidate_sections:
+        try:
+            r = subprocess.run(
+                ["arm-none-eabi-objdump", "-s", "-j", section, elf_path],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            continue
+        if "Contents of section" not in r.stdout:
+            continue
+        sp = _parse_first_word_le(r.stdout)
+        if sp is not None:
             return sp
-
-    raise RuntimeError("Could not locate ISR vector contents")
+    return None
 
 # Parses through sections, if writable, adds address range and name to list
 
@@ -108,7 +117,8 @@ def run(out_file, bin_path):
                 size = end - start
                 f.write(f"0x{start:08X}\t{size:#x}\n")
             stack = get_initial_stack_pointer(bin_path)
-            f.write(f"0x{stack:08X}\t0x0")
+            if stack is not None:
+                f.write(f"0x{stack:08X}\t0x0")
     except Exception as e:
         print("[binary_wrange.py] Couldn't open ", out_file, e)
 

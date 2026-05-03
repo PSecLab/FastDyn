@@ -174,7 +174,7 @@ void dyninst(unsigned int cpu_index, void *udata);
 void dyninst_lib(unsigned int cpu_index, void *udata);
 
 /**
- * @brief TODO: Hammad please fill out how you use this
+ * @brief TODO: document usage
  */
 void fastdyn_callback(unsigned int cpu_index, void *udata);
 
@@ -197,7 +197,7 @@ void fastdyn_callback(unsigned int cpu_index, void *udata);
 void timer_start(unsigned int cpu_index, void *udata);
 
 /**
- * @brief TODO: Arslan
+ * @brief TODO
  */
 void start_budgeting(unsigned int cpu_index, void *udata);
 

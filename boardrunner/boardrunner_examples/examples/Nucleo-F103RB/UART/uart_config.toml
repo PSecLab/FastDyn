@@ -64,12 +64,6 @@ logger_content = """
 # output = stderr
 """
 
-# Input character in UART
-[[CPU.cpu0.virtuals]]
-at = "0x8000cec"
-instruction = "anchor"
-args = ["1"]
-
 # ==============================================================================
 #                              Device Configuration
 # ==============================================================================

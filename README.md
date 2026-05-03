@@ -1,66 +1,107 @@
 # FastDyn Plugins
-## How to run?
-Before running the setup, it is highly recommended to use a virtual environment to isolate dependencies.
 
-### Install the venv package:
+## Build
+
+FastDyn depends on two sibling repositories that you must build first:
+
+- `qemu/` — the patched QEMU fork that hosts the FastDyn plugin
+- `libhw/` — the hardware-probe abstraction (ST-Link / OpenOCD / J-Link)
+
+Clone both as siblings of this repository (or anywhere — you'll point `make` at them via `qemu_path` / `libhw_path`).
+
+### 1. System dependencies
+
 ```bash
-sudo apt update
-sudo apt install python3-venv -y
+sudo apt-get update
+sudo apt-get install -y meson ninja-build pkg-config libglib2.0-dev libcjson-dev python3-venv
+# Optional: only required if you enable SUNDIALS=true
+sudo apt-get install -y libsundials-dev
 ```
 
-Create and activate the virtual environment:
+### 2. Build the QEMU fork and libhw
 
-### Create the environment (named 'venv')
+Follow the build instructions in each sibling repo. At a minimum:
+
+```bash
+# libhw → produces <libhw_path>/out/libhw.so
+cd <path/to>/libhw && make
+
+# qemu (fork) → produces qemu-system-arm + plugin headers
+cd <path/to>/qemu && ./configure --target-list=arm-softmmu --enable-plugins && make
+```
+
+### 3. Build the FastDyn plugin
+
+From the FastDyn repository root:
+
+```bash
+make qemu_path=<path/to>/qemu libhw_path=<path/to>/libhw
+```
+
+Defaults if you omit the flags: `qemu_path=../qemu`, `libhw_path=../libhw`.
+
+The build produces `build/libfastdyn.so` and copies `libhw.so` next to it.
+
+### 4. Make `libfastdyn.so` discoverable at runtime
+
+```bash
+export LD_LIBRARY_PATH=$PWD/build:$PWD/device_models/postmartem/verifier${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+```
+
+### 5. Optional Makefile flags
+
+Most features are off by default. Override at `make` time:
+
+| Flag                   | Default | Enables                              |
+| ---------------------- | ------- | ------------------------------------ |
+| `LIBHW`                | `true`  | Hardware passthrough via libhw       |
+| `LIBFUZZ`              | `true`  | LibAFL fuzzing harness               |
+| `DEV`                  | `true`  | Built-in device models               |
+| `DEBUG_PRINT`          | `true`  | Verbose plugin logging               |
+| `LIBGZ`                | `false` | Gazebo / SITL physics integration    |
+| `LIBPY`                | `false` | Halucinator-mode Python callbacks    |
+| `SUNDIALS`             | `false` | SUNDIALS solver for FMU physics      |
+| `PHY`                  | `false` | Physics engine (with `LIBGZ=true`)   |
+| `FMU`                  | `false` | FMU (Functional Mockup Unit) support |
+| `FLIGHT_CONTROLLERS`   | `false` | ArduPilot / PX4 SITL adapters        |
+| `BOARD_RUNNER`         | `true`  | BoardRunner SDK build                |
+
+Example:
+
+```bash
+make qemu_path=<path/to>/qemu libhw_path=<path/to>/libhw LIBPY=true SUNDIALS=true
+```
+
+## Install the Python CLI
+
+Use a virtualenv so `fastdyn` and its deps don't pollute system Python:
+
 ```bash
 python3 -m venv fastdyn-env
-```
-### Activate it
-```bash
 source fastdyn-env/bin/activate
-```
-
-(Note: You can deactivate the environment later by simply running deactivate)
-
-
-### Install `Fastdyn` as a package using:
-```bash
 ./setup.sh
 ```
-You can pass the arguments using -c for configuration.toml, -m for symbol map file and -o for output dir. Further use:
+
+Verify with:
 
 ```bash
 fastdyn --help
 ```
-to get more information about our great tool.
 
-1. Make sacrifice for debugging gods so your debugging and rehosting goes smoothly.
+To leave the venv later: `deactivate`.
 
-2. Build Fastdyn-qemu and libhw.
+## Run
 
-3. Run the following command and pass the `qemu` path along with it like:
+We recommend running every `fastdyn` / `boardrunner` command from the FastDyn repository root. The `cmsis-svd-data` submodule is auto-fetched into `third_party/common/cmsis-svd-data/` by `make` and resolved automatically when you pass `-b <board>`.
 
-   ```bash
-   make qemu_path="/home/fastdyn-qemu"
-   ```
-   if you don't pass the `qemu_path` argument, then, it will use the `../qemu` as the path for the QEMU.
-   The Makefile will set up the build and run `ninja`.
-   also,
-   #TODO: Update this later to be more efficient
-   ```bash
-   export LD_LIBRARY_PATH=/home/FastDyn/build:Fastdyn/FastDyn/device_models/postmartem/verifier
-   ```
+## Fuzzer
 
-3. By default the libraries like `libhw` and `libgz` disabled. To enable them, please go to `Makefile` and change the respective flags.
-
-### Extras Update the readme later
-We expect the `cmsis-svd-data` to be placed for the generator and verifier wherever you are the running the command!
-We recommend running the command from the main directory of fastdyn. (Do we need to update this?)
-
-
+For the fuzzer setup, please refer to `virtuals/fuzzer/fastdyn_fuzz_lib/README.md`.
 
 ## Required OS Dependencies
 
 For Sundial build of Fastdyn:
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y libsundials-dev pkg-config
@@ -113,34 +154,34 @@ QEMU_INCLUDE_DIR=/path/to/qemu/include
 
 ```bash
 # Basic: send an initial prompt and extract the model
-fastdyn llm -d fastdyn_work_adc -o boardrunner/boardrunner_sdk/model/model.c
+boardrunner llm -d fastdyn_work_adc -o boardrunner/boardrunner_sdk/model/model.c
 
 # Use a specific model
-fastdyn llm -d fastdyn_work_adc -o model.c --model gpt-4.1
+boardrunner llm -d fastdyn_work_adc -o model.c --model gpt-4.1
 
 # With compilation after extraction
-fastdyn llm -d fastdyn_work_adc -o boardrunner/boardrunner_sdk/model/model.c --compile
+boardrunner llm -d fastdyn_work_adc -o boardrunner/boardrunner_sdk/model/model.c --compile
 
 # Revised prompt (patch mode) with retry
-fastdyn llm -d fastdyn_work -o boardrunner/boardrunner_sdk/model/model.c --max-retries 2
+boardrunner llm -d fastdyn_work -o boardrunner/boardrunner_sdk/model/model.c --max-retries 2
 
 # Disable the conversation-reset line for multi-turn context
-fastdyn llm -d fastdyn_work_adc -o model.c --no-stateless
+boardrunner llm -d fastdyn_work_adc -o model.c --no-stateless
 ```
 
 ### Command Reference
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-d` / `--work-dir` | (required) | Work directory with prompt files |
-| `-o` / `--output` | (required) | Model .c file path |
-| `--model` | `gpt-4o` | OpenAI model name |
-| `--env-file` | `~/.fastdyn.env` | Path to .env file with API key |
-| `--temperature` | `0.2` | Sampling temperature |
-| `--stateless` / `--no-stateless` | `--stateless` | Keep or strip the conversation reset line |
-| `--compile` / `--no-compile` | `--no-compile` | Compile model after writing |
-| `--sdk-dir` | `boardrunner/boardrunner_sdk` | Path to boardrunner SDK |
-| `--max-retries` | `1` | Max retry attempts on failure |
+| Option                           | Default                       | Description                               |
+| -------------------------------- | ----------------------------- | ----------------------------------------- |
+| `-d` / `--work-dir`              | (required)                    | Work directory with prompt files          |
+| `-o` / `--output`                | (required)                    | Model .c file path                        |
+| `--model`                        | `gpt-4o`                      | OpenAI model name                         |
+| `--env-file`                     | `~/.fastdyn.env`              | Path to .env file with API key            |
+| `--temperature`                  | `0.2`                         | Sampling temperature                      |
+| `--stateless` / `--no-stateless` | `--stateless`                 | Keep or strip the conversation reset line |
+| `--compile` / `--no-compile`     | `--no-compile`                | Compile model after writing               |
+| `--sdk-dir`                      | `boardrunner/boardrunner_sdk` | Path to boardrunner SDK                   |
+| `--max-retries`                  | `1`                           | Max retry attempts on failure             |
 
 ### How It Works
 

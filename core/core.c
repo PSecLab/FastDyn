@@ -14,7 +14,6 @@
  * @note This module is tightly coupled with QEMU's plugin API and
  *       should be used only within the context of QEMU dynamic analysis.
  *
- * @author Arslan Khan
  * @date 2025-09-06
  */
 int isdigit(int c);

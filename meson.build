@@ -182,6 +182,7 @@ if ENABLE_LIBDEV
 
 if ENABLE_LIBHW
   srcs += files(
+  'device_models/common/hw_session.c',
   'device_models/passthrough/passthrough.c',
   'device_models/elder/elder.c',
   'device_models/elder/device_config.c',

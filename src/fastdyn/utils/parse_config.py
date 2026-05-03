@@ -164,6 +164,24 @@ def parse_devices_info(toml_config: Dict[str, Any]) -> "DeviceSection":
 
                 cfg.handlers.append(handler_obj)
 
+            # Reject configs that enable more than one hardware-talking
+            # backend on the same device range. passthrough and twintrace
+            # both forward MMIO to the probe, so enabling both means every
+            # firmware write becomes two probe writes to the same address
+            # (corrupts clear-on-write registers, FIFO data registers,
+            # etc.). Pick exactly one.
+            HW_BACKENDS = {"passthrough", "twintrace"}
+            hw_enabled = [h.model for h in cfg.handlers
+                          if h.enabled and h.model in HW_BACKENDS]
+            if len(hw_enabled) > 1:
+                raise ValueError(
+                    f"[Device.{dev_name}] enables multiple hardware-talking "
+                    f"backends on the same range: {hw_enabled}. "
+                    f"passthrough and twintrace both issue MMIO to the "
+                    f"physical probe; enabling both duplicates every write. "
+                    f"Set 'enabled = false' on all but one."
+                )
+
         # ----------------------------
         # Slaves: [[Device.<dev>.slaves]]
         # ----------------------------

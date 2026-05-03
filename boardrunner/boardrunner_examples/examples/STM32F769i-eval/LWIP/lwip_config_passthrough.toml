@@ -22,8 +22,7 @@ cpu = "cortex-m7"
 plugin_library = "boardrunner/boardrunner_examples/examples/STM32F769i-eval/LWIP/passthrough_instrumentation/libfastdyn.so"
 # monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 platform = "STM32F7x9"
-binary = "/home/hammad/work/side-channel/stm32/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
-# binary = "/scratch/Fastdyn/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
+binary = "<path/to>/STM32CubeF7/Projects/STM32F769I_EVAL/Applications/LwIP/LwIP_HTTP_Server_Raw/SW4STM32/STM32F769I_EVAL/Debug/STM32F769I_EVAL.elf"
 # --- Debugging, Control, and Logging ---
 qemu_path = "qemu-system-arm"
 enable_gdb = false
@@ -81,7 +80,7 @@ tap_interface = "tap0"
     [[Device.ethernet.handlers]]
         model   = "elder"
         enabled = false                          # Set to TRUE to use your generated .so
-        scroll = "/home/hammad/work/rehosting/FastDyn/boardrunner/boardrunner_sdk/build/model.so"  # UPDATE THIS PATH
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
     [[Device.ethernet.handlers]]
         model   = "passthrough"

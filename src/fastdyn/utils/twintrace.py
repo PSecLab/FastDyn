@@ -83,13 +83,34 @@ def parse_line(line: str):
     return (icount, pc, addr, value, size, typ), m.group("model")
 
 
-def convert(in_path, out_path, *, only_model=None):
+def convert(in_path, out_path, *, only_model=None,
+            target_ranges=None, target_irqs=None):
+    """
+    Convert an io.log to the binary .ttbin format the C-side replay consumes.
+
+    Filters (any combination, AND-composed):
+      only_model:    keep only events tagged with [<model>] at record time
+                     (e.g. "twintrace", "passthrough"). Useful from the CLI
+                     when the recording was done with mixed tags.
+      target_ranges: list of (start, end) inclusive int tuples. If provided,
+                     keep MMIO records (READ/WRITE) only when addr is within
+                     at least one range. IRQ records bypass this filter.
+      target_irqs:   set/list of IRQ vector ints. If provided, keep IRQ
+                     records (TAKEN/SERVED) only when their vector is in
+                     the list. MMIO records bypass this filter.
+
+    target_ranges and target_irqs together implement the paper's
+    "Replay (target model only)" column: only the target peripheral's
+    events are replayed, the rest go to live HW via passthrough.
+    """
     in_path = Path(in_path)
     out_path = Path(out_path)
 
     count = 0
     matched = 0
     skipped = 0
+
+    target_irqs_set = set(target_irqs) if target_irqs is not None else None
 
     with in_path.open("r", errors="replace") as fin, out_path.open("wb+") as fout:
         # Write placeholder header (count=0 for now)
@@ -109,6 +130,21 @@ def convert(in_path, out_path, *, only_model=None):
                 if model is not None and model != only_model:
                     continue
 
+            # rec layout: (icount, pc, addr, value, size, type)
+            # type: 0=READ, 1=WRITE, 2=IRQ_TAKEN, 3=IRQ_SERVED
+            # For IRQ records, the `addr` field carries the vector.
+            rec_type = rec[5]
+            rec_addr = rec[2]
+
+            if rec_type in (0, 1):  # MMIO
+                if target_ranges is not None and not any(
+                        start <= rec_addr <= end
+                        for start, end in target_ranges):
+                    continue
+            elif rec_type in (2, 3):  # IRQ
+                if target_irqs_set is not None and rec_addr not in target_irqs_set:
+                    continue
+
             fout.write(REC_STRUCT.pack(*rec))
             count += 1
 
@@ -116,11 +152,15 @@ def convert(in_path, out_path, *, only_model=None):
         fout.seek(0)
         fout.write(HDR_STRUCT.pack(MAGIC, VERSION, RECORD_SIZE, count))
 
-    # print(f"[+] Input:   {in_path}")
-    # print(f"[+] Output:  {out_path}")
-    # print(f"[+] Parsed:  {matched} matching lines")
     if only_model:
         print(f"[+] Filter:  model == [{only_model}]")
+    if target_ranges is not None:
+        ranges_str = ", ".join(f"0x{s:x}-0x{e:x}" for s, e in target_ranges)
+        print(f"[+] Filter:  addr in [{ranges_str}]")
+    if target_irqs is not None:
+        irqs_str = ", ".join(str(i) for i in sorted(target_irqs_set))
+        print(f"[+] Filter:  irq in [{irqs_str}]")
+    print(f"[+] Wrote:   {count} records (from {matched} parsed lines)")
     # print(f"[+] Wrote:   {count} records")
     # print(f"[+] Skipped: {skipped} non-matching lines")
     # print(f"[+] Record size: {RECORD_SIZE} bytes")

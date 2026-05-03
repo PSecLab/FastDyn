@@ -134,12 +134,12 @@ internal_model = "usart1_model"
 """
         [[Device.usart1.handlers]]
         model   = "elder"
-        enabled = false
+        enabled = true
         scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
     [[Device.usart1.handlers]]
         model   = "passthrough"
-        enabled = true # This handler is defined but will be skipped for this device.
+        enabled = false # This handler is defined but will be skipped for this device.
 
 [Device.unhandled_space]
     irq = [[0, 15], [20, 25], 41, 53]                #means the irq from 0 to 15 and irq from 20 to 25 and 41 are handled

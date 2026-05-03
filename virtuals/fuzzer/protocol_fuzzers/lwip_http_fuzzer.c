@@ -31,8 +31,8 @@ void fuzz_plugin_lwip_http_fuzzer(char *buff, size_t len)
     }
 
     // get pointer to payload and available space
-    if (pbuf_payload == 0) fuzz_read_memory(pbuf + 4, &pbuf_payload, 4);
-    if (pbuf_len == 0) fuzz_read_memory(pbuf + 10, &pbuf_len, 2);
+    if (pbuf_payload == 0) fuzz_read_memory(pbuf + 4, (uint8_t *)&pbuf_payload, 4);
+    if (pbuf_len == 0) fuzz_read_memory(pbuf + 10, (uint8_t *)&pbuf_len, 2);
 
     // sample correct message for testing
     // const char *http_sample = "GET /leds.cgi?led=1 HTTP/1.0\r\n\r\n";
@@ -42,7 +42,7 @@ void fuzz_plugin_lwip_http_fuzzer(char *buff, size_t len)
     uint16_t len16 = (uint16_t)len;
 
     // write our payload and length to firmware's internal object
-    fuzz_write_memory(pbuf_payload, buff, len);
+    fuzz_write_memory(pbuf_payload, (uint8_t *)buff, len);
     fuzz_write_memory(pbuf + 8, (uint8_t *)&len16, 2);
     fuzz_write_memory(pbuf + 10, (uint8_t *)&len16, 2);
 

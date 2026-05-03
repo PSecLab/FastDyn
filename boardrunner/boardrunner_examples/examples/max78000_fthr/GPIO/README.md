@@ -1,48 +1,32 @@
-# GPIO — Set/Clear Pin (LED Blink)
-
-**Firmware:** GPIO2 Pin 0 (P2.0) configured as output. The firmware toggles the red LED in a 500 ms ON / 500 ms OFF loop using `MXC_GPIO_OutSet` and `MXC_GPIO_OutClr`.
+# GPIO — Set/Clear Pin
 
 **Board:** MAX78000FTHR
 
-**Required model goal:**
+The firmware toggles the on-board red LED (P2.0) every 500 ms.
 
-1. Set/Clear a pin (GPIO2 OUT_SET / OUT_CLR registers drive P2.0)
+## Hardware Connections
 
----
+None. On-board red LED on P2.0.
 
-## Hardware Wiring
+## Expected Output
 
-No external wiring required. The firmware uses only:
+- Red LED blinks at 1 Hz (500 ms on / 500 ms off)
+- Console prints alternating `Pin set` / `Pin cleared`
 
-- **GPIO2** (on-chip) — output pin control for LED
-- **UART** (on-chip, via `printf`) — console output
-- **TMR** (on-chip, via `MXC_Delay`) — delay timing
+## Test Scope
 
-| LED                                      | Meaning                                               |
-| ---------------------------------------- | ----------------------------------------------------- |
-| Red LED (P2.0) blinking                  | Firmware running correctly — pin toggles every 500 ms |
-| Console prints "Pin set" / "Pin cleared" | UART semihosting output confirms state                |
-
----
+- Set/Clear a pin
 
 ## Compositional Model Split
 
-This is a single-model example. Only GPIO2 needs an elder model; all other peripherals are handled by passthrough.
+| Component   | Peripheral             | Compiled to     |
+| ----------- | ---------------------- | --------------- |
+| Elder model | GPIO2                  | `model.so`      |
+| Passthrough | UART, GCR, all others  | real hardware   |
 
-| Component   | Peripheral                         | Generated file                   | Compiled to   |
-| ----------- | ---------------------------------- | -------------------------------- | ------------- |
-| Model 1     | GPIO2                              | `generated_models/gpio2_model.c` | `model.so`    |
-| Passthrough | UART, GCR, TMR (delay), all others | --                               | real hardware |
+## Commands
 
-No inter-model signals, no external slave devices, no DMA.
-
----
-
-## Prerequisites
-
-### OpenOCD (required for passthrough)
-
-Before running any `fastdyn run` command, start OpenOCD in a **separate terminal**:
+### Start OpenOCD (separate terminal)
 
 ```bash
 /scratch/Softwares/Maxim_Installation/Maxim_Installation_Folder/Tools/OpenOCD/bin/openocd \
@@ -51,28 +35,27 @@ Before running any `fastdyn run` command, start OpenOCD in a **separate terminal
   -f target/max78000.cfg
 ```
 
-Keep this terminal open for the duration of the passthrough or hybrid run.
+### Flash the idle firmware
 
----
+```bash
+boardrunner/boardrunner_examples/examples/max78000_fthr/board_setup/flash.sh \
+  tests/idle_firmwares/prebuilt/idle_firmware_max78000.elf
+```
 
 ## Step-by-Step Workflow
 
-### Step 0 -- Passthrough run (collect hardware I/O trace)
+### Step 0 — Passthrough run (collect hardware I/O trace)
 
-Run the firmware against real hardware in passthrough mode. FastDyn records every peripheral register access to `hardware_log/io.log`.
-
-> **TOML state:** Before running this step, temporarily set the GPIO2 elder handler to `enabled = false` and the passthrough handler to `enabled = true` in `gpio_config.toml`. Restore elder mode (elder `enabled = true`, passthrough `enabled = false`) before Step 3.
+> **TOML state:** Set GPIO2 elder handler to `enabled = false` and passthrough handler to `enabled = true` in `gpio_config.toml`. Restore elder mode before Step 3.
 
 ```bash
 fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/GPIO/gpio_config.toml \
--s boardrunner/boardrunner_examples/examples/max78000_fthr
+  -s boardrunner/boardrunner_examples/examples/max78000_fthr
 ```
 
 Output: `hardware_log/io.log`
 
-### Step 1 -- Generate LLM prompt
-
-Encode the hardware trace for GPIO2. The encoder extracts init vs. steady-state patterns and computes per-register entropy.
+### Step 1 — Generate LLM prompt
 
 ```bash
 fastdyn generate -hw hardware_log/io.log -b Max78000 \
@@ -82,7 +65,7 @@ fastdyn generate -hw hardware_log/io.log -b Max78000 \
   -o ./fastdyn_work_gpio2
 ```
 
-### Step 2 -- Send prompt to LLM and compile model
+### Step 2 — Send prompt to LLM and compile model
 
 ```bash
 fastdyn llm -d fastdyn_work_gpio2 \
@@ -91,24 +74,14 @@ fastdyn llm -d fastdyn_work_gpio2 \
   --evaluate
 ```
 
-### Step 3 -- Run with the generated elder model
-
-The TOML is already shipped in elder mode (elder `enabled = true`, passthrough `enabled = false` for GPIO2). Run directly:
+### Step 3 — Run with the generated elder model
 
 ```bash
 fastdyn run -c boardrunner/boardrunner_examples/examples/max78000_fthr/GPIO/gpio_config.toml \
--s boardrunner/boardrunner_examples/examples/max78000_fthr
+  -s boardrunner/boardrunner_examples/examples/max78000_fthr
 ```
 
-Output: `io.log` (emulation trace)
-
-Expected behavior: Red LED (P2.0) blinks at 1 Hz. Console prints "Pin set (LED ON)" and "Pin cleared (LED OFF)" alternating.
-
-### Step 4 -- Verify against hardware trace
-
-The Verifier diffs the emulation trace against the hardware ground truth, register by register.
-
-> **Note:** Only GPIO2 is passed to `-p`. Do NOT include passthrough-only peripherals (UART, GCR, TMR, etc.) — they would produce false mismatches.
+### Step 4 — Verify against hardware trace
 
 ```bash
 fastdyn verifier -hw hardware_log/io.log \
@@ -122,8 +95,6 @@ fastdyn verifier -hw hardware_log/io.log \
 
 #### Apply LLM correction patches (if mismatches found)
 
-If the Verifier writes `fastdyn_work/revised_prompt.txt`, send it back to the LLM:
-
 ```bash
 fastdyn llm -d fastdyn_work \
   -o boardrunner/boardrunner_sdk/model/model.c \
@@ -131,19 +102,9 @@ fastdyn llm -d fastdyn_work \
   --stateless --evaluate
 ```
 
-Repeat Steps 3-4 until the Verifier reports no mismatches. GPIO models are simple and typically converge in 1-2 iterations.
-
-Once verified, copy the final model to the example's generated_models directory:
+Once verified, snapshot the model:
 
 ```bash
 cp boardrunner/boardrunner_sdk/model/model.c \
    boardrunner/boardrunner_examples/examples/max78000_fthr/GPIO/generated_models/gpio2_model.c
 ```
-
----
-
-## Configuration
-
-Platform configuration: [`gpio_config.toml`](gpio_config.toml)
-
-All FastDyn CLI options are documented in `src/fastdyn/main.py`.

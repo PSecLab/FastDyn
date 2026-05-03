@@ -124,7 +124,7 @@ finline      = ""
 
   [[Device.gpio0.handlers]]
   model   = "elder"
-  enabled = false
+  enabled = true
   scroll  = "boardrunner/boardrunner_sdk/build/model.so"
 
   [[Device.gpio0.handlers]]
@@ -133,7 +133,7 @@ finline      = ""
 
   [[Device.gpio0.handlers]]
   model   = "passthrough"
-  enabled = true
+  enabled = false
 
   [[Device.gpio0.handlers]]
   model   = "twintrace"

@@ -20,24 +20,36 @@ void handler_name(void) { \
 }
 
 /******************************************************************************/
-/* Cortex-M3 Processor Exceptions (IDs 2 - 15)                      */
+/* Cortex-M3 Processor Exceptions (vectors 2 - 15)                            */
 /******************************************************************************/
+/*
+ * IMPORTANT: These vectors are Cortex-M architectural exceptions, NOT NVIC
+ * external IRQs. They have dedicated vector-table slots and must NOT be
+ * forwarded to QEMU as external IRQs (libhw would compute R0+16 → wrong
+ * vector).
+ *
+ * Specifically, our firmware-under-emulation calls HAL_Init() which
+ * configures SysTick on the real chip via passthrough writes. SysTick then
+ * fires every 1ms. If SysTick_Handler did the BKPT-storing trick, the
+ * libhw poll thread would saturate on those spurious halts and never catch
+ * real peripheral IRQs (USART2, TIM3, etc.).
+ *
+ * Solution: provide empty no-op handlers for Cortex-M exceptions. They
+ * still execute on each fire but return immediately without halting the
+ * CPU. HardFault remains a tight infinite loop so genuine MCU crashes
+ * (e.g., during firmware-under-emulation bring-up) are still trappable
+ * via the debugger.
+ */
 
-/* Note: IDs 2-15 are Exception Numbers.
-   QEMU might not support injecting these via simple IRQ lines,
-   but they are useful for debugging if the board crashes. */
-
-DEFINE_INTERRUPT_HANDLER(NMI_Handler,           2)
-DEFINE_INTERRUPT_HANDLER(HardFault_Handler,     3)
-DEFINE_INTERRUPT_HANDLER(MemManage_Handler,     4)
-DEFINE_INTERRUPT_HANDLER(BusFault_Handler,      5)
-DEFINE_INTERRUPT_HANDLER(UsageFault_Handler,    6)
-/* Reserved 7-10 */
-DEFINE_INTERRUPT_HANDLER(SVC_Handler,           11)
-DEFINE_INTERRUPT_HANDLER(DebugMon_Handler,      12)
-/* Reserved 13 */
-DEFINE_INTERRUPT_HANDLER(PendSV_Handler,        14)
-DEFINE_INTERRUPT_HANDLER(SysTick_Handler,       15)
+void NMI_Handler(void)        {}
+void HardFault_Handler(void)  { while (1); }
+void MemManage_Handler(void)  { while (1); }
+void BusFault_Handler(void)   { while (1); }
+void UsageFault_Handler(void) { while (1); }
+void SVC_Handler(void)        {}
+void DebugMon_Handler(void)   {}
+void PendSV_Handler(void)     {}
+void SysTick_Handler(void)    {}
 
 /******************************************************************************/
 /* STM32F103 Peripheral Interrupts (IRQ Numbers 0 - 59)             */

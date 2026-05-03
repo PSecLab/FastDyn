@@ -1,1 +1,0 @@
-{"model": "gpt-5.4-2026-03-05", "call_id": "chatcmpl-DUftBKPXhsBSFHp1hpLs2BaLlAJ8X", "prompt_tokens": 5434, "completion_tokens": 5321, "reasoning_tokens": 3220, "total_tokens": 10755, "latency_seconds": 98.882, "prompt_chars": 20940, "response_chars": 7530, "timestamp": 1776203233, "iteration": 1, "attempt": 1, "type": "initial", "reasoning_effort": "medium", "result": "success"}

@@ -7,6 +7,7 @@ import os, shutil
 import subprocess
 import signal
 import sys
+from pathlib import Path
 
 from . import fastdyn_log
 from fastdyn.__init__ import __version__
@@ -345,6 +346,8 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
                 peripheral_name=peripheral[0],
                 platform_name=platform,
                 no_vio=no_vio,
+                model_name=model_name,
+                model_sources=model_sources,
             )
             Path(work_dir).mkdir(parents=True, exist_ok=True)
             output_path = Path(work_dir) / "initial_prompt.txt"
@@ -495,8 +498,41 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
     help='Ablation mode: on mismatch, generate a generic retry prompt instead of '
          'the targeted RCA-based revised_prompt.txt.'
 )
+@click.option(
+    '--no-encoder',
+    is_flag=True,
+    default=False,
+    help='Ablation mode: on mismatch, generate a correction prompt using raw I/O '
+         'trace data instead of the Encoder\'s structured analysis.'
+)
+@click.option(
+    '--no-vio',
+    is_flag=True,
+    default=False,
+    help='Ablation mode: strip VIO API definitions from the correction prompt.'
+)
+@click.option(
+    '--no-verifier',
+    is_flag=True,
+    default=False,
+    help='Ablation mode: on mismatch, provide only the encoded hardware trace and '
+         'the broken model source code. No emulation trace feedback — the LLM must '
+         'self-diagnose by comparing its code against the hardware evidence.'
+)
+@click.option(
+    '--ms-map',
+    'ms_map',
+    type=str,
+    multiple=True,
+    metavar='MNAME=PERIPH1,PERIPH2,...',
+    help='Per-model source-peripheral mapping. Required for --no-rca and '
+         '--no-verifier in compositional (multi --mname) mode so each model '
+         'is corrected in isolation. Repeat once per --mname. '
+         'Example: --ms-map "ADC=ADC1,ADC2,ADC12_Common" --ms-map "DMA_with_DMAMUX1=DMA1,DMAMUX1"'
+)
 def verifier(hardware_log, emulation_log, device_models, model_names, board,
-             peripheral, method, n, isr_window, work_dir, svd, no_rca):
+             peripheral, method, n, isr_window, work_dir, svd,
+             no_rca, no_encoder, no_vio, no_verifier, ms_map):
     """Verifies the model against hardware and emulation logs."""
     log.info("Running Verifier")
 
@@ -513,6 +549,23 @@ def verifier(hardware_log, emulation_log, device_models, model_names, board,
 
     log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
     os.makedirs(work_dir)
+
+    # ── Parse --ms-map MNAME=PERIPH1,PERIPH2,... entries into a dict ─────────
+    model_sources_map = {}
+    for entry in ms_map:
+        if '=' not in entry:
+            log.error(
+                f"--ms-map '{entry}' must be in MNAME=PERIPH1,PERIPH2,... format.\n"
+                f"Example: --ms-map \"ADC=ADC1,ADC2,ADC12_Common\""
+            )
+            sys.exit(1)
+        mname, sources_csv = entry.split('=', 1)
+        mname = mname.strip()
+        sources = [s.strip() for s in sources_csv.split(',') if s.strip()]
+        if not sources:
+            log.error(f"--ms-map entry for '{mname}' has no peripherals listed.")
+            sys.exit(1)
+        model_sources_map[mname] = sources
 
     # ── Parse and validate NAME:PATH device model entries ───────────────────
     model_to_path = {}
@@ -614,35 +667,83 @@ def verifier(hardware_log, emulation_log, device_models, model_names, board,
         )
 
         if not_match:
-            if no_rca:
-                # Ablation A2: generate a generic retry prompt instead of RCA output.
-                # Written as initial_prompt.txt (not revised_prompt.txt) so the llm
-                # command uses full code extraction mode, not SEARCH/REPLACE patching.
-                log.warning("Log mismatch! --no-rca: generating generic retry prompt (no RCA).")
-                import glob as _glob
-                candidates = _glob.glob(os.path.join(os.path.dirname(work_dir), "*", "initial_prompt.txt"))
-                if not candidates:
-                    candidates = _glob.glob(os.path.join(work_dir, "initial_prompt.txt"))
+            if no_verifier:
+                # Ablation: No Verifier feedback. The LLM receives the original
+                # encoder-based prompt (HW trace structured) + the broken model
+                # source code + generic "fix it". No emulation trace, no diffs,
+                # no runtime feedback at all — the LLM must self-diagnose.
+                log.warning("Log mismatch! --no-verifier: generating blind retry prompt.")
 
-                if candidates:
-                    with open(candidates[0], "r", encoding="utf-8") as f:
-                        original_prompt = f.read()
+                periph_dir = os.path.join(cm_path_hardware, peripheral[0])
+                if os.path.isdir(periph_dir):
+                    original_prompt = pg.generate_prompt(periph_dir)
                 else:
                     original_prompt = ""
-                    log.warning("Could not find initial_prompt.txt for --no-rca fallback.")
+                    log.warning("Could not find encoder output for --no-verifier fallback.")
+
+                model_source = ""
+                model_path = list(model_to_path.values())[0]
+                try:
+                    with open(model_path, "r", encoding="utf-8") as mf:
+                        model_source = mf.read()
+                except Exception as e:
+                    log.warning(f"Could not read model source for --no-verifier prompt: {e}")
 
                 generic_prompt = (
                     original_prompt +
-                    "\n\n## Correction Required\n"
-                    "The previously generated model failed verification against the hardware trace. "
-                    "Please review the trace data above carefully and generate a corrected model "
-                    "that faithfully reproduces the observed hardware behavior.\n"
+                    "\n\n## Current Model (Failed Verification)\n"
+                    "The following model was generated but failed verification against the hardware trace.\n"
+                    "```c\n" + model_source + "\n```\n\n"
+                    "## Correction Required\n"
+                    "The model above does not correctly reproduce the hardware behavior shown in the trace data. "
+                    "Please analyze the hardware trace and the model source code, identify the bug, "
+                    "and generate a corrected model.\n"
                 )
-                # Write as initial_prompt.txt so llm uses full code extraction (not SEARCH/REPLACE)
                 prompt_path = os.path.join(work_dir, "initial_prompt.txt")
                 with open(prompt_path, "w", encoding="utf-8") as f:
                     f.write(generic_prompt)
-                log.info("Generic retry prompt (no RCA) written to %s", prompt_path)
+                log.info("No-verifier retry prompt written to %s", prompt_path)
+            elif no_rca:
+                # Ablation A2: No RCA. The Verifier still runs and produces diffs
+                # (HW vs EM encoded traces compared). The LLM sees the Verifier's
+                # comparison data + broken model source + generic "fix it", but NOT
+                # RCA's targeted diagnostic narrative or SEARCH/REPLACE strategy.
+                # Written as initial_prompt.txt so LLM does full model regeneration.
+                log.warning("Log mismatch! --no-rca: generating prompt with Verifier diffs but no RCA analysis.")
+
+                pg_path = pg.iteration_prompt_gen(
+                    diff_obj=diff_obj,
+                    device_model_path=list(model_to_path.values())[0],
+                    peripheral=peripheral[0],
+                    out_dir=work_dir,
+                    no_vio=no_vio,
+                    no_rca=True,
+                )
+            elif no_encoder:
+                # Ablation A1 correction: use raw traces instead of structured
+                # encoder analysis, but keep the SEARCH/REPLACE correction strategy.
+                log.warning("Log mismatch! --no-encoder: generating correction prompt with raw traces.")
+
+                # Build peripheral address ranges from SVD for trace filtering
+                peripheral_ranges = []
+                for p in svd_device.peripherals:
+                    if p.name.upper() == peripheral[0].upper():
+                        size = 0x400
+                        if hasattr(p, 'address_block') and p.address_block:
+                            size = p.address_block.size
+                        peripheral_ranges.append((p.base_address, p.base_address + size))
+
+                pg_path = pg.iteration_prompt_gen(
+                    diff_obj=diff_obj,
+                    device_model_path=list(model_to_path.values())[0],
+                    peripheral=peripheral[0],
+                    out_dir=work_dir,
+                    no_encoder=True,
+                    hardware_log=hardware_log,
+                    emulation_log=emulation_log,
+                    peripheral_ranges=peripheral_ranges,
+                    no_vio=no_vio,
+                )
             else:
                 log.warning("Log mismatch! Generating prompt.")
                 pg_path = pg.iteration_prompt_gen(
@@ -650,13 +751,12 @@ def verifier(hardware_log, emulation_log, device_models, model_names, board,
                     device_model_path=list(model_to_path.values())[0],
                     peripheral=peripheral[0],
                     out_dir=work_dir,
+                    no_vio=no_vio,
                 )
         else:
             log.info("Both hardware log and emulation log matched!")
 
     else:
-        if no_rca and not_match:
-            log.warning("Log mismatch! --no-rca: generic retry prompt not yet supported for multi-peripheral mode.")
         pg_path = pg.iteration_prompt_gen_multiple_periph(
             cm_path_hardware=cm_path_hardware,
             cm_path_emulation=cm_path_emulation,
@@ -664,6 +764,13 @@ def verifier(hardware_log, emulation_log, device_models, model_names, board,
             model_names=model_names,
             model_to_path=model_to_path,
             out_dir=work_dir,
+            no_encoder=no_encoder,
+            no_rca=no_rca,
+            no_verifier=no_verifier,
+            no_vio=no_vio,
+            hardware_log=hardware_log,
+            emulation_log=emulation_log,
+            model_sources_map=model_sources_map or None,
         )
 
 @cli.command(
