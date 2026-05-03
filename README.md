@@ -55,7 +55,8 @@ Most features are off by default. Override at `make` time:
 | Flag                   | Default | Enables                              |
 | ---------------------- | ------- | ------------------------------------ |
 | `LIBHW`                | `true`  | Hardware passthrough via libhw       |
-| `LIBFUZZ`              | `true`  | LibAFL fuzzing harness               |
+| `LIBFUZZ`              | `false` | LibAFL fuzzing harness               |
+| `AFLNET`               | `true`  | AFLNet fuzzing harness               |
 | `DEV`                  | `true`  | Built-in device models               |
 | `DEBUG_PRINT`          | `true`  | Verbose plugin logging               |
 | `LIBGZ`                | `false` | Gazebo / SITL physics integration    |

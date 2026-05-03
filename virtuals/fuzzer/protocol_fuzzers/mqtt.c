@@ -42,7 +42,6 @@ static int mqtt_encode_remaining_length(uint32_t length, uint8_t *buf)
 // the length header is variable-length, so we receive the data 4 bytes in so we only have to move the 1 byte header down.
 void fuzz_mqtt_in(unsigned int cpu_index, void *udata)
 {
-    static long long prints = 0;
     if (buf_top >= buf_pointer) {
         char size_buf[4];
         //printf("1 - %lld\n", prints++);
@@ -54,7 +53,7 @@ void fuzz_mqtt_in(unsigned int cpu_index, void *udata)
             return;
         }
 
-        int shift = mqtt_encode_remaining_length(rd - 1, size_buf);
+        int shift = mqtt_encode_remaining_length(rd - 1, (uint8_t *)size_buf);
 
         if (shift < 0) {
             fuzz_set_register(-1, 0);
@@ -78,7 +77,7 @@ void fuzz_mqtt_in(unsigned int cpu_index, void *udata)
         return;
     }
 
-    fuzz_write_memory(req_buf, &mqtt_buf[buf_pointer], req_size);
+    fuzz_write_memory(req_buf, (uint8_t*)(&mqtt_buf[buf_pointer]), req_size);
 
     buf_pointer += req_size;
 

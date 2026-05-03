@@ -41,7 +41,7 @@ static bool launch_aflnet(void)
     if (dir_exists(out_dir)) {
         in_dir = "-";
     } else {
-        in_dir = "../modbus_seeds/";
+        in_dir = "../eth_seeds/";
     }
 
     static char *argv[] = {

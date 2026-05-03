@@ -143,7 +143,8 @@ void fuzz_eth_in(unsigned int cpu_index, void *udata)
 
     // last four fields are based off of observations
     uint32_t base = LWIP_BUF_BASE + (sizeof(buf) + ETH_MAX_FRAME) * prev_index;
-    prev_index = (++prev_index) % LWIP_BUF_COUNT;
+    prev_index++;
+    prev_index = prev_index % LWIP_BUF_COUNT;
 
     buf.next = 0;
     buf.payload = base + sizeof(buf);

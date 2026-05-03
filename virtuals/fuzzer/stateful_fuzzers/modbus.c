@@ -13,7 +13,6 @@
 
 #define TRACE_DIR "fastdyn_work/mb_trace/"
 
-static int prev_index = 0; // cycle through available space so that chance of reusing a live buffer is almost 0
 static FILE *g_mb_trace_file = NULL;
 static bool g_mb_trace_exit_hook_registered = false;
 

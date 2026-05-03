@@ -347,7 +347,7 @@ static bool fuzz_restore_snapshot(void)
     }
 
     // include pc, we may restore from a different point than taken
-    for (int i = 0; i < 15; i++) {
+    for (int i = 0; i < 16; i++) {
         fuzz_set_register(g_snapshot_regs[i], i);
     }
 
@@ -577,11 +577,6 @@ static void fuzz_destroy(void) {
     fuzz_serialize_coverage(CVG_PATH);
 }
 
-// miscelanious virtual you can use to test if the firmware reaches something without enabling gdb and tracing
-static void fuzz_print_test(unsigned int cpu_index, void *udata) {
-    printf("[test]\n");
-}
-
 int fuzz_init(int argc, char **argv) {
     const char *filename = utils_get_arg("coverage", argc, argv);
     if (filename &&
@@ -590,6 +585,9 @@ int fuzz_init(int argc, char **argv) {
         coverage = 1;
         fuzz_bbl_init();
         core_register_exit_hook(fuzz_destroy);
+    } else {
+        printf("Coverage is required to fuzz\n");
+        return 0;
     }
 
     core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
