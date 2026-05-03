@@ -12,12 +12,14 @@ if ENABLE_LIBFUZZ
     deps += declare_dependency(
         link_args: ['-L' + meson.current_source_dir() + '/fastdyn_fuzz_lib/target/release', '-lfastdyn_fuzzer']
     )
+    srcs += files('fuzz_libafl.c')
 endif
 
 if ENABLE_AFLNET
     deps += declare_dependency(
         link_args: ['-L' + aflnet_dir, '-laflnet']
     )
+    srcs += files('fuzz_aflnet.c')
 endif
 
 subdir('protocol_fuzzers')
@@ -25,6 +27,6 @@ subdir('stateful_fuzzers')
 
 srcs += files(
     'fuzz.c',
-    'fuzz_bbl.c',
-    'fuzz_trace.c',
+    'cov_bbl.c',
+    'cov_trace.c',
 )

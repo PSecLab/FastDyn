@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 import re
 import subprocess
@@ -103,6 +104,10 @@ def merge_ranges(ranges):
 # Write tab delimited list of address + size of all writable ranges
 
 def run(out_file, bin_path):
+    if os.path.exists(out_file):
+        print(f"[binary_wrange.py] Skipping existing output file: {out_file}")
+        return
+
     try:
         with open(out_file, 'w') as f:
             lines = get_readelf_output(bin_path)
@@ -119,7 +124,7 @@ def run(out_file, bin_path):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        fastdyn_log.error("Usage: python merge_writable_sections.py <firmware.elf>")
+        print("Usage: python binary_wrange.py <firmware.elf>")
         sys.exit(1)
-
+    
     run("fastdyn_work/bin-writable-ranges", sys.argv[1])

@@ -1,14 +1,15 @@
-#ifndef FUZZ_TRACE_H
-#define FUZZ_TRACE_H
+#ifndef COV_TRACE_H
+#define COV_TRACE_H
 
 #include <config.h>
 
-void fuzz_trace_add_value(uint32_t val);
-void fuzz_trace_finish_run(void);
-int fuzz_trace_init();
+#define FASTDYN_TRACE_CAP 16384 * 4   /* PCs per run (64 KB per buffer) */
 
-#if ENABLE_AFLNET
-/* ---- aflnet trace buffer helpers ---- */
+typedef struct {
+    uint32_t count;
+    uint32_t entries[FASTDYN_TRACE_CAP];
+} fastdyn_trace_run_t;
+
 
 /* Record one PC into g_trace_current (no-op if trace not enabled). */
 void fuzz_trace_record_pc(uint32_t pc);
@@ -26,13 +27,8 @@ void fuzz_trace_commit_run(void);
 /* Enable recording into g_trace_current (idempotent). */
 void fuzz_trace_enable(void);
 
-/*
- * Call once per run at the moment the first Ethernet frame is injected.
- * Clears any PCs recorded between snap restore and first inject (firmware
- * idle loop), which are identical every run and not useful for comparison.
- * No-op on subsequent packets in the same run, and when trace is disabled.
- */
-void fuzz_trace_on_inject(void);
+/* Clear only the current in-progress trace window. */
+void fuzz_trace_begin_window(void);
 
 /*
  * Compare g_trace_completed against the fixed baseline from the first run.
@@ -43,10 +39,5 @@ void fuzz_trace_compare(void);
 
 /* Reset the baseline so the next non-empty run becomes the new reference. */
 void fuzz_trace_reset(void);
-#else
-static inline void fuzz_trace_record_pc(uint32_t pc) {
-    (void)pc;
-}
-#endif
 
 #endif
