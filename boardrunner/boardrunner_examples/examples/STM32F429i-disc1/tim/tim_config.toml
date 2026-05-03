@@ -82,7 +82,7 @@ finline  = ""
   machine = "cortexm"
   cpu     = "cortex-m4"
 
-  binary     = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
+  binary     = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/tim/firmwares/timer.axf"
   init_nsvtor = "0x08000000"
 
   map_file        = "courbet/rover_v422_map.txt"

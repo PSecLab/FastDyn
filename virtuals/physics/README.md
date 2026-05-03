@@ -215,7 +215,7 @@ See the example file `courbet/fuzzer/libafl_phi/stl_formulas.txt` for an example
 Since we had to implement the parser and we are waiting for the PR to be merged, you will need my fork of the parser repository:
 
 ```bash
-git clone https://github.com/michaelprooney/banquo.git
+git clone https://github.com/<anonymous>/banquo.git   # banquo project
 git checkout banquo-parser-impl
 ```
 

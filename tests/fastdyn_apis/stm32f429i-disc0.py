@@ -21,7 +21,7 @@ cpu0 = machine0.add_cpu(
 
 machine0.add_cmsis_svd(cmsis_svd="third_party/common/cmsis-svd-data")
 
-cpu0.add_map_file("/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt")
+cpu0.add_map_file("<path/to>/FastDyn/courbet/rover_v422_map.txt")
 
 #Add Memories to the machine
 
@@ -90,6 +90,6 @@ print("Starting Fastdyn")
 
 fastdyn.run(target="qemu",
             machine_name="machine0",
-            out_path="/home/hammad/work/rehosting/FastDyn/fastdyn_work")               #run fastdyn machine that you want to run
+            out_path="<path/to>/FastDyn/fastdyn_work")               #run fastdyn machine that you want to run
 
 fastdyn.shutdown()          #shutdown fastdyn machine :: Wont work rn, just press CTRL+C in terminal

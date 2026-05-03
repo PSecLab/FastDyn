@@ -99,7 +99,7 @@ void inspct_chibios_trace_switch(unsigned int cpu_idx, void *arg) {
             found = true;
             if (strcmp(all_threads[i].name, in_task.name) != 0) {
                 // append the name change to a file
-                FILE *f = fopen("/root/rooney/FastDyn/threads_copter.txt", "a");
+                FILE *f = fopen("threads_copter.txt", "a");
                 if (f) {
                     fprintf(f, "Thread 0x%08X renamed: %s -> %s\n",
                             in_task.thread_addr,
@@ -110,7 +110,7 @@ void inspct_chibios_trace_switch(unsigned int cpu_idx, void *arg) {
             }
             // if priority changed, log it
             if (all_threads[i].priority != in_task.priority) {
-                FILE *f = fopen("/root/rooney/FastDyn/threads_copter.txt", "a");
+                FILE *f = fopen("threads_copter.txt", "a");
                 if (f) {
                     fprintf(f, "Thread %s priority changed: %u -> %u\n",
                             in_task.name[0] ? in_task.name : "(null)",
@@ -127,7 +127,7 @@ void inspct_chibios_trace_switch(unsigned int cpu_idx, void *arg) {
     if (!found && all_threads_count < sizeof(all_threads) / sizeof(all_threads[0])) {
         all_threads[all_threads_count++] = in_task;
         // append the name to a file
-        FILE *f = fopen("/root/rooney/FastDyn/threads_copter.txt", "a");
+        FILE *f = fopen("threads_copter.txt", "a");
         if (f) {
             fprintf(f, "New thread: %s, Prio: %u\n", in_task.name[0] ? in_task.name : "(null)", (unsigned)in_task.priority);
             fclose(f);

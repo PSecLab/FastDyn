@@ -22,7 +22,7 @@ cpu = "cortex-m33"
 coverage = true
 monitor_elf = "../ws/monitor.elf" # The VMM-like monitor that runs with the target
 platform = "STM32F469"
-binary = "/home/faculty/abk6349/STM32F429I-DISC1/Blinky/Debug/Blinky.elf"
+binary = "<path/to>/STM32F429I-DISC1/Blinky/Debug/Blinky.elf"
 
 # --- Debugging, Control, and Logging ---
 qemu_path = "/data/qemu/build/qemu-system-arm"

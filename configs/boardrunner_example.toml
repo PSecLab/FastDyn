@@ -89,7 +89,7 @@ finline  = ""
   binary     = "boardrunner/boardrunner_examples/examples/STM32F429i-disc1/gpio/firmwares/gpio.axf"
   init_nsvtor = "0x08000000"
 
-  map_file        = "/home/hammad/work/rehosting/FastDyn/courbet/rover_v422_map.txt"
+  map_file        = "courbet/rover_v422_map.txt"
   plugin_library  = "build/libfastdyn.so"
   monitor_elf     = "../ws/monitor.elf"
 
