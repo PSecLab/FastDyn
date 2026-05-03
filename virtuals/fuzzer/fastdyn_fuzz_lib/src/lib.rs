@@ -1,7 +1,17 @@
 #[cfg(windows)]
 use std::ptr::write_volatile;
-use std::{marker::PhantomData, path::PathBuf};
-use std::fs::OpenOptions;
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    marker::PhantomData,
+    path::PathBuf,
+    ptr,
+    sync::{
+        atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        Mutex,
+    },
+    thread::JoinHandle,
+};
 
 #[cfg(feature = "tui")]
 use libafl::monitors::tui::TuiMonitor;
@@ -30,20 +40,16 @@ use libafl_bolts::{
     AsSlice,
 };
 use core::num::NonZeroUsize;
-use std::io::Write;
-use std::thread::JoinHandle;
-use std::ffi::CStr;
-use std::os::raw::c_char;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-};
-use std::sync::{Mutex, Arc};
 use bincode;
 use serde::ser;
 
-use std::fs;
-
 static STOP_FLAG: AtomicBool = AtomicBool::new(false);
+static ASSERT_STATUS: AtomicU32 = AtomicU32::new(ASSERT_NONE);
+static CURRENT_INPUT_PTR: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
+static CURRENT_INPUT_LEN: AtomicUsize = AtomicUsize::new(0);
+static NEXT_INPUT_EPOCH: AtomicU64 = AtomicU64::new(1);
+static PUBLISHED_INPUT_EPOCH: AtomicU64 = AtomicU64::new(0);
+static COMPLETED_INPUT_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 lazy_static::lazy_static! {
     static ref FUZZ_THREAD: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
@@ -56,18 +62,100 @@ pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 
 static STATE_PATH: &str = "fastdyn_work/state.bin";
 
-#[repr(C)]
-pub struct FuzzInput {
-    len: usize,
-    data: *mut u8,
+const ASSERT_NONE: u32 = 0;
+const ASSERT_RECOVERABLE: u32 = 1;
+const ASSERT_FATAL: u32 = 2;
+
+extern "C" {
+    fn fuzz_dump_bbl();
 }
 
-// For future: Find a better way to check state if running in a tight loop
-extern "C" {
-    fn fuzz_buffer_write(input: *mut FuzzInput) -> bool;
-    fn fuzz_check_empty() -> bool;
-    fn fuzz_check_assert() -> u32;
-    fn fuzz_dump_bbl();
+fn spin_wait_until(mut done: impl FnMut() -> bool) {
+    const SPIN_ITERS: usize = 10_000;
+    let mut spins = 0;
+
+    while !done() {
+        if spins < SPIN_ITERS {
+            std::hint::spin_loop();
+            spins += 1;
+        } else {
+            std::thread::yield_now();
+        }
+    }
+}
+
+fn publish_input(epoch: u64, buf: &[u8]) {
+    ASSERT_STATUS.store(ASSERT_NONE, Ordering::Release);
+    CURRENT_INPUT_LEN.store(buf.len(), Ordering::Relaxed);
+    CURRENT_INPUT_PTR.store(buf.as_ptr() as *mut u8, Ordering::Release);
+    PUBLISHED_INPUT_EPOCH.store(epoch, Ordering::Release);
+}
+
+fn clear_input() {
+    CURRENT_INPUT_PTR.store(ptr::null_mut(), Ordering::Release);
+    CURRENT_INPUT_LEN.store(0, Ordering::Relaxed);
+}
+
+fn wait_until_complete(epoch: u64) {
+    spin_wait_until(|| COMPLETED_INPUT_EPOCH.load(Ordering::Acquire) >= epoch);
+}
+
+fn take_assert_status() -> u32 {
+    ASSERT_STATUS.swap(ASSERT_NONE, Ordering::AcqRel)
+}
+
+fn log_fatal_input(buf: &[u8]) {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("./fastdyn_work/fuzzer.log")
+        .expect("Failed to open file");
+
+    writeln!(file, "Fatal error on input {:?}", buf).unwrap();
+
+    unsafe {
+        fuzz_dump_bbl();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_libafl_wait_next(
+    after_epoch: u64,
+    data: *mut *const u8,
+    len: *mut usize,
+) -> u64 {
+    spin_wait_until(|| PUBLISHED_INPUT_EPOCH.load(Ordering::Acquire) > after_epoch);
+
+    let epoch = PUBLISHED_INPUT_EPOCH.load(Ordering::Acquire);
+    let input_ptr = CURRENT_INPUT_PTR.load(Ordering::Acquire) as *const u8;
+    let input_len = CURRENT_INPUT_LEN.load(Ordering::Relaxed);
+
+    if data.is_null() || len.is_null() || input_ptr.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        *data = input_ptr;
+        *len = input_len;
+    }
+
+    epoch
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_libafl_complete(epoch: u64) {
+    COMPLETED_INPUT_EPOCH.fetch_max(epoch, Ordering::AcqRel);
+}
+
+#[no_mangle]
+pub extern "C" fn fuzz_libafl_report_assert(fatal: bool) {
+    let status = if fatal {
+        ASSERT_FATAL
+    } else {
+        ASSERT_RECOVERABLE
+    };
+
+    ASSERT_STATUS.fetch_max(status, Ordering::AcqRel);
 }
 
 struct FastDynExecutor<S> {
@@ -109,82 +197,25 @@ where
 
         let target = input.target_bytes();
         let buf = target.as_slice();
+        let epoch = NEXT_INPUT_EPOCH.fetch_add(1, Ordering::Relaxed);
 
-        let mut vec = buf.to_vec().into_boxed_slice();
+        publish_input(epoch, buf);
+        wait_until_complete(epoch);
+        clear_input();
 
-        let input = Box::new(FuzzInput {
-            len: vec.len(),
-            data: vec.as_mut_ptr(),
-        });
-
-        Box::leak(vec);
-
-        let input_ptr = Box::into_raw(input);
-
-        unsafe { fuzz_buffer_write(input_ptr); }
-
-        const SPIN_ITERS: usize = 10_000;
-        let mut spins = 0;
-        // timeout for 60 seconds using wall clock
-        let start_time = std::time::Instant::now();
-        let mut timed_out = false;
-        while unsafe { fuzz_check_empty() } != true { // wait until C empties buffer, then its done
-            if start_time.elapsed().as_secs() > 60 {
-                timed_out = true;
-                break;
-            }
-
-            if spins < SPIN_ITERS {
-                std::hint::spin_loop();
-            } else {
-                std::thread::yield_now();
-            }
-            spins = spins + 1;
-        }
-
-        unsafe {
-            if timed_out {
-                let fuzz_file = Arc::new(Mutex::new(
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("./fastdyn_work/timeout.log")
-                        .expect("Failed to open file"),
-                ));
-
-                let mut file = fuzz_file.lock().unwrap();
-                writeln!(file, "Timeout on input {:?}", buf).unwrap();
-
-                // set the stop flag to exit gracefully
-                STOP_FLAG.store(true, Ordering::SeqCst);
-
-                return Ok(ExitKind::Crash);
-            }
-            let value = fuzz_check_assert();
-            if value == 1 {
-                return Ok(ExitKind::Crash);
-            } else if value == 2 { // fatal error
-                let fuzz_file = Arc::new(Mutex::new(
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("./fastdyn_work/fuzzer.log")
-                        .expect("Failed to open file"),
-                ));
-
-                let mut file = fuzz_file.lock().unwrap();
-                writeln!(file, "Fatal error on input {:?}", buf).unwrap();
-                fuzz_dump_bbl();
-
+        match take_assert_status() {
+            ASSERT_RECOVERABLE => Ok(ExitKind::Crash),
+            ASSERT_FATAL => {
+                log_fatal_input(buf);
                 self.crashed = true;
-                return Ok(ExitKind::Crash);
+                Ok(ExitKind::Crash)
             }
-            return Ok(ExitKind::Ok);
+            _ => Ok(ExitKind::Ok),
         }
     }
 }
 
-pub fn fuzzer_thread_main(input_size: usize) {
+pub fn fuzzer_thread_main() {
     // Create an observation channel using the signals map
     let observer = unsafe { StdMapObserver::new("cvg", &mut CVG) };
 
@@ -210,8 +241,8 @@ pub fn fuzzer_thread_main(input_size: usize) {
     let corpus_path = PathBuf::from("fastdyn_work/corpus");
     let crashes_path = PathBuf::from("fastdyn_work/crashes");
 
-    fs::create_dir_all(&corpus_path);
-    fs::create_dir_all(&crashes_path);
+    fs::create_dir_all(&corpus_path).expect("Couldn't create corpus directory");
+    fs::create_dir_all(&crashes_path).expect("Couldn't create crashes directory");
 
     //let mut corpus = OnDiskCorpus::<BytesInput>::new(corpus_path.clone()).unwrap();
     let mut corpus = InMemoryCorpus::new();
@@ -274,10 +305,10 @@ pub fn fuzzer_thread_main(input_size: usize) {
 
     // If corpus is empty, generate random inputs
     if state.corpus().count() == 0 {
-        // let nz = NonZeroUsize::new(input_size)
-        //     .expect("input_size must be non-zero");
-        // let mut generator = RandPrintablesGenerator::with_min_size(nz, nz); // sized based on arguments to anchor
-        let mut generator = RandPrintablesGenerator::with_min_size(NonZeroUsize::new(8).expect(""), NonZeroUsize::new(16).expect("")); // fixed size
+        let mut generator = RandPrintablesGenerator::with_min_size(
+            NonZeroUsize::new(10).expect(""),
+            NonZeroUsize::new(60).expect(""),
+        );
         println!("Generating new inputs");
         state
             .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
@@ -310,17 +341,11 @@ pub fn fuzzer_thread_main(input_size: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn fuzz_libAFL_init(cstr: *const c_char) -> u32 {
-    // Safety: cstr must be a valid null-terminated C string
-    let c_str = unsafe { CStr::from_ptr(cstr) };
-    let r_str = c_str.to_str().unwrap(); // handle errors in production
-
-    let input_size = (r_str.chars().filter(|&c| c == ',').count() + 1) * 4;
-
+pub extern "C" fn fuzz_libAFL_init() -> u32 {
     STOP_FLAG.store(false, Ordering::SeqCst);
 
     let handle = std::thread::spawn(move || {
-        fuzzer_thread_main(input_size);
+        fuzzer_thread_main();
     });
 
     *FUZZ_THREAD.lock().unwrap() = Some(handle);

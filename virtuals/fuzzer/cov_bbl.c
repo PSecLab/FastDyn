@@ -10,7 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include "fuzz_bbl.h"
+#include "cov_bbl.h"
 
 // fuzzer needs to restart fastdyn with persistant work directory
 #define DEFAULT_BBL_DUMP_PATH "fastdyn_work/bbl.txt"

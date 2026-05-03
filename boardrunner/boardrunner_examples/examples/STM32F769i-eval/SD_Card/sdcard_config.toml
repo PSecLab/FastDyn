@@ -146,10 +146,10 @@ finline  = ""
 [sdmmc1]
 internal_model = "sdmmc1_model"
 """
-        [[Device.sdmmc1.handlers]]
+    [[Device.sdmmc1.handlers]]
         model   = "elder"
         enabled = true
-        scroll = "boardrunner/boardrunner_sdk/build/sd_model.so"
+        scroll = "boardrunner/boardrunner_sdk/build/model.so"
 
     [[Device.sdmmc1.handlers]]
         model   = "passthrough"
