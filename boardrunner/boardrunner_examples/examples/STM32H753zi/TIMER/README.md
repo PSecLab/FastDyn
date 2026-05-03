@@ -1,21 +1,23 @@
-# PWM — Configure PWM as an Autonomous Peripheral
+# TIMER — Counter Read + Interrupt Callback
 
 **Board:** NUCLEO-H753ZI
 
-The firmware configures TIM3 in PWM mode on Channel 1 (PA6) at 50% duty / 10 kHz, then idles. PWM runs autonomously after start with no further firmware involvement.
+The firmware runs TIM3 in time-base mode with a 1-second period, fires an update interrupt, and reads the counter to verify it advances.
 
 ## Hardware Connections
 
-None. PWM output is on PA6 (TIM3_CH1, Arduino D13 area).
+None.
 
 ## Expected Output
 
-- LED1 (PB0) on if the PWM counter is advancing
-- LED3 (PB14) on if the test failed
+- LED1 (PB0) on if the period-elapsed callback fired
+- LED2 (PE1) on if the counter advanced between two reads
+- LED3 (PB14) on for any failure
 
 ## Test Scope
 
-- Configure PWM as an autonomous peripheral
+- Execute callback after interrupt
+- Read counter value
 
 ## Compositional Model Split
 
@@ -28,10 +30,10 @@ None. PWM output is on PA6 (TIM3_CH1, Arduino D13 area).
 
 ### Step 0 — Passthrough run (collect hardware I/O trace)
 
-> **TOML state:** Set TIM3 elder handler to `enabled = false` and passthrough handler to `enabled = true` in `pwm_config.toml`. Restore elder mode before Step 3.
+> **TOML state:** Set TIM3 elder handler to `enabled = false` and passthrough handler to `enabled = true` in `timer_config.toml`. Restore elder mode before Step 3.
 
 ```bash
-boardrunner run -c boardrunner/boardrunner_examples/examples/STM32H753zi/PWM/pwm_config.toml
+boardrunner run -c boardrunner/boardrunner_examples/examples/STM32H753zi/TIMER/timer_config.toml
 ```
 
 Output: `hardware_log/io.log`
@@ -56,7 +58,7 @@ boardrunner llm -d fastdyn_work_tim3 \
 ### Step 3 — Run with the generated elder model
 
 ```bash
-boardrunner run -c boardrunner/boardrunner_examples/examples/STM32H753zi/PWM/pwm_config.toml
+boardrunner run -c boardrunner/boardrunner_examples/examples/STM32H753zi/TIMER/timer_config.toml
 ```
 
 ### Step 4 — Verify against hardware trace
@@ -82,5 +84,5 @@ Once verified, snapshot the model:
 
 ```bash
 cp boardrunner/boardrunner_sdk/model/model.c \
-   boardrunner/boardrunner_examples/examples/STM32H753zi/PWM/generated_models/pwm_model.c
+   boardrunner/boardrunner_examples/examples/STM32H753zi/TIMER/generated_models/tim3_model.c
 ```
