@@ -99,6 +99,10 @@ We recommend running every `fastdyn` / `boardrunner` command from the FastDyn re
 
 For the fuzzer setup, please refer to `virtuals/fuzzer/fastdyn_fuzz_lib/README.md`.
 
+In the Makefile, at most one backend should be enabled at once.
+
+To setup the custom AFLNet, use https://anonymous.4open.science/r/aflnet/README.md
+
 ## Required OS Dependencies
 
 For Sundial build of Fastdyn:
