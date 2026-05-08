@@ -1,0 +1,90 @@
+from contextlib import contextmanager
+import sys
+import tomllib
+import types
+
+
+# fastdyn.main imports optional analysis backends that are not needed by this
+# loop control-flow test.
+cmsis_svd = types.ModuleType("cmsis_svd")
+cmsis_svd_parser = types.ModuleType("cmsis_svd.parser")
+cmsis_svd_parser.SVDParser = object
+sys.modules.setdefault("cmsis_svd", cmsis_svd)
+sys.modules.setdefault("cmsis_svd.parser", cmsis_svd_parser)
+
+tomli = types.ModuleType("tomli")
+tomli.load = tomllib.load
+sys.modules.setdefault("tomli", tomli)
+
+dwarf_provider = types.ModuleType("fastdyn.binary.symmap.providers.dwarf")
+dwarf_provider.DwarfProvider = object
+sys.modules.setdefault("fastdyn.binary.symmap.providers.dwarf", dwarf_provider)
+
+from fastdyn import main
+
+
+class FakeProcessManager:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+        self.checked = False
+
+    def start_terminator_watcher(self, callback):
+        self.started = True
+        self.callback = callback
+
+    def stop_terminator_watcher(self):
+        self.stopped = True
+
+    def raise_for_terminator_failure(self):
+        self.checked = True
+
+
+class FakeFastDynHandle:
+    machines = ["machine0"]
+
+    def __init__(self):
+        self.shutdown_called = False
+
+    def run(self, **_kwargs):
+        raise KeyboardInterrupt
+
+    def shutdown(self):
+        self.shutdown_called = True
+
+
+def test_loop_starts_helper_terminator_watcher(tmp_path, monkeypatch):
+    config = tmp_path / "fastdyn.toml"
+    config.write_text("", encoding="utf-8")
+    work_dir = tmp_path / "work"
+    manager = FakeProcessManager()
+    handle = FakeFastDynHandle()
+
+    @contextmanager
+    def fake_launch_from_config(config_path, work_path, skip=False):
+        assert config_path == str(config)
+        assert work_path == str(work_dir)
+        assert skip is False
+        yield manager
+
+    monkeypatch.setattr(main.runtime_config, "launch_from_config", fake_launch_from_config)
+    monkeypatch.setattr(main, "_configure_measurement", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(main, "_auto_build_fmu", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main.toml_parser, "parser", lambda *_args, **_kwargs: handle)
+
+    main.loop.callback(
+        config=str(config),
+        map_file=None,
+        work_dir=str(work_dir),
+        svd=None,
+        persist_work_dir=False,
+        fmu=None,
+        no_build_fmu=False,
+        no_run_processes=False,
+    )
+
+    assert manager.started is True
+    assert manager.stopped is True
+    assert manager.checked is True
+    manager.callback(None, 0)
+    assert handle.shutdown_called is True

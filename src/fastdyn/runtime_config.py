@@ -36,7 +36,7 @@ _ENV_PATTERN = re.compile(
 
 
 def expand_env_defaults(value: str, env: dict[str, str] | None = None) -> str:
-    """Expand $VAR and ${VAR:-default} in TOML strings."""
+    """Expand ${VAR} and ${VAR:-default} in TOML strings."""
 
     merged = os.environ if env is None else env
 

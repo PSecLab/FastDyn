@@ -259,7 +259,7 @@ def loop(config, map_file, work_dir, svd, persist_work_dir, fmu, no_build_fmu, n
                         _auto_build_fmu(config, fmu, no_build_fmu)
                     checked_fmu = True
 
-                with runtime_config.launch_from_config(config, work_dir, skip=no_run_processes):
+                with runtime_config.launch_from_config(config, work_dir, skip=no_run_processes) as process_manager:
                     try:
                         with timing.phase("fastdyn.parse_config"):
                             fastdyn_handle = toml_parser.parser(
@@ -269,11 +269,22 @@ def loop(config, map_file, work_dir, svd, persist_work_dir, fmu, no_build_fmu, n
                                 svd_path=svd_path,
                                 fmu_name=fmu,
                             )
-                        for idx, machine in enumerate(fastdyn_handle.machines):
-                            with timing.phase(f"fastdyn.machine{idx}.run"):
-                                fastdyn_handle.run(machine_name=f"machine{idx}",
-                                                   target="qemu",
-                                                   out_path=work_dir)
+
+                        if process_manager is not None:
+                            process_manager.start_terminator_watcher(
+                                lambda _handle, _exit_code: fastdyn_handle.shutdown()
+                            )
+
+                        try:
+                            for idx, machine in enumerate(fastdyn_handle.machines):
+                                with timing.phase(f"fastdyn.machine{idx}.run"):
+                                    fastdyn_handle.run(machine_name=f"machine{idx}",
+                                                       target="qemu",
+                                                       out_path=work_dir)
+                        finally:
+                            if process_manager is not None:
+                                process_manager.stop_terminator_watcher()
+                                process_manager.raise_for_terminator_failure()
                         # Clean exit
                         keep_dir = True
                     except KeyboardInterrupt:

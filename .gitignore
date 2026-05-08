@@ -29,3 +29,5 @@ fastdyn_llm_history
 
 # Rumoca lockstep trace logs
 rumoca_trace*.csv
+*.tlog
+*.tlog.raw
