@@ -49,11 +49,11 @@ def generate_mission_items(simple_plan, start_seq=0):
 if __name__ == "__main__":
     # Example usage
     simple_rover_triangle_mission = [
-        {"cmd": "start", "lat": 39.79480109851339, "lon": -84.08631702793322},  # Starting point
-        {"cmd": "waypoint", "lat": 39.794901, "lon": -84.086317},  # ~11m North
-        {"cmd": "waypoint", "lat": 39.794851, "lon": -84.086417},  # ~11m West
-        {"cmd": "waypoint", "lat": 39.794751, "lon": -84.086317},  # ~11m South
-        {"cmd": "waypoint", "lat": 39.79480109851339, "lon": -84.08631702793322},  # Return to start
+        {"cmd": "start", "lat": 40.414929, "lon": -86.932387},  # Purdue tarmac start point
+        {"cmd": "waypoint", "lat": 40.415019, "lon": -86.932505},  # Northwest corner
+        {"cmd": "waypoint", "lat": 40.414839, "lon": -86.932505},  # Southwest corner
+        {"cmd": "waypoint", "lat": 40.414839, "lon": -86.932269},  # Southeast corner
+        {"cmd": "waypoint", "lat": 40.414929, "lon": -86.932387},  # Return to start
         {"cmd": "stop"}
     ]
 

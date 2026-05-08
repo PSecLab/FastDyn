@@ -11,6 +11,7 @@ import subprocess
 import logging
 
 from .utils import helper
+from . import timing
 
 from . import fastdyn_log as fastdyn_log_conf
 from .utils import parse_config as parse_helper
@@ -38,20 +39,27 @@ class Fastdyn:
     def run(self, target, machine_name, out_path=None):
         #before running resolve the device models for each machine
         machine = self.machines[machine_name]
-        compile_device_routing(machine.devices, machine.parsed_device, models=machine.models) #return value will be written to machine.parsed_device
+        with timing.phase(f"{machine_name}.compile_device_routing"):
+            compile_device_routing(machine.devices, machine.parsed_device, models=machine.models) #return value will be written to machine.parsed_device
 
         if target.lower() == "qemu":
             #write device config to the json file
-            qemu_cmd, gdb_cmd, launch_gdb, binary = qemu_target.setup_qemu(
-                machine,
-                out_path
-            )
+            with timing.phase(f"{machine_name}.qemu_setup"):
+                qemu_cmd, gdb_cmd, launch_gdb, binary = qemu_target.setup_qemu(
+                    machine,
+                    out_path
+                )
 
-            qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
+            with timing.phase(f"{machine_name}.qemu_execution"):
+                qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
 
 
-    def shutdown(self):
-        qemu_target.kill_qemu_process(port='5555')
+    def shutdown(self, machine_name=None):
+        machines = [self.machines[machine_name]] if machine_name is not None else self.machines.values()
+        for machine in machines:
+            port = getattr(machine.qemu_target_opts, "monitor_port", None)
+            if port is not None:
+                qemu_target.kill_qemu_process(port=port)
 
 class QemuTargetOpts:
     def __init__(self):
@@ -60,12 +68,15 @@ class QemuTargetOpts:
         self.finline: Optional[str] = None
         self.coverage: bool = False
         self.enable_gdb: bool = False
+        self.gdb_port: int = 1234
         self.stop_on_start: bool = False
         self.launch_gdb: bool = False
         self.semihosting: bool = True
         self.semihosting_config: str = "enable=on,target=native"
         self.monitor_port: Optional[int] = 5555
         self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
+        self.icount: Optional[str] = None
+        self.timer_irq_period_ns: Optional[int] = None
         self.print_command = False
 
 class Machine:
@@ -75,6 +86,10 @@ class Machine:
         self.memories = {}
         self.devices = {}
         self.models = {}
+        self.fmu_name: Optional[str] = None
+        self.fmu_path: Optional[str] = None
+        self.fmu_parameters: Dict[str, float] = {}
+        self.fmu_value_references: Dict[str, int] = {}
         self.platform = platform_name
         self.qemu_target_opts = QemuTargetOpts()
 

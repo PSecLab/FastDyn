@@ -9,6 +9,7 @@ Doxyfile.bak
 *fastdyn_work*
 fastdyn-env
 build
+target/
 *.bin
 *bbl.txt
 .cflags
@@ -25,3 +26,8 @@ boardrunner/boardrunner_sdk/build_api_tests_standalone/
 
 # LLM outputs
 fastdyn_llm_history
+
+# Rumoca lockstep trace logs
+rumoca_trace*.csv
+*.tlog
+*.tlog.raw

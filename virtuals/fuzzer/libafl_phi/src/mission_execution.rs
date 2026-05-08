@@ -1,32 +1,77 @@
 use baby_fuzzer::gz_state_parser::{
-    get_raw_gz_data,
-    get_raw_hf_status,
-    extract_block_from_gz_data,
-    get_sim_time,
-    apply_noise
+    apply_noise, extract_block_from_gz_data, get_raw_gz_data, get_raw_hf_status, get_sim_time,
 };
 
 use crate::cpexp_input::TargetInput;
 use crate::CVG;
 
-use libafl::executors::ExitKind;
-use libafl::inputs::{HasTargetBytes, Input};
-use std::process::{Command, Stdio, Child};
-use std::fs::File;
-use std::io::Write;
 use gz_transport::Node;
-use gz_msgs::clock::Clock;
+use libafl::executors::ExitKind;
+use libafl::inputs::HasTargetBytes;
+use std::env;
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 const RUN_SERVICES_DIR: &str = "../../physics/flight_controllers/courbet/gazebo";
 const MAV_C2_DIR: &str = "../../physics/flight_controllers/courbet/mavlink";
 const FASTDYN_DIR: &str = "../../..";
+
+fn fastdyn_dir() -> PathBuf {
+    let default_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FASTDYN_DIR);
+    let root = env::var("FASTDYN_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or(default_root);
+    fs::canonicalize(&root).unwrap_or(root)
+}
+
+fn optifuzz_backend(cps_name: &str) -> String {
+    env::var("FASTDYN_OPTIFUZZ_BACKEND").unwrap_or_else(|_| {
+        if matches!(cps_name, "copter" | "rover" | "plane") {
+            "fmuv3".to_string()
+        } else {
+            "gazebo".to_string()
+        }
+    })
+}
+
+fn execution_work_dir() -> PathBuf {
+    let execution = env::var("EXECUTION").unwrap_or_else(|_| "0".to_string());
+    let fastdyn_root = fastdyn_dir();
+    let root = env::var("FASTDYN_OPTIFUZZ_WORK_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| fastdyn_root.join("out/optifuzz"));
+    let root = if root.is_absolute() {
+        root
+    } else {
+        fastdyn_root.join(root)
+    };
+    root.join(format!("execution-{}", execution))
+}
+
+fn write_mutations(input: &TargetInput, work_dir: &Path) -> PathBuf {
+    fs::create_dir_all(work_dir).expect("failed to create OptiFuzz work directory");
+    let mutation_path = work_dir.join("mutations.bin");
+    let raw_parameter_values = input.get_param_bytes().target_bytes().clone();
+    let mut bin_param_file: File = File::create(&mutation_path).unwrap();
+    let _ = bin_param_file.write_all(&raw_parameter_values).unwrap();
+    let _ = bin_param_file.sync_all().unwrap();
+    mutation_path
+}
 
 /**
  * Assigning each value in file to corresponding index in CVG array.
  * File is of the format: "value,value,..." where each value is u8.
  */
 fn deserialize_coverage(path: &str) {
-    let contents = std::fs::read_to_string(path).expect("Failed to read coverage file");
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) => {
+            println!("Warning: coverage file {path} was not available: {err}");
+            return;
+        }
+    };
     let values: Vec<&str> = contents.trim().split(',').collect();
     unsafe {
         for (i, val_str) in values.iter().enumerate() {
@@ -41,6 +86,113 @@ fn deserialize_coverage(path: &str) {
                 }
             }
         }
+    }
+}
+
+fn env_or_default(name: &str, default: &str) -> String {
+    env::var(name).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_flag_enabled(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn maybe_env(command: &mut Command, name: &str, value: String) {
+    if !value.is_empty() {
+        command.env(name, value);
+    }
+}
+
+fn execute_fmuv3_mission(
+    input: &TargetInput,
+    param_names: String,
+    cps_name: &str,
+    mission_file_name: &str,
+) -> ExitKind {
+    let work_dir = execution_work_dir();
+    let mutation_path = write_mutations(input, &work_dir);
+    let config = env_or_default(
+        "FASTDYN_OPTIFUZZ_CONFIG",
+        &format!("configs/{}462.toml", cps_name),
+    );
+    let swarm_instances = env::var("FASTDYN_OPTIFUZZ_SWARM_INSTANCES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1);
+    let coverage_enabled = env_or_default("FASTDYN_OPTIFUZZ_COVERAGE", "0");
+
+    let mut command = Command::new("fastdyn");
+    command.current_dir(fastdyn_dir());
+    if swarm_instances > 1 {
+        let base_port = env_or_default("FASTDYN_OPTIFUZZ_BASE_PORT", "19000");
+        command
+            .arg("swarm")
+            .arg("-c")
+            .arg(&config)
+            .arg("-n")
+            .arg(swarm_instances.to_string())
+            .arg("-o")
+            .arg(work_dir.join("swarm"))
+            .arg("--jobs")
+            .arg(swarm_instances.to_string())
+            .arg("--base-port")
+            .arg(base_port);
+    } else {
+        command
+            .arg("run")
+            .arg("-c")
+            .arg(&config)
+            .arg("-p")
+            .arg("-o")
+            .arg(&work_dir);
+    }
+
+    command
+        .env("FASTDYN_OPTIFUZZ", "1")
+        .env("FASTDYN_OPTIFUZZ_MUTATION_BIN", &mutation_path)
+        .env("FASTDYN_OPTIFUZZ_PARAM_NAMES", param_names)
+        .env("FASTDYN_QEMU_MEMORY_DIR", work_dir.join("qemu-memory"))
+        .env("FASTDYN_COVERAGE", &coverage_enabled)
+        .env("FASTDYN_COVERAGE_FILE", work_dir.join("cvg.bin"))
+        .env("FASTDYN_BBL_FILE", work_dir.join("bbl.txt"));
+
+    if !mission_file_name.is_empty() {
+        maybe_env(
+            &mut command,
+            "FASTDYN_MISSION_FILE",
+            mission_file_name.to_string(),
+        );
+    }
+    if let Ok(param_file) = env::var("FASTDYN_OPTIFUZZ_PARAM_FILE") {
+        maybe_env(&mut command, "FASTDYN_PARAM_FILE", param_file);
+    }
+
+    if env_or_default("FASTDYN_OPTIFUZZ_VERBOSE", "0") != "1" {
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+
+    if env_or_default("FASTDYN_OPTIFUZZ_DRY_RUN", "0") == "1" {
+        println!("OptiFuzz FMUv3 dry-run command: {:?}", command);
+        if env_flag_enabled(&coverage_enabled) {
+            let _ = fs::write(work_dir.join("cvg.bin"), "");
+            deserialize_coverage(work_dir.join("cvg.bin").to_string_lossy().as_ref());
+        }
+        return ExitKind::Ok;
+    }
+
+    let status = command
+        .status()
+        .expect("Error: Failed to start FastDyn FMUv3 run");
+    if env_flag_enabled(&coverage_enabled) {
+        deserialize_coverage(work_dir.join("cvg.bin").to_string_lossy().as_ref());
+    }
+    if status.success() {
+        ExitKind::Ok
+    } else {
+        ExitKind::Timeout
     }
 }
 
@@ -65,34 +217,31 @@ pub fn execute_mission(
     timeout: f64,
     param_input_delay: f64,
     noise_time: f64,
-    headless: bool
+    headless: bool,
 ) -> ExitKind {
+    if optifuzz_backend(cps_name) == "fmuv3" {
+        return execute_fmuv3_mission(input, param_names, cps_name, mission_file_name);
+    }
 
     // 1. Apply inputs
     // println!("execute_mission received inputs: {:?}", input);
-    let raw_paramater_values = input.get_param_bytes().target_bytes().clone();
     let raw_env_config = input.get_env_config();
-
-    // Writing raw parameter values to a binary file for mav_c2 to read
-    let mut bin_param_file: File = File::create("/tmp/mutations.bin").unwrap();
-    let _ = bin_param_file.write_all(&raw_paramater_values).unwrap();
-    let _ = bin_param_file.sync_all().unwrap();
-    drop(bin_param_file);
+    let work_dir = execution_work_dir();
+    let mutation_path = write_mutations(input, &work_dir);
 
     // 2. Start Courbet services
     let mut service_binding = Command::new("./run_and_attach_services.sh");
-    let mut services_command = service_binding
-        .current_dir(RUN_SERVICES_DIR)
-        .arg(cps_name);
+    let services_command = service_binding.current_dir(RUN_SERVICES_DIR).arg(cps_name);
     if headless {
         services_command.arg("headless");
     }
 
-    let spawn_services = services_command
-        .stdout(Stdio::null())
-        .spawn();
+    let spawn_services = services_command.stdout(Stdio::null()).spawn();
     if spawn_services.is_err() {
-        panic!("Error: Failed to start services: {}", spawn_services.err().unwrap());
+        panic!(
+            "Error: Failed to start services: {}",
+            spawn_services.err().unwrap()
+        );
     }
 
     // Let services spin up
@@ -108,21 +257,24 @@ pub fn execute_mission(
     }
 
     let mut py_binding = Command::new("python3");
-    let mut c2_command = py_binding
+    let c2_command = py_binding
         .current_dir(MAV_C2_DIR)
         .arg("ardu_mav_c2.py")
         .arg(init_file_name)
         .arg(mission_file_name)
         .arg(param_names)
         .arg(param_input_delay.to_string())
-        .arg("/tmp/mutations.bin");
+        .arg(mutation_path);
     if headless {
         c2_command.arg("headless");
     }
 
     let mut spawn_c2 = c2_command.spawn();
     if spawn_c2.is_err() {
-        panic!("Error: Failed to start ardu_mav_c2.py: {}", spawn_c2.err().unwrap());
+        panic!(
+            "Error: Failed to start ardu_mav_c2.py: {}",
+            spawn_c2.err().unwrap()
+        );
     }
 
     // Let mavlink C2 spin up
@@ -137,15 +289,17 @@ pub fn execute_mission(
         .stdout(Stdio::null())
         .spawn();
     if spawn_fd.is_err() {
-        panic!("Error: Failed to start FastDyn QEMU: {}", spawn_fd.err().unwrap());
+        panic!(
+            "Error: Failed to start FastDyn QEMU: {}",
+            spawn_fd.err().unwrap()
+        );
     }
 
     // 3. Monitor for end states in order of priority
     let mut node: Node = Node::new().unwrap();
-    let mut exit_kind: ExitKind;
+    let exit_kind: ExitKind;
     let mut noise_applied: bool = false;
     loop {
-
         // Check for hard fault
         let hf_status: String = get_raw_hf_status(&mut node);
         if hf_status.is_empty() {
@@ -188,7 +342,6 @@ pub fn execute_mission(
                 break;
             }
         }
-
     }
 
     // Just use kill script to force everything dead

@@ -1,0 +1,71 @@
+# Integration Tests
+
+The integration tests exercise the maintained FastDyn/Courbet/Rumoca FMI v3
+vehicle path. Run them from the FastDyn repository root after setup:
+
+```bash
+source ./setup.sh --build-qemu
+```
+
+## Vehicle Launch Smoke
+
+`courbet_fmu_vehicle_smoke.sh` launches one vehicle config and waits for:
+
+- FMU auto-build or ready detection,
+- FMU backend load,
+- QEMU/FMU lockstep clock,
+- 1 ms board tick,
+- MAVCesium URL print,
+- ArduPilot heartbeat, and
+- telemetry.
+
+Examples:
+
+```bash
+FASTDYN_COURBET_CONFIG=configs/rover462.toml \
+FASTDYN_COURBET_LABEL=ardurover \
+tests/integration/courbet_fmu_vehicle_smoke.sh
+
+FASTDYN_COURBET_CONFIG=configs/plane462.toml \
+FASTDYN_COURBET_LABEL=arduplane \
+tests/integration/courbet_fmu_vehicle_smoke.sh
+```
+
+## Full Copter Mission
+
+`courbet_mission_smoke.sh` runs the ArduCopter KLAF/Purdue mission and requires:
+
+- mission upload,
+- vehicle arm,
+- climb above the configured minimum altitude,
+- mission item progression, and
+- final landing confirmation.
+
+```bash
+tests/integration/courbet_mission_smoke.sh
+```
+
+## Swarm Smoke
+
+`courbet_swarm_smoke.sh` launches multiple isolated FastDyn workers and verifies
+each worker prints a MAVCesium URL, loads the FMU backend, and uses the 1 ms
+board tick.
+
+```bash
+FASTDYN_SWARM_CONFIG=configs/copter462.toml \
+FASTDYN_SWARM_LABEL=arducopter \
+FASTDYN_SWARM_INSTANCES=2 \
+FASTDYN_SWARM_BASE_PORT=18000 \
+tests/integration/courbet_swarm_smoke.sh
+```
+
+The same script accepts `configs/rover462.toml` and `configs/plane462.toml`.
+Each worker receives separate QEMU monitor, MAVLink, MAVCesium, Rumoca, GDB,
+QMP, work, and RAM-backing paths.
+
+## CI
+
+`.github/workflows/courbet-mission.yml` runs the setup script, builds the
+renamed Modelica vehicle models through Rumoca FMI v3, checks OptiFuzz dry-run
+wiring for copter/rover/plane, checks two-worker swarm dry-runs, launches real
+two-worker swarms for all three vehicles, and runs the full ArduCopter mission.

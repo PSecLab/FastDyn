@@ -1,4 +1,6 @@
-#ifndef PHY_H
-#define PHY_H
-int phy_init(int argc, char **argv);
+#ifndef FASTDYN_VIRTUALS_PHY_FORWARD_H
+#define FASTDYN_VIRTUALS_PHY_FORWARD_H
+
+#include "../../virtuals/physics/phy.h"
+
 #endif

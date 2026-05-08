@@ -15,6 +15,7 @@ BOARD_RUNNER ?= false
 PHY			?= false
 FMU			?= false
 FLIGHT_CONTROLLERS ?= false
+EFFECTIVE_PHY := $(if $(filter true,$(PHY) $(FMU) $(FLIGHT_CONTROLLERS) $(LIBGZ)),true,false)
 
 # Top-level target: clean, configure with meson, then build with ninja
 all: setup
@@ -35,7 +36,7 @@ setup: clean fetch
 	-DDEBUG_PRINT=$(DEBUG_PRINT) \
 	-Denable_libpy=$(LIBPY) \
 	-Denable_sundials=$(SUNDIALS) \
-	-Denable_phy=$(PHY) \
+	-Denable_phy=$(EFFECTIVE_PHY) \
 	-Denable_fmu=$(FMU) \
 	-Denable_flight_controllers=$(FLIGHT_CONTROLLERS)
 
@@ -61,7 +62,7 @@ fetch:
 	@if [ "$(DEV)" = "true" ] && [ "$(LIBHW)" = "true" ]; then \
 		git submodule update --init device_models/elder/inih third_party/common/cmsis-svd-data; \
 	fi
-	@if [ "$(LIBGZ)" = "true" ]; then \
+	@if [ "$(LIBGZ)" = "true" ] || [ "$(FLIGHT_CONTROLLERS)" = "true" ]; then \
 		git submodule update --init third_party/courbet_deps/mavlink_headers third_party/courbet_deps/SITL_Models; \
 	fi
 

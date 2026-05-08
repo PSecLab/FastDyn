@@ -10,3 +10,9 @@
 [submodule "third_party/common/cmsis-svd-data"]
 	path = third_party/common/cmsis-svd-data
 	url = https://github.com/cmsis-svd/cmsis-svd-data.git
+[submodule "third_party/common/rumoca"]
+	path = third_party/common/rumoca
+	url = https://github.com/cognipilot/rumoca.git
+[submodule "third_party/common/modelica_models"]
+	path = third_party/common/modelica_models
+	url = https://github.com/cognipilot/modelica_models.git

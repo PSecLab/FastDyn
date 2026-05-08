@@ -15,23 +15,25 @@ tests/unit/
   test_llm_client.py        # Tests for LLM client (mocked, no real API calls)
   test_evaluate_metrics.py  # Tests for --evaluate metrics (LLMCallMetrics, JSONL output)
   test_ablation_flags.py    # Tests for --no-encoder, --no-vio, --no-rca ablation flags
+  test_runtime_config.py    # Tests for FMU/Rumoca/helper process TOML parsing
+  test_swarm.py             # Tests for per-worker swarm port and work-dir planning
 ```
 
 ## How to Run
 
 Run all unit tests:
 ```bash
-pytest tests/unit/ -v
+PYTHONPATH=src pytest tests/unit/ -v
 ```
 
 Run a specific test file:
 ```bash
-pytest tests/unit/test_patch.py -v
+PYTHONPATH=src pytest tests/unit/test_patch.py -v
 ```
 
 Run a specific test function:
 ```bash
-pytest tests/unit/test_patch.py::test_single_patch_success -v
+PYTHONPATH=src pytest tests/unit/test_patch.py::test_single_patch_success -v
 ```
 
 ## Conventions
@@ -65,4 +67,4 @@ pytest tests/unit/test_patch.py::test_single_patch_success -v
 1. Create a new file `test_<module>.py` in this directory
 2. Import the module under test
 3. Write test functions prefixed with `test_`
-4. Run `pytest tests/unit/ -v` to verify
+4. Run `PYTHONPATH=src pytest tests/unit/ -v` to verify

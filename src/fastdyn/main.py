@@ -16,6 +16,10 @@ from .verifier import verifier as verify             #contains the verification 
 from .verifier import prompt_gen as pg           #Generates the prompt
 from .verifier import context_minimizer as cm   #Minimizes the context
 from . import toml_parser
+from . import fmu_build
+from . import runtime_config
+from . import swarm as swarm_runner
+from . import timing
 from .fuzzer import fuzzer
 from .utils import parse_config as parse_helper
 from fastdyn.binary.symmap import SymbolResolver
@@ -24,6 +28,64 @@ import fastdyn.targets.qemu_target as qemu_target
 from fastdyn.llm.handlers import llm_history_next
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
+
+
+def _prepare_work_dir(work_dir, persist_work_dir):
+    if work_dir is not None:
+        if not os.path.isdir(work_dir):
+            log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
+    else:
+        work_dir = "fastdyn_work"
+
+    if not persist_work_dir:
+        if os.path.exists(work_dir):
+            log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
+            shutil.rmtree(work_dir)
+
+        log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
+        os.makedirs(work_dir)
+    else:
+        log.info(f"Running with existing work directory.")
+
+    return work_dir
+
+
+def _configure_measurement(config, work_dir):
+    env = runtime_config.configure_run_environment(config, work_dir)
+    click.echo(f"FastDyn timing log: {env['FASTDYN_TIMING_FILE']}")
+    if env.get("FASTDYN_PYTHON_PROFILE") == "1" or env.get("FASTDYN_PERF_MODE") != "off":
+        click.echo(f"FastDyn profile output: {Path(work_dir).expanduser().resolve() / 'profiles'}")
+    return env
+
+
+def _auto_build_fmu(config, fmu_name, skip_build):
+    if skip_build:
+        return
+    try:
+        build = fmu_build.resolve(Path(config), fmu_name)
+    except fmu_build.NoFmuConfig:
+        return
+    except fmu_build.FmuConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not build.auto_build:
+        return
+
+    try:
+        if not fmu_build.needs_build(build):
+            click.echo(f"FMU ready: {build.artifact_path}")
+            return
+        fmu_build.require_build_inputs(build)
+        click.echo(f"Building FMU '{build.name}' from {config}")
+        fmu_build.build_fmu(build, update_submodules_first=False)
+        if build.package:
+            click.echo(f"FMU ready: {build.fmu_path}")
+        else:
+            click.echo(f"FMU source tree ready: {build.output}")
+    except fmu_build.FmuConfigError as exc:
+        raise click.ClickException(f"FMU auto-build setup is incomplete: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise click.ClickException(f"FMU build failed: {exc}") from exc
 
 @click.group()
 @click.version_option(prog_name="Fastdyn Framework",version=__version__)
@@ -59,34 +121,65 @@ def cli():
     default=False,
     help='Optional Flag to persist the existing work directory.'
 )
-def run(config, map_file, work_dir, svd, persist_work_dir):
-    if work_dir is not None:
-        if not os.path.isdir(work_dir):
-            log.warn(f"The output directory: {work_dir} passed by the user does not exist.")
-    else:
-        work_dir = "fastdyn_work"
-
-    if not persist_work_dir:
-        if os.path.exists(work_dir):
-            log.info(f"The output directory already exists at Path {os.path.abspath(work_dir)}. Deleting it!")
-            shutil.rmtree(work_dir)
-
-        log.info(f"Creating output directory at path: {os.path.abspath(work_dir)}")
-        os.makedirs(work_dir)
-    else:
-        log.info(f"Running with existing work directory.")
+@click.option(
+    '--fmu',
+    default=None,
+    metavar='NAME',
+    help='Override [FMU].active for automatic FMU builds.'
+)
+@click.option(
+    '--no-build-fmu',
+    is_flag=True,
+    default=False,
+    help='Skip automatic FMU build from the [FMU] config.'
+)
+@click.option(
+    '--no-run-processes',
+    is_flag=True,
+    default=False,
+    help='Do not start helper processes from [Rumoca] or [Run.processes].'
+)
+def run(config, map_file, work_dir, svd, persist_work_dir, fmu, no_build_fmu, no_run_processes):
+    work_dir = _prepare_work_dir(work_dir, persist_work_dir)
+    _configure_measurement(config, work_dir)
 
     svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
 
-    #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
-    fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
+    try:
+        with timing.phase("fastdyn.run.total", config=config, work_dir=work_dir):
+            with timing.phase("fastdyn.fmu_auto_build"):
+                _auto_build_fmu(config, fmu, no_build_fmu)
 
-    #run all the machines requested by the user
-    for idx, machine in enumerate(fastdyn_handle.machines):
-        fastdyn_handle.run(machine_name=f"machine{idx}",
-                           target="qemu",
-                           out_path=work_dir
-                           )
+            with runtime_config.launch_from_config(config, work_dir, skip=no_run_processes) as process_manager:
+                #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
+                with timing.phase("fastdyn.parse_config"):
+                    fastdyn_handle = toml_parser.parser(
+                        work_dir,
+                        machine_name="machine0",
+                        toml_config=config,
+                        svd_path=svd_path,
+                        fmu_name=fmu,
+                    )
+
+                if process_manager is not None:
+                    process_manager.start_terminator_watcher(
+                        lambda _handle, _exit_code: fastdyn_handle.shutdown()
+                    )
+
+                #run all the machines requested by the user
+                try:
+                    for idx, machine in enumerate(fastdyn_handle.machines):
+                        with timing.phase(f"fastdyn.machine{idx}.run"):
+                            fastdyn_handle.run(machine_name=f"machine{idx}",
+                                               target="qemu",
+                                               out_path=work_dir
+                                               )
+                finally:
+                    if process_manager is not None:
+                        process_manager.stop_terminator_watcher()
+                        process_manager.raise_for_terminator_failure()
+    except runtime_config.RuntimeConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @cli.command('loop', help='Like run, but restarts automatically. On a clean exit the work directory is wiped; on a crash it is preserved (--persist-work-dir) so state can be inspected.')
@@ -117,7 +210,25 @@ def run(config, map_file, work_dir, svd, persist_work_dir):
     default=False,
     help='Optional Flag to persist the existing work directory on the first run.'
 )
-def loop(config, map_file, work_dir, svd, persist_work_dir):
+@click.option(
+    '--fmu',
+    default=None,
+    metavar='NAME',
+    help='Override [FMU].active for automatic FMU builds.'
+)
+@click.option(
+    '--no-build-fmu',
+    is_flag=True,
+    default=False,
+    help='Skip automatic FMU build from the [FMU] config.'
+)
+@click.option(
+    '--no-run-processes',
+    is_flag=True,
+    default=False,
+    help='Do not start helper processes from [Rumoca] or [Run.processes].'
+)
+def loop(config, map_file, work_dir, svd, persist_work_dir, fmu, no_build_fmu, no_run_processes):
     if work_dir is None:
         work_dir = "fastdyn_work"
 
@@ -127,6 +238,7 @@ def loop(config, map_file, work_dir, svd, persist_work_dir):
     # After a clean exit we reset to False (fresh start).
     # After a crash we keep it True (preserve state).
     keep_dir = persist_work_dir
+    checked_fmu = False
 
     while True:
         if not keep_dir:
@@ -138,20 +250,213 @@ def loop(config, map_file, work_dir, svd, persist_work_dir):
         else:
             log.info(f"Running with existing work directory (crash recovery).")
 
+        _configure_measurement(config, work_dir)
+
         try:
-            fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
-            for idx, machine in enumerate(fastdyn_handle.machines):
-                fastdyn_handle.run(machine_name=f"machine{idx}",
-                                   target="qemu",
-                                   out_path=work_dir)
-            # Clean exit
-            keep_dir = True
-        except KeyboardInterrupt:
-            log.info("Loop interrupted by user.")
-            break
-        except Exception as e:
-            log.error(f"Run crashed with exception: {e}. Restarting with work directory preserved.")
-            keep_dir = True
+            with timing.phase("fastdyn.loop.iteration", config=config, work_dir=work_dir):
+                if not checked_fmu:
+                    with timing.phase("fastdyn.fmu_auto_build"):
+                        _auto_build_fmu(config, fmu, no_build_fmu)
+                    checked_fmu = True
+
+                with runtime_config.launch_from_config(config, work_dir, skip=no_run_processes) as process_manager:
+                    try:
+                        with timing.phase("fastdyn.parse_config"):
+                            fastdyn_handle = toml_parser.parser(
+                                work_dir,
+                                machine_name="machine0",
+                                toml_config=config,
+                                svd_path=svd_path,
+                                fmu_name=fmu,
+                            )
+
+                        if process_manager is not None:
+                            process_manager.start_terminator_watcher(
+                                lambda _handle, _exit_code: fastdyn_handle.shutdown()
+                            )
+
+                        try:
+                            for idx, machine in enumerate(fastdyn_handle.machines):
+                                with timing.phase(f"fastdyn.machine{idx}.run"):
+                                    fastdyn_handle.run(machine_name=f"machine{idx}",
+                                                       target="qemu",
+                                                       out_path=work_dir)
+                        finally:
+                            if process_manager is not None:
+                                process_manager.stop_terminator_watcher()
+                                process_manager.raise_for_terminator_failure()
+                        # Clean exit
+                        keep_dir = True
+                    except KeyboardInterrupt:
+                        log.info("Loop interrupted by user.")
+                        break
+                    except Exception as e:
+                        log.error(f"Run crashed with exception: {e}. Restarting with work directory preserved.")
+                        keep_dir = True
+        except runtime_config.RuntimeConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+
+def _fastdyn_executable() -> str:
+    executable = shutil.which("fastdyn") or sys.argv[0]
+    path = Path(executable).expanduser()
+    return str(path.resolve()) if path.exists() else executable
+
+
+@cli.command(
+    'swarm',
+    help='Run multiple isolated FastDyn instances with per-worker ports and work directories.',
+)
+@click.option('-c', '--config', required=True, type=click.Path(resolve_path=True, exists=True),
+              help='The path to the config file.', metavar='PATH')
+@click.option('-n', '--instances', default=1, show_default=True, type=int,
+              help='Number of FastDyn instances to launch.')
+@click.option('-o', '--work-dir-root', default="./fastdyn_swarm", show_default=True,
+              type=click.Path(resolve_path=True, writable=True), metavar='PATH',
+              help='Root directory for worker work directories.')
+@click.option('--base-port', default=15000, show_default=True, type=int,
+              help='First worker monitor port. Other ports are assigned from this base.')
+@click.option('--port-stride', default=20, show_default=True, type=int,
+              help='Port spacing between workers.')
+@click.option('--jobs', default=None, type=int,
+              help='Maximum workers to run at once. Defaults to --instances.')
+@click.option('--loop', 'use_loop', is_flag=True, default=False,
+              help='Run each worker with `fastdyn loop` instead of one `fastdyn run`.')
+@click.option('--fmu', default=None, metavar='NAME',
+              help='Override [FMU].active for automatic FMU builds.')
+@click.option('--no-build-fmu', is_flag=True, default=False,
+              help='Skip the one-time FMU build before launching workers.')
+@click.option('--no-run-processes', is_flag=True, default=False,
+              help='Do not start helper processes from [Rumoca] or [Run.processes] in workers.')
+@click.option('--timeout-sec', default=None, type=float,
+              help='Terminate the swarm if it runs longer than this many seconds.')
+@click.option('--smoke-sec', default=None, type=float,
+              help='Launch all workers, require them to stay alive for this many seconds, then stop them cleanly.')
+@click.option('--stop-on-failure', is_flag=True, default=False,
+              help='Stop launching new workers after the first non-zero worker exit.')
+@click.option('--skip-port-check', is_flag=True, default=False,
+              help='Skip the preflight check for TCP/UDP port conflicts.')
+@click.option('--dry-run', is_flag=True, default=False,
+              help='Print worker commands and port assignments without launching them.')
+def swarm(
+    config,
+    instances,
+    work_dir_root,
+    base_port,
+    port_stride,
+    jobs,
+    use_loop,
+    fmu,
+    no_build_fmu,
+    no_run_processes,
+    timeout_sec,
+    smoke_sec,
+    stop_on_failure,
+    skip_port_check,
+    dry_run,
+):
+    runner = "loop" if use_loop else "run"
+    jobs = instances if jobs is None else jobs
+
+    try:
+        plans = swarm_runner.build_worker_plans(
+            config=config,
+            root_dir=work_dir_root,
+            instances=instances,
+            base_port=base_port,
+            port_stride=port_stride,
+            fastdyn_executable=_fastdyn_executable(),
+            runner=runner,
+            fmu=fmu,
+            no_run_processes=no_run_processes,
+        )
+        if not skip_port_check and not dry_run:
+            swarm_runner.check_port_availability(plans)
+    except swarm_runner.SwarmError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(
+        f"FastDyn swarm: instances={instances} jobs={jobs} runner={runner} "
+        f"root={Path(work_dir_root).expanduser().resolve()}"
+    )
+    for plan in plans:
+        click.echo(
+            f"worker {plan.index:03d}: monitor={plan.ports.monitor} "
+            f"mavlink={plan.ports.mavlink_firmware}/{plan.ports.mavlink_gcs} "
+            f"mavcesium={plan.ports.mavcesium_url} "
+            f"rumoca={plan.ports.rumoca_http}/{plan.ports.rumoca_ws} "
+            f"memory={plan.env['FASTDYN_QEMU_MEMORY_DIR']}"
+        )
+        if dry_run:
+            click.echo(f"  command: {' '.join(plan.command)}")
+
+    if dry_run:
+        return
+
+    if not no_build_fmu:
+        with timing.phase("fastdyn.swarm.fmu_auto_build"):
+            _auto_build_fmu(config, fmu, skip_build=False)
+
+    try:
+        if smoke_sec is not None:
+            swarm_runner.smoke_worker_plans(
+                plans,
+                jobs=jobs,
+                smoke_sec=smoke_sec,
+                echo=click.echo,
+            )
+            results = []
+        else:
+            results = swarm_runner.run_worker_plans(
+                plans,
+                jobs=jobs,
+                timeout_sec=timeout_sec,
+                stop_on_failure=stop_on_failure,
+                echo=click.echo,
+            )
+    except swarm_runner.SwarmError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    failed = [result for result in results if result.returncode != 0]
+    if failed:
+        details = ", ".join(f"{result.plan.index:03d}:rc={result.returncode}" for result in failed)
+        raise click.ClickException(f"{len(failed)} worker(s) failed: {details}")
+
+
+@cli.command('timing-summary', help='Summarize a FastDyn timing JSONL file.')
+@click.argument('timing_file', type=click.Path(resolve_path=True, exists=True), metavar='PATH')
+@click.option('--top', default=30, show_default=True, type=int, help='Number of slowest phases to show.')
+def timing_summary(timing_file, top):
+    import json
+
+    phases = []
+    marks = 0
+    with open(timing_file, "r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("event") == "phase_end":
+                phases.append(record)
+            elif record.get("event") == "mark":
+                marks += 1
+
+    phases.sort(key=lambda item: float(item.get("duration_s", 0.0)), reverse=True)
+    click.echo(f"Timing file: {timing_file}")
+    click.echo(f"Completed phases: {len(phases)}  marks: {marks}")
+    click.echo("")
+    click.echo(f"{'duration':>10}  {'process':<16}  phase")
+    click.echo(f"{'-' * 10}  {'-' * 16}  {'-' * 60}")
+    for record in phases[:top]:
+        duration = float(record.get("duration_s", 0.0))
+        process = str(record.get("process", ""))[:16]
+        phase = record.get("phase", "")
+        status = record.get("status", "ok")
+        suffix = "" if status == "ok" else f" ({status})"
+        click.echo(f"{duration:9.3f}s  {process:<16}  {phase}{suffix}")
 
 
 @cli.command(
@@ -1175,4 +1480,3 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
 
 if __name__ == "__main__":
     cli()
-

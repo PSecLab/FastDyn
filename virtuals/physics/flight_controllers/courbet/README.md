@@ -1,165 +1,178 @@
-# Setting up Courbet
+# Courbet ArduPilot Firmware In FastDyn
 
-## Gazebo Harmonic Installation
+This directory contains the ArduPilot firmware images, virtual instruction
+configuration, MAVLink helpers, missions, and legacy Gazebo assets used by the
+FastDyn/Courbet vehicle tests.
 
-Use the pre-prepared script located in `FastDyn/courbet/utils/install_gazebo_harmonic.sh` to install Gazebo Harmonic on your system.
-
-## ArduPilot Gazebo
-
-If not already done, follow the instructions at the [ArduPilot Gazebo repository](https://github.com/ArduPilot/ardupilot_gazebo) to set up ArduPilot Gazebo.
-
-## Cloning the repository with submodules
-
-To clone the Courbet repository along with its submodules, use the following command:
+The maintained default path is no longer a manual Gazebo launch. Use the
+repository root `setup.sh` and the FastDyn TOML configs:
 
 ```bash
-git clone --recurse-submodules https://github.com/PSecLab/FastDyn.git
+source ./setup.sh --build-qemu
+fastdyn run -c configs/copter462.toml
 ```
 
-This will install the submodules for:
-- SITL_Models
-- MavLink Headers
+## Maintained Vehicle Configs
 
-## QEMU installation and FastDyn build
-
-Now, navigate to [this branch of QEMU](https://github.com/Arslan8/qemu.git) and clone this repository such that your project structure looks like this:
-
-```
-courbet_project/
-├── FastDyn/
-└── qemu/
-```
-
-After cloning, `cd` into the `qemu` directory and build QEMU:
+From the FastDyn repository root:
 
 ```bash
-cd qemu
-git checkout fastdyn
-mkdir build
-cd build
-../configure --enable-debug
-make qemu-system-arm
+fastdyn run -c configs/copter462.toml
+fastdyn run -c configs/rover462.toml
+fastdyn run -c configs/plane462.toml
 ```
 
-### Setting up the memory backend
+These configs run the real ArduPilot firmware in patched QEMU and connect it to
+a Rumoca-generated FMI v3 plant:
 
-Create a directory for the memory backend:
+- `configs/copter462.toml` uses `FastDyn.Copter`.
+- `configs/rover462.toml` uses `FastDyn.Rover`.
+- `configs/plane462.toml` uses `FastDyn.Plane`.
+
+The FastDyn wrapper models inherit reusable base plants from
+`third_party/common/modelica_models/RigidBody/Examples` and define the
+ArduPilot-facing sensor and actuator variables in this repository.
+
+The FMU start point and default missions are aligned to the KLAF/Purdue tarmac:
+
+```text
+40.414929, -86.932387
+ground_alt_wgs84 = 149.0
+pwm_min = 1100.0
+pwm_max = 1900.0
+omega_max = 1300.0
+```
+
+The copter FMU keeps its first-order motor response, but its PWM input mapping
+matches the active Gazebo `gs_drone` ArduPilot PWM endpoints: `1100..1900` PWM
+maps linearly to aerodynamic motor speed.
+
+## MAVLink Helpers
+
+MAVLink helper scripts live in `mavlink/`.
+
+Important files:
+
+- `fastdyn_cesium.py`: MAVProxy module that starts MAVCesium and applies the
+  configured terrain/display altitude offset.
+- `mav_command_and_control.py`: mission upload, arming, mode switch, monitoring,
+  and OptiFuzz mutation parameter injection.
+- `mav_health_check.py`: short smoke-test helper used for rover and plane.
+- `copter_init.param`: ArduCopter parameters loaded before the mission.
+- `copter_mission.waypoints`: full ArduCopter takeoff/waypoint/land mission.
+- `rover_rectangle.txt`: short KLAF rover mission.
+- `plane_circle_point.txt`: KLAF fixed-wing mission.
+
+The ArduCopter config starts MAVProxy/MAVCesium and the mission helper by
+default. Rover and plane configs start MAVProxy/MAVCesium plus a health check
+helper by default.
+
+FastDyn prints the viewer URL during startup:
+
+```text
+MAVCesium web viewer: open http://127.0.0.1:5000/mavcesium/
+```
+
+## Timing And Fidelity
+
+QEMU is run with instruction-counted virtual time and a 1 ms board tick:
+
+```toml
+[Machine]
+icount = { shift = 5, sleep = false, align = false }
+timer_irq_period_ns = 1000000
+```
+
+The firmware observes the simulated board clock. The FMU backend publishes
+state and advances synchronously from QEMU timer ticks, so host wall-clock speed
+can vary without changing firmware-visible time.
+
+## Parallel Runs
+
+Use `fastdyn swarm` for many isolated instances:
 
 ```bash
-mkdir -p qemu/ws/memory
+fastdyn swarm -c configs/copter462.toml -n 20 -o out/swarm/copter --base-port 15000
 ```
 
-Now create a file named `my_m4_ram3` in the `qemu/ws/memory` directory.
+Worker 0 uses MAVCesium at `http://127.0.0.1:15003/mavcesium/`; worker 1 uses
+`http://127.0.0.1:15023/mavcesium/` with the default `--port-stride 20`.
+Per-worker logs are written under the swarm root, for example
+`out/swarm/copter/logs/worker-000.log`.
+
+Run a two-worker smoke test:
 
 ```bash
-touch qemu/ws/memory/my_m4_ram3
+FASTDYN_SWARM_CONFIG=configs/copter462.toml \
+FASTDYN_SWARM_INSTANCES=2 \
+tests/integration/courbet_swarm_smoke.sh
 ```
 
-### FastDyn plugin setup
+## Integration Tests
 
-Go into the makefile and make sure the only flag set to true is LIBGZ.
-
-```
-qemu_path    ?= ../qemu
-libhw_path   ?= ../libhw
-LIBGZ        ?= true
-LIBHW        ?= false
-DEV          ?= false
-DEBUG_PRINT  ?= false
-LIBPY        ?= false
-```
-
-Now, before building you need to go into the `courbet/` directory and make the `libgz_wrapper.so` and `services` which is how we communicate with Gazebo.
+After setup, these scripts exercise the maintained path:
 
 ```bash
-cd FastDyn/courbet/gazebo/
-mkdir build
-cd build
-cmake ..
-make
+# Rover or plane launch smoke; set FASTDYN_COURBET_CONFIG.
+FASTDYN_COURBET_CONFIG=configs/rover462.toml \
+FASTDYN_COURBET_LABEL=ardurover \
+tests/integration/courbet_fmu_vehicle_smoke.sh
+
+# Full ArduCopter mission.
+tests/integration/courbet_mission_smoke.sh
+
+# Two-worker swarm launch smoke.
+tests/integration/courbet_swarm_smoke.sh
 ```
 
-Now, finally you can build FastDyn:
+GitHub Actions runs these paths in `.github/workflows/courbet-mission.yml`.
+
+## OptiFuzz
+
+OptiFuzz can launch this same FMUv3 path directly:
 
 ```bash
-// make sure you are in the root directory of FastDyn
-make
+cd virtuals/fuzzer/libafl_phi
+FASTDYN_OPTIFUZZ_SMOKE=1 FASTDYN_OPTIFUZZ_DRY_RUN=1 cargo run --bin baby_fuzzer
 ```
 
-## Using courbet
-
-### Start Gazebo
-
-In a terminal that support GUI applications, use the following command to start Gazebo with the Courbet world:
+For real campaigns, remove `FASTDYN_OPTIFUZZ_DRY_RUN`. Use:
 
 ```bash
-cd FastDyn/courbet/gazebo/
-./run_and_attach_services.sh
+FASTDYN_OPTIFUZZ_VEHICLE=plane
+FASTDYN_OPTIFUZZ_CONFIG=configs/plane462.toml
+FASTDYN_OPTIFUZZ_MISSION_FILE=virtuals/physics/flight_controllers/courbet/mavlink/plane_circle_point.txt
 ```
 
-### Start mavproxy
+Set `FASTDYN_OPTIFUZZ_SWARM_INSTANCES=2` or higher to use the FastDyn swarm
+runner for each fuzzer execution.
 
-In a new terminal that supports GUI applications, start mavproxy GCS:
+## Legacy Gazebo Path
+
+The old Courbet Gazebo assets and scripts remain under `gazebo/` and
+`third_party/courbet_deps/SITL_Models`. They are useful for reproducing older
+experiments, but the default FastDyn docs, setup script, CI, and fuzzer wiring
+now target the Rumoca FMI v3 backend. To force OptiFuzz onto the legacy path,
+set:
 
 ```bash
-cd FastDyn/courbet/mavlink/
-./run_mavproxy.sh
+FASTDYN_OPTIFUZZ_BACKEND=gazebo
 ```
 
-### Start QEMU with FastDyn
+Manual Gazebo setup requires Gazebo Harmonic, ArduPilot Gazebo plugins, the
+legacy Courbet services, and the old MAVProxy scripts. Prefer the FMUv3 configs
+unless you are intentionally comparing against that legacy stack.
 
-Then in another terminal, start QEMU with the FastDyn plugin:
+## Flight Logs
+
+ArduPilot logs can be collected by creating the expected log directories before
+a run:
 
 ```bash
-cd qemu/build
-bash ../fd_rover.sh
+mkdir -p virtuals/physics/flight_controllers/courbet/flight_logs/@ROMFS
+mkdir -p virtuals/physics/flight_controllers/courbet/flight_logs/@SYS
+mkdir -p virtuals/physics/flight_controllers/courbet/flight_logs/APM/LOGS
 ```
 
-where `fd_rover.sh` is a script that contains the following:
-
-```bash
-./qemu-system-arm --plugin ../../FastDyn/build/libfastdyn.so,dev=classic:0x40000000-0x5FFFFFFF,virtual=../../FastDyn/courbet/unlabeled_conf/virtuals.txt,modifier=../../FastDyn/courbet/unlabeled_conf/modifiers.txt,symbols=../ws/rover_bin/ardurover \
-    -d op,in_asm -D qemu.log -machine cortexm,memory-backend=ram0 \
-    -monitor telnet:127.0.0.1:5555,server,nowait -S \
-    -gdb tcp::1235 \
-    -semihosting --semihosting-config enable=on,target=native \
-    -qmp unix:/tmp/qmp-sock,server,nowait \
-    -device loader,file=../ws/rover_bin/ardurover.bin,addr=0x08004000 \
-    -serial stdio -nographic \
-    -object memory-backend-file,id=ram0,mem-path=../ws/memory/my_m4_ram3,size=512M,share=on \
-    -global cortexm-soc.ram_baseaddr=0x20000000 -cpu cortex-m4 \
-    -global armv7m.init-nsvtor=0x08004000 \
-```
-
-### Attach GDB (optional)
-
-If you want to debug using GDB, open another terminal and run:
-
-```bash
-gdb-multiarch
-```
-
-with a .gdbinit file containing:
-
-```
-target remote :1235
-add-symbol-file rover_bin/ardurover
-set substitute-path ../../ /root/rooney/ardupilot/
-```
-
-where `/root/rooney/ardupilot/` is the path to your ArduPilot source code and `rover_bin/ardurover` is the path to the binary file built for the rover.
-
-## EXTRA: Adding logging capabilities
-
-If you would like to view the flight logs in [**UAV Log Viewer**](https://plot.ardupilot.org/#/), you just need to create these directory within courbet:
-
-```bash
-mkdir -p FastDyn/courbet/flight_logs
-cd FastDyn/courbet/flight_logs
-mkdir @ROMFS
-mkdir @SYS
-mkdir APM
-mkdir APM/LOGS
-```
-
-Then after running your simulation, you can find the logs in `FastDyn/courbet/flight_logs/APM/LOGS/00000001.bin`, download it and open it in UAV Log Viewer.
+After a simulation, open the generated `.bin` log in UAV Log Viewer if the
+firmware wrote one.

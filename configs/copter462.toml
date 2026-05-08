@@ -37,12 +37,14 @@ launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
 log_file = "qemu.log"
-log_options = "in_asm,op"
+log_options = "none"
+icount = { shift = 5, sleep = false, align = false }
+timer_irq_period_ns = 1000000 # 1 ms OS tick; keep this for board-fidelity runs.
 semihosting = true
 semihosting_config = "enable=on,target=native"
 coverage=false
 finline='None'
-print_command = true          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
+print_command = false          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
 
 [CPU]
 [[CPU.cpu0]]
@@ -51,12 +53,11 @@ arch = "arm"
 machine = "cortexm"
 cpu = "cortex-m4"
 plugin_library = "build/libfastdyn.so"
-monitor_elf = "../qemu/ws/monitor.elf" # The VMM-like monitor that runs with the target
 binary = "virtuals/physics/flight_controllers/courbet/bin/arducopter_v462"
 init_nsvtor = "0x08004000"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
-introspect = true
+introspect = false
 existing_config_path = "virtuals/physics/flight_controllers/courbet/copter462/unlabeled_conf" #path to an existing config to use for this run. Useful for replaying with a different binary or for debugging.
 
 
@@ -66,6 +67,107 @@ logger_content = """
 # level = DEBUG
 # output = stderr
 """
+
+# ==============================================================================
+#                                FMU Configuration
+# ==============================================================================
+
+[FMU]
+active = "quadrotor"
+auto_build = true
+
+[FMU.models.quadrotor]
+model = "FastDyn.Copter"
+model_file = "modelica/FastDyn/Copter.mo"
+source_roots = ["modelica", "third_party/common/modelica_models"]
+output = "out/fmi3/Copter"
+build = true
+release = false
+
+[FMU.models.quadrotor.parameters]
+# Purdue University Airport (KLAF) tarmac start point.
+lat0 = 40.414929
+lon0 = -86.932387
+ground_alt_wgs84 = 149.0
+
+# Match the local Gazebo gs_drone/ArduPilot interface before tuning the
+# controller. These are intentionally left as normal FMU parameters so users can
+# adapt the vehicle without editing Modelica.
+pwm_min = 1100.0
+pwm_max = 1900.0
+omega_max = 1300.0
+mass = 2.5644001
+ixx = 0.02601237985
+iyy = 0.02590943825
+izz = 0.045571756801
+Ct = 8.54858e-6
+Cm = 0.016
+Cn_r = -0.1
+
+# ==============================================================================
+#                             Runtime Helpers
+# ==============================================================================
+
+# Optional Rumoca lockstep/webviewer process. The ArduCopter FMUv3 mission uses
+# the FMU plant in the QEMU plugin and MAVCesium for the live web view; enable
+# this only when you also want a separate standalone Rumoca viewer.
+[Rumoca]
+enabled = false
+config = "third_party/common/rumoca/examples/quadrotor_sil/quadrotor_standby.toml"
+features = ["lockstep"]
+release = true
+background = true
+
+[Rumoca.webviewer]
+http_port = 8080
+ws_port = 8081
+scene = "third_party/common/rumoca/examples/quadrotor_sil/quadrotor_scene.js"
+debug = false
+
+# Helper processes that should run alongside QEMU.
+[Run]
+cwd = "."
+
+[Run.profiling]
+# Timing is low overhead and stays on for startup/mission phase measurement.
+timing = true
+timing_echo = true
+# cProfile wraps Python helpers and writes .cprofile files under work-dir/profiles.
+python = false
+# perf wraps the QEMU process when the host permits it. Use "record" for flamegraphs.
+perf = "off" # off | stat | record
+perf_frequency_hz = 99
+# FMU timing prints cumulative doStep and realtime-factor stats from the C backend.
+fmu = true
+
+[Run.processes.mavproxy]
+enabled = true
+quiet = true
+cwd = "virtuals/physics/flight_controllers/courbet/mavlink"
+env = { PYTHONPATH = "." }
+command = [
+    "mavproxy.py",
+    "--daemon",
+    "--master=udpout:127.0.0.1:${FASTDYN_MAVLINK_FIRMWARE_PORT:-14551}",
+    "--out=udpout:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
+    "--load-module=fastdyn_cesium:{\"port\":${FASTDYN_MAVCESIUM_PORT:-5000}}",
+]
+ready_message = "MAVCesium web viewer: open http://127.0.0.1:${FASTDYN_MAVCESIUM_PORT:-5000}/mavcesium/"
+
+[Run.processes.mission]
+enabled = true
+start_delay_sec = 0
+terminate_run_on_exit = true
+command = [
+    "python3",
+    "virtuals/physics/flight_controllers/courbet/mavlink/mav_command_and_control.py",
+    "--connect",
+    "udpin:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
+    "--monitor-sec",
+    "180",
+    "${FASTDYN_PARAM_FILE:-virtuals/physics/flight_controllers/courbet/mavlink/copter_init.param}",
+    "${FASTDYN_MISSION_FILE:-virtuals/physics/flight_controllers/courbet/mavlink/copter_mission.waypoints}",
+]
 
 # ==============================================================================
 #                              Device Configuration

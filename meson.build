@@ -166,7 +166,7 @@ srcs += files(
 )
 endif
 
-if ENABLE_LIBGZ
+if ENABLE_LIBGZ or get_option('enable_flight_controllers')
 srcs += files(
   'libs/ring_buffer.c',
 )
@@ -195,7 +195,7 @@ endif
   local_include = [local_include, device_models_inc]
 endif
 
-if ENABLE_LIBGZ
+if ENABLE_LIBGZ or get_option('enable_flight_controllers')
 mavlink_include = include_directories('third_party/courbet_deps/mavlink_headers/ardupilotmega')
 
 local_include = [local_include, mavlink_include]

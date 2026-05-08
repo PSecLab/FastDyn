@@ -519,6 +519,7 @@ static int gz_init(void)
 
 phy_backend_t gazebo_backend = {
     .name = "gazebo",
+    .imu_frame = PHY_BODY_FRAME_FLU,
     .init = gz_init,
     .shutdown = NULL,
     .get_imu_batch = get_imu_batch,

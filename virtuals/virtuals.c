@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -39,6 +40,7 @@ extern void qemu_set_register(uint32_t value, int reg);
 
 // Global to track last sim time from QEMU
 _Atomic int64_t last_sim_time_ns = 0;
+static uint64_t periodic_irq_period_ns = 1000000ULL;
 
 //TODO: remove this.
 #if ENABLE_LIBPY
@@ -106,9 +108,20 @@ void raiseirq(unsigned int cpu_index, void *udata) {
 void kick_irq(void *opaque) {
     int irq_num = *((int *)opaque);
 
-#if ENABLE_LIBGZ
-    // update the sim time global in ardurover_virtuals.c
-    atomic_store(&last_sim_time_ns, (int64_t)qemu_plugin_get_virtual_timer());
+#if ENABLE_PHY
+    int64_t sim_time_ns = (int64_t)qemu_plugin_get_virtual_timer();
+
+    // The FMU backend is lockstep with the firmware timer tick: publish the
+    // physics state for this simulated timestamp before the OS handles the IRQ.
+    if (phy_backend_is("fmu")) {
+        double target_time_s = (double)sim_time_ns / 1e9;
+        if (!phy_advance_simulation(target_time_s)) {
+            fprintf(stderr, "Failed to advance FMU simulation to %.6f s\n", target_time_s);
+        }
+    }
+
+    // Keep the legacy async catch-up path informed for other physics backends.
+    atomic_store(&last_sim_time_ns, sim_time_ns);
     // // TODO:
     // static bool physics_initialized = false;
     // if (!physics_initialized) {
@@ -137,12 +150,29 @@ void raise_periodic_irq(unsigned int cpu_index, void *udata) {
     const char *str = (const char *)udata;
 
     // Convert string to integer (auto-detect base: 0x = hex, 0 = octal, else decimal)
-    unsigned long num = strtoul(str, NULL, 0);
+    char *end = NULL;
+    unsigned long num = strtoul(str, &end, 0);
     static uint32_t irq_num = 0;
     if (num != 0) {
         irq_num = num;
     }
-    qemu_plugin_timer_new_period_ns(kick_irq, (void *)&irq_num, 1e6); // every 1 ms
+    uint64_t period_ns = periodic_irq_period_ns;
+    while (end && (*end == ',' || *end == ':' || isspace((unsigned char)*end))) {
+        end++;
+    }
+    if (end && *end) {
+        errno = 0;
+        unsigned long long parsed_period = strtoull(end, NULL, 0);
+        if (errno == 0 && parsed_period > 0) {
+            period_ns = parsed_period;
+        } else {
+            fprintf(stderr, "Invalid periodic IRQ period '%s'; using %" PRIu64 " ns\n",
+                    end, period_ns);
+        }
+    }
+
+    printf("Periodic IRQ %u every %" PRIu64 " ns\n", irq_num, period_ns);
+    qemu_plugin_timer_new_period_ns(kick_irq, (void *)&irq_num, period_ns);
     // create thread that raises irq every 1 ms
     // pthread_t periodic_irq_thread;
     // if (!pthread_create(&periodic_irq_thread, NULL, (void *(*)(void *))periodic_irq_func, (void *)&irq_num)) {
@@ -554,6 +584,18 @@ int virtual_register(const char *name, cb_func_t func) {
 
 int virtuals_init(int argc, char **argv, const char *schema_path) {
 	int status = -1;
+    const char *timer_period_arg = utils_get_arg("timer_irq_period_ns", argc, argv);
+    if (timer_period_arg && timer_period_arg[0] != '\0') {
+        errno = 0;
+        unsigned long long parsed_period = strtoull(timer_period_arg, NULL, 0);
+        if (errno == 0 && parsed_period > 0) {
+            periodic_irq_period_ns = parsed_period;
+        } else {
+            fprintf(stderr, "Invalid timer_irq_period_ns '%s'; using %" PRIu64 " ns\n",
+                    timer_period_arg, periodic_irq_period_ns);
+        }
+    }
+
 	// Initialize registry
 	status = virtuals_init_registry();
 

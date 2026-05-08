@@ -1,6 +1,12 @@
-# FastDyn Unified Fuzzer
+# FastDyn In-Process Fuzzer
 
-This directory contains a unified fuzzer which allows to fuzz a system.
+This directory contains the in-process LibAFL/AFLNet-style fuzzer. It targets
+firmware loops and virtual instruction input points directly through the
+FastDyn QEMU plugin.
+
+For mission-level vehicle fuzzing with Rumoca FMI v3 plants, ArduPilot
+firmware, MAVLink helpers, and `fastdyn swarm`, use OptiFuzz/CP-Explore in
+`virtuals/fuzzer/libafl_phi`.
 
 ## Building
 
@@ -41,7 +47,8 @@ The resulting binary will be located at `target/release/libfastdyn_fuzzer.so`.
 
 ## Usage
 
-To use the fuzzer, make sure that coverate is enabled in the device's toml file, and make sure that the fuzzing library is enabled in the makefile.
+To use this fuzzer, make sure `coverage = true` is enabled in the device TOML
+file and the fuzzing library is enabled in the Makefile.
 
 Then, use the virtual instructions anchor and assert for fuzzing in the toml file, examples shown below:
 
@@ -50,11 +57,13 @@ Then, use the virtual instructions anchor and assert for fuzzing in the toml fil
     instruction = "anchor"
     args        = ["1:0,2,0x333333"]
 
-1 is the id of this anchor, each anchor must have a unique numerical id, the followig arguments are register numbers/addresses to fuzz
+`1` is the id of this anchor. Each anchor must have a unique numerical id. The
+following arguments are register numbers or addresses to fuzz.
 
     [[CPU.cpu0.virtuals]]
     at          = "0x800395e"
     instruction = "assert"
     args        = "*0x08001000"
 
-When execution reaches that address, log a crash to the fuzzer, and set pc to the argument, which must start with a \*
+When execution reaches that address, FastDyn logs a crash to the fuzzer and sets
+the PC to the argument, which must start with `*`.
