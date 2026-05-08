@@ -2,6 +2,7 @@
 #include <config.h>
 #include <stdio.h>
 #include <string.h>
+#include <utils.h>
 #include "physics_engines/gazebo/gazebo.h"
 #include "physics_engines/fmu/fmu.h"
 #include "flight_controllers/fc.h"
@@ -9,6 +10,9 @@
 static phy_backend_t *active_backend = NULL;
 
 static phy_backend_entry_t backends[] = {
+#if ENABLE_FMU
+    { "fmu", &fmu_backend},
+#endif
 #if ENABLE_LIBGZ
     { "gazebo", &gazebo_backend},
 #endif
@@ -32,6 +36,16 @@ int phy_select_backend(const char *name)
 
     fprintf(stderr, "phy_select_backend: undefined backend '%s'\n", name);
     return 0;
+}
+
+int phy_backend_is(const char *name)
+{
+    return active_backend != NULL && name != NULL && strcmp(active_backend->name, name) == 0;
+}
+
+phy_body_frame_t phy_get_imu_frame(void)
+{
+    return active_backend != NULL ? active_backend->imu_frame : PHY_BODY_FRAME_FLU;
 }
 
 int phy_get_imu_batch(imu_batch_t *imu_batch)
@@ -110,6 +124,9 @@ int phy_init(int argc, char **argv) {
     // FIX: Hacky
 #if ENABLE_FMU
     fmu_init(argc, argv);
+    if (utils_get_arg("fmu", argc, argv) != NULL) {
+        phy_select_backend("fmu");
+    }
 #endif
 
 #if ENABLE_FLIGHT_CONTROLLERS
@@ -120,7 +137,7 @@ int phy_init(int argc, char **argv) {
 #if ENABLE_LIBGZ
     // virtual_gz_altimeter_init(argc, argv);
     // TODO: Add a flag to determine which physics engine
-    int result = phy_select_backend("gazebo");
+    int result = active_backend ? 1 : phy_select_backend("gazebo");
     if (result == 0) {
         fprintf(stderr, "Failed to select Gazebo backend\n");
         return 0;

@@ -205,25 +205,13 @@ dependencies = [
 [[package]]
 name = "banquo"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b11e7b8aa7cdb48ea55930c89ee67799e3bb20a857a0986eeb517d6993f2a94"
 dependencies = [
- "banquo-core 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "banquo-core",
 ]
 
 [[package]]
 name = "banquo-core"
 version = "0.1.0"
-dependencies = [
- "ordered-float 4.6.0",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "banquo-core"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f185816cb843688a7fdf342ae6b851fef34d73e99d7c054fe647911f955073c6"
 dependencies = [
  "ordered-float 4.6.0",
  "thiserror 1.0.69",
@@ -233,7 +221,7 @@ dependencies = [
 name = "banquo-hybrid_distance"
 version = "0.1.0"
 dependencies = [
- "banquo-core 0.1.0",
+ "banquo-core",
  "petgraph",
  "thiserror 1.0.69",
 ]
@@ -242,7 +230,7 @@ dependencies = [
 name = "banquo-parser"
 version = "0.1.0"
 dependencies = [
- "banquo-core 0.1.0",
+ "banquo-core",
  "banquo-hybrid_distance",
  "nom",
 ]
@@ -1386,6 +1374,8 @@ dependencies = [
 [[package]]
 name = "libafl"
 version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81e13655171e69ad9094dd1be1948950a36d228f01a7cb9f6d8477090d98c6e4"
 dependencies = [
  "ahash",
  "arbitrary-int 2.1.0",
@@ -1424,6 +1414,8 @@ dependencies = [
 [[package]]
 name = "libafl_bolts"
 version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cbae44f69156f035ae2196b135ad27ea95020767e6787bfe45e8c2438c67b9"
 dependencies = [
  "ahash",
  "backtrace",
@@ -1460,6 +1452,8 @@ dependencies = [
 [[package]]
 name = "libafl_derive"
 version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61adf76899bffdcd15ae7fea42b978e7df7cf9213aacdd8cdcda89e4bb3bc32d"
 dependencies = [
  "proc-macro2",
  "quote",

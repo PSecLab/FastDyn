@@ -279,8 +279,8 @@ def earth_magnetic_field_from_sdf(
     patch_round_error: bool = False
 ) -> EarthMagResult:
     lat, lon = read_latlon_from_world_sdf(sdf_path)
-    # lat = 39.79480109851339    # example
-    # lon = -84.08631702793322   # example
+    # lat = 40.414929    # Purdue tarmac example
+    # lon = -86.932387   # Purdue tarmac example
     return earth_magnetic_field_from_latlon(
         lat, lon,
         use_units_gauss=use_units_gauss,

@@ -1,6 +1,8 @@
 #ifndef FMU_H
 #define FMU_H
 
+#include "phy.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -14,6 +16,8 @@ extern "C" {
  * @return 0 on success, negative error code on failure.
  */
 int fmu_init(int argc, char **argv);
+
+extern phy_backend_t fmu_backend;
 
 #ifdef __cplusplus
 }

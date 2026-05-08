@@ -1,240 +1,181 @@
-# OPTIFUZZ: Finding Cyber-Physical Bugs with Physics Accurate Rehosting of Unmanned Vehicle Firmware
+# FastDyn Physics
 
-Hello and welcome to the OPTIFUZZ repository! This repository contains the code and resources for the OPTIFUZZ framework, which is designed to identify and analyze cyber-physical bugs in unmanned vehicle firmware through physics-accurate rehosting techniques.
+FastDyn physics connects rehosted firmware running in patched QEMU to a plant
+model. The current high-fidelity vehicle path uses Rumoca-generated FMI v3 FMUs
+inside the FastDyn QEMU plugin. Gazebo support remains in the tree for legacy
+Courbet experiments, but it is no longer the default setup for copter, rover, or
+plane fuzzing.
 
-## Table of Contents
-- [Introduction](#introduction)
-- [Building the Project](#building-the-project)
-- [Running OPTIFUZZ](#running-optifuzz)
-- [Courbet](#courbet)
+## Current Vehicle Path
 
-## Introduction
-
-## Building the Project
-
-OPTIFUZZ has several dependencies and requires a specific setup to build and run correctly.
-
-```
-$PWD/
- |-- optifuzz_ws/
-    |-- qemu/
-    |-- courbet/
-    |-- SITL_Models/
-    |-- ArduPilot/
-```
-
-### Our QEMU Fork
-
-First, get our qemu fork:
+Use the repository root setup script:
 
 ```bash
-cd qemu
-git checkout fastdyn
-mkdir build
-cd build
-../configure --enable-debug
-make qemu-system-arm
+source ./setup.sh --build-qemu
 ```
 
-#### Setting up the memory backend
-
-Create a directory for the memory backend:
+Then run one of the maintained FMI v3 vehicle configs:
 
 ```bash
-mkdir -p qemu/ws/memory
+fastdyn run -c configs/copter462.toml
+fastdyn run -c configs/rover462.toml
+fastdyn run -c configs/plane462.toml
 ```
 
-Now create a file named `my_m4_ram3` in the `qemu/ws/memory` directory.
+The configs:
+
+- build the selected FMU from `third_party/common/modelica_models` with Rumoca
+  when it is missing or stale,
+- run the real ArduPilot firmware image in QEMU,
+- drive QEMU with instruction-counted simulation time,
+- publish a 1 ms board tick to the firmware,
+- start MAVProxy with the FastDyn MAVCesium adapter, and
+- for ArduCopter, upload and fly the KLAF/Purdue mission by default.
+
+FastDyn prints the web viewer URL during startup:
+
+```text
+MAVCesium web viewer: open http://127.0.0.1:5000/mavcesium/
+```
+
+## Modelica And FMU Layout
+
+Reusable Modelica dynamics live in the `modelica_models` submodule:
+
+- `LieGroup/`: quaternion and SO(3) helpers.
+- `RigidBody/`: shared rigid-body dynamics.
+- `RigidBody/Examples/QuadrotorSIL.mo`
+- `RigidBody/Examples/RoverPlant.mo`
+- `RigidBody/Examples/FixedWingPlant.mo`
+
+Vehicle-specific Modelica wrappers live in `modelica/FastDyn`. Those
+wrappers add the ArduPilot-facing sensor and actuator variables, including the
+geodetic conversion from local north/east position to GPS latitude/longitude.
+Firmware binaries, mission files, MAVLink helper commands, port defaults,
+profiling options, and Modelica parameter overrides live in the FastDyn TOML
+configs.
+
+## Time Semantics
+
+For fidelity, the firmware is driven by the simulated board clock, not host wall
+time. The FMU backend advances when QEMU timer ticks ask for a later simulation
+time. QEMU catches up to that state using instruction-counted execution. Keep:
+
+```toml
+[Machine]
+icount = { shift = 5, sleep = false, align = false }
+timer_irq_period_ns = 1000000
+```
+
+`timer_irq_period_ns = 1000000` gives ArduPilot a 1 ms tick. Tuning `icount`
+can change performance, but changing the board tick changes the firmware timing
+contract and should be treated as a fidelity-affecting change.
+
+## Missions And MAVCesium
+
+The current mission assets are under:
+
+```text
+virtuals/physics/flight_controllers/courbet/mavlink/
+```
+
+Important files:
+
+- `copter_init.param`
+- `copter_mission.waypoints`
+- `rover_rectangle.txt`
+- `plane_circle_point.txt`
+- `mav_command_and_control.py`
+- `mav_health_check.py`
+- `fastdyn_cesium.py`
+
+The copter, rover, and plane mission files are aligned to the KLAF/Purdue
+tarmac start point used by the FMU configs:
+
+```text
+lat0 = 40.414929
+lon0 = -86.932387
+ground_alt_wgs84 = 149.0
+pwm_min = 1100.0
+pwm_max = 1900.0
+omega_max = 1300.0
+```
+
+FastDyn uses WGS84 ellipsoid altitude throughout the FMU, MAVLink, mission, and
+MAVCesium path so the vehicle appears on the Cesium terrain without display-only
+datum shifts.
+
+The copter actuator input mapping follows the active Gazebo `gs_drone`
+ArduPilot PWM endpoints: `1100..1900` maps linearly to aerodynamic motor speed.
+The FMU then applies the explicit first-order motor response.
+
+## Parallel Campaigns
+
+Use `fastdyn swarm` to run many isolated physics-backed firmware instances:
 
 ```bash
-touch qemu/ws/memory/my_m4_ram3
+fastdyn swarm -c configs/copter462.toml -n 20 -o out/swarm/copter --base-port 15000
 ```
 
-### Setting up Courbet
-
-Pull down the courbet repository linked in the open science section.
+Each worker receives separate QEMU RAM backing files, QMP socket, monitor port,
+MAVLink ports, MAVCesium port, Rumoca viewer ports, and logs. Use `--dry-run`
+to inspect the plan:
 
 ```bash
-cd courbet
+fastdyn swarm -c configs/copter462.toml -n 20 -o out/swarm/copter --dry-run
 ```
 
-Ensure the Makefile looks like this:
+This is the preferred local scaling path for fuzzing campaigns. Workers are
+isolated by default; intentionally shared radio/MAVLink behavior should be added
+explicitly when a swarm communication experiment needs it.
 
-```Makefile
-qemu_path    ?= ../qemu
-libhw_path   ?= ../libhw
-LIBGZ        ?= true
-LIBHW        ?= false
-LIBFUZZ		 ?= false
-DEV          ?= false
-DEBUG_PRINT  ?= false
-LIBPY        ?= false
-```
+## OptiFuzz
 
-**Note**: you may need our [LibHW](https://anonymous.4open.science/r/libhw-9FB5/README.md) repository if you want to build with `LIBHW` enabled.
-
-Then build the courbet gazebo plugins and library:
+OptiFuzz/CP-Explore now defaults to the FMUv3 FastDyn backend for `copter`,
+`rover`, and `plane`.
 
 ```bash
-cd courbet/courbet/gazebo
-mkdir build
-cd build
-cmake ..
-make
+source ./setup.sh
+cd virtuals/fuzzer/libafl_phi
+cargo run --bin baby_fuzzer
 ```
 
-Ensure you go to the `libgz_wrapper.so` and add it to your `LD_LIBRARY_PATH`.
-
-Now go back to the courbet directory and build courbet itself:
+Select a different vehicle with environment variables:
 
 ```bash
-cd ../..
-make
+FASTDYN_OPTIFUZZ_VEHICLE=rover \
+FASTDYN_OPTIFUZZ_CONFIG=configs/rover462.toml \
+FASTDYN_OPTIFUZZ_MISSION_FILE=virtuals/physics/flight_controllers/courbet/mavlink/rover_rectangle.txt \
+cargo run --bin baby_fuzzer
 ```
 
-### Setting up SITL Models
+Set `FASTDYN_OPTIFUZZ_SWARM_INSTANCES=2` or higher to use `fastdyn swarm`.
+Set `FASTDYN_OPTIFUZZ_BACKEND=gazebo` only when running the legacy Gazebo path.
 
-First, you will need to install Gazebo Harmonic.
+## CI Coverage
+
+`.github/workflows/courbet-mission.yml` exercises the maintained physics path:
+
+- setup and patched QEMU build,
+- Rumoca FMI v3 FMU generation,
+- OptiFuzz FMUv3 dry-runs for copter, rover, and plane,
+- OptiFuzz two-worker swarm dry-runs for all three vehicles,
+- real two-worker swarm launch smoke tests for all three vehicles,
+- ArduRover and ArduPlane FMUv3 launch smoke tests, and
+- a full ArduCopter mission through takeoff, waypoint progression, and landing.
+
+Run the same scripts locally after setup:
 
 ```bash
-curl https://packages.osrfoundation.org/gazebo.gpg --output /usr/share keyrings/pkgs-osrf-archive-keyring.gpg
-
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
-
-sudo apt-get update
-sudo apt-get install gz-harmonic
+tests/integration/courbet_fmu_vehicle_smoke.sh
+tests/integration/courbet_swarm_smoke.sh
+tests/integration/courbet_mission_smoke.sh
 ```
 
-All of the gazebo models are in the `SITL_Models` directory. You will also need to install the [ArduPilot Gazebo Plugins](https://github.com/ArduPilot/ardupilot_gazebo) and the [waves simulator](https://github.com/srmainwaring/asv_wave_sim/tree/master) if you plan on testing the boat or sub  if you have not already.
+## Backend Interface
 
-### Setting up ArduPilot
-First, clone the ArduPilot repository:
-
-```bash
-git clone https://github.com/ArduPilot/ardupilot.git
-```
-
-Then follow the instructions to set up SITL on Linux found here:
-
-https://ardupilot.org/dev/docs/setting-up-sitl-on-linux.html
-
-All you need is to be able to run mavproxy with the map and console for our COURBET setup.
-
-
-## Running Courbet independently of OPTIFUZZ
-
-Start up Gazebo with the desired world file, for example:
-
-```bash
-cd courbet/courbet/gazebo
-./run_and_attach_services.sh rover
-```
-
-Run MAVProxy with the appropriate parameters:
-
-```bash
-cd courbet/courbet/mavproxy
-./run_mavproxy.sh
-```
-
-Then finally run your desired COURBET QEMU script that can be found in the `courbet/courbet/scripts` directory.
-
-```bash
-bash ../roverv462.sh
-```
-
-
-## Running OPTIFUZZ
-
-To run OPTIFUZZ, assuming youhave completed all of the steps above, you will need to build the Rust fuzzer located in the `virtuals/fuzzer/libafl_phi` directory of the COURBET repository.
-
-Install Rust if you haven't already and then build the fuzzer:
-
-```bash
-cd courbet/courbet/fuzzer/libafl_phi
-cargo build --release
-```
-
-Now, you can run the fuzzer with the following command:
-
-```bash
-./target/release/baby_fuzzer
-```
-
-### Specifying the parameters to fuzz
-
-If you want to specify different parameters that you want to fuzz, you can modify the file `courbet/fuzzer/libafl_phi/param_shim_descriptions.txt` with human readable descriptions of the parameters you want to fuzz like:
-
-```
-Max Steering Rate
-Max Steering Acceleration
-Max Lateral Turn Force (g)
-Target Cruise Speed
-Waypoint Speed
-Nominal Throttle
-Max Forward Acceleration
-Minimum Turn Radius
-```
-
-This will return an output like this:
-
-```
-{ATC_STR_RAT_MAX, continuous, (0, 1000)}
-{ATC_ACCEL_MAX, continuous, (0.0, 10.0)}
-{ATC_TURN_MAX_G, continuous, (0.1, 10)}
-{CRUISE_SPEED, continuous, (0, 100)}
-{WP_SPEED, continuous, (0, 100)}
-{CRUISE_THROTTLE, continuous, (0, 100)}
-{ATC_DECEL_MAX, continuous, (0.0, 10.0)}
-{TURN_RADIUS, continuous, (0, 10)}
-```
-
-Note that you must provide your own API key to use this feature and as a result it is not connected by default. If you would like to enable this feature simply export your API key as an environment variable before running the fuzzer:
-
-```bash
-export OPENAI_API_KEY="your_api_key"
-```
-
-and change the following line in `courbet/fuzzer/libafl_phi/src/main.rs`:
-
-```rust
-let input_library = CPExpInput::new(param_info_vec, env_info_vec);
-```
-to
-
-```rust
-let input_library = CPExpInput::new(generated_param_input, env_info_vec);
-```
-
-### Specifying the STL formulas to use
-
-If you want to specify the STL formulas to use, you can modify the file `courbet/fuzzer/libafl_phi/stl_formulas.txt` with the STL formulas you want to use.
-
-See the example file `courbet/fuzzer/libafl_phi/stl_formulas.txt` for an example.
-
-Since we had to implement the parser and we are waiting for the PR to be merged, you will need my fork of the parser repository:
-
-```bash
-git clone https://github.com/<anonymous>/banquo.git   # banquo project
-git checkout banquo-parser-impl
-```
-
-and then build and test the parser:
-
-```bash
-cd banquo/banquo-parser
-cargo build --release
-cargo test
-### Extras Update the readme later
-We expect the `cmsis-svd-data` to be placed for the generator and verifier wherever you are the running the command!
-We recommend running the command from the main directory of fastdyn. (Do we need to update this?)
-
-
-
-## Required OS Dependencies
-
-For Sundial build of Fastdyn:
-```bash
-sudo apt-get update
-sudo apt-get install -y libsundials-dev pkg-config
-```
+Physics backends implement the `phy_backend_t` interface documented in
+`virtuals/physics/physics_engines/README.md`. The active high-fidelity backend
+is the FMU backend under `virtuals/physics/physics_engines/fmu/`; the Gazebo
+backend is retained under `virtuals/physics/physics_engines/gazebo/` for older
+experiments.

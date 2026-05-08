@@ -1,51 +1,162 @@
-# CP-Explore Setup
+# OptiFuzz / CP-Explore
 
-Welcome to CP-Explore, the joint fuzzing/requirements falsification tool used by FastDyn and SimHost to find vulnerabilities in cyber-physical systems! This guide will help you get started on your fuzzing campaigns.
+`virtuals/fuzzer/libafl_phi` contains the OptiFuzz/CP-Explore fuzzer used to
+mutate cyber-physical parameters and evaluate mission-level robustness. In this
+FastDyn tree, the default backend is the high-fidelity Rumoca FMI v3 path:
+OptiFuzz launches `fastdyn run`, which runs ArduPilot firmware in patched QEMU
+against an FMU plant.
 
-## Building FastDyn
-This guide assumes that FastDyn is already cloned and built. TODO: Add the steps here.
+The older Gazebo backend and Docker image remain available for reproducing
+legacy experiments, but new local and CI coverage targets the FMUv3 backend.
 
-## Building the CP-Explore Docker Container
-Navigate to the parent folder of your cloned FastDyn repository, and do:
+## Prerequisites
 
-```touch .dockerignore```
+From the FastDyn repository root:
 
-Use your favorite text editor to add the following to ```.dockerignore```:
-
-```
-FastDyn/*
-!FastDyn/virtuals
-!FastDyn/build
-
-SITL_Models/*
-!SITL_Models/Gazebo
+```bash
+source ./setup.sh --build-qemu
 ```
 
-Now, build the Docker container:
+`setup.sh` creates the Python virtualenv, installs the FastDyn CLI, initializes
+the pinned Rumoca and `modelica_models` submodules, creates the sibling Banquo
+parser checkout used by CP-Explore, prepares QEMU RAM backing files, and, with
+`--build-qemu`, builds the patched QEMU fork and FastDyn plugin.
 
-```docker build -f FastDyn/virtuals/fuzzer/libafl_phi/Dockerfile -t cp_exp .```
+## Run The Default Campaign
 
-## Running a Campaign
-When you are ready to run a fuzzing campaign, instantiate the Docker container:
+```bash
+cd virtuals/fuzzer/libafl_phi
+cargo run --bin baby_fuzzer
+```
 
-```docker run -it --name YOUR_CONTAINER_NAME cp_exp```
+By default this selects:
 
-This will open a shell inside of your new CP-Explore container. From here, you may configure the experiment settings before starting the campaign. Please see the following files:
-* src/main.rs: General fuzzer and simulation settings
-* src/phi_observer.rs: Defining STL formulas
+- vehicle: `copter`
+- config: `configs/copter462.toml`
+- mission: `virtuals/physics/flight_controllers/courbet/mavlink/copter_mission.waypoints`
+- backend: `fmuv3`
+- work root: `out/optifuzz/execution-<n>`
 
-When you're ready to run a campaign, do:
+Each execution writes the parameter mutation bytes to
+`FASTDYN_OPTIFUZZ_MUTATION_BIN`. The FastDyn mission helper reads those bytes
+and applies them to the ArduPilot parameters listed in
+`FASTDYN_OPTIFUZZ_PARAM_NAMES`.
 
-```cargo run --bin baby_fuzzer```
+## Smoke And Dry-Run Checks
 
-And watch CP-Explore work!
+To check the FastDyn command wiring without launching QEMU:
 
-## Observing Campaign Results
-To check on CP-Explore's progress during a campaign, open a new terminal window on your host machine and run:
+```bash
+FASTDYN_OPTIFUZZ_SMOKE=1 \
+FASTDYN_OPTIFUZZ_DRY_RUN=1 \
+cargo run --bin baby_fuzzer
+```
 
-```docker exec -it YOUR_CONTAINER_NAME bash```
+CI runs this dry-run path for copter, rover, and plane, including two-worker
+swarm dry-runs.
 
-From here, you may check the following directories for campaign data:
-* ```crashes/```
-* ```robustness_logs/```
-* ```trace_logs/```
+## Vehicle Selection
+
+Use environment variables to select another maintained vehicle:
+
+```bash
+FASTDYN_OPTIFUZZ_VEHICLE=rover \
+FASTDYN_OPTIFUZZ_CONFIG=configs/rover462.toml \
+FASTDYN_OPTIFUZZ_MISSION_FILE=virtuals/physics/flight_controllers/courbet/mavlink/rover_rectangle.txt \
+cargo run --bin baby_fuzzer
+```
+
+```bash
+FASTDYN_OPTIFUZZ_VEHICLE=plane \
+FASTDYN_OPTIFUZZ_CONFIG=configs/plane462.toml \
+FASTDYN_OPTIFUZZ_MISSION_FILE=virtuals/physics/flight_controllers/courbet/mavlink/plane_circle_point.txt \
+cargo run --bin baby_fuzzer
+```
+
+For `copter`, `rover`, and `plane`, the backend defaults to `fmuv3`. Override
+with `FASTDYN_OPTIFUZZ_BACKEND=gazebo` only when intentionally using the legacy
+Gazebo/Courbet backend.
+
+## Swarm Execution
+
+OptiFuzz can use `fastdyn swarm` for a fuzzer execution:
+
+```bash
+FASTDYN_OPTIFUZZ_SWARM_INSTANCES=2 \
+FASTDYN_OPTIFUZZ_BASE_PORT=19000 \
+cargo run --bin baby_fuzzer
+```
+
+The generated command assigns separate QEMU monitor, MAVLink, MAVCesium, Rumoca,
+GDB, QMP, work, and RAM-backing paths to each worker. This is the intended path
+for scaling campaigns on one machine while preserving firmware and plant
+fidelity.
+
+## Coverage
+
+The default high-fidelity plugin leaves LibAFL coverage export off and evaluates
+physical mission behavior. If you build a FastDyn plugin with the coverage
+writer enabled, set:
+
+```bash
+FASTDYN_OPTIFUZZ_COVERAGE=1
+```
+
+OptiFuzz then passes `FASTDYN_COVERAGE_FILE` and `FASTDYN_BBL_FILE` to the
+FastDyn run and deserializes coverage after the execution.
+
+## Parameters And STL Formulas
+
+General fuzzer settings live in `src/main.rs`. Physical robustness observation
+and STL formula handling live in `src/phi_observer.rs`.
+
+Parameter inputs are currently defined in Rust. The repository still contains
+the OpenAI-assisted parameter shim (`param_shim_descriptions.txt` and
+`src/param_shim.rs`), but it is intentionally disabled for normal offline
+campaigns and CI because it requires an API key and network access.
+
+STL formulas live in:
+
+```text
+stl_formulas.txt
+```
+
+The Banquo parser checkout expected by the crate is prepared by `setup.sh`.
+
+## Observing Results
+
+Campaign artifacts are written under the fuzzer crate and the FastDyn work root,
+depending on the selected path:
+
+- `crashes/`
+- `robustness_logs/`
+- `trace_logs/`
+- `out/optifuzz/execution-<n>/`
+- `out/optifuzz/execution-<n>/swarm/` when swarm execution is enabled
+
+Per-execution FastDyn logs and timing files are under the selected work
+directory. Summarize timing with:
+
+```bash
+fastdyn timing-summary out/optifuzz/execution-0/fastdyn_timing.jsonl
+```
+
+## Legacy Docker/Gazebo Workflow
+
+The Dockerfile in this directory installs the old Gazebo/Courbet stack. Use it
+only for reproducing legacy Gazebo experiments:
+
+```bash
+touch .dockerignore
+docker build -f FastDyn/virtuals/fuzzer/libafl_phi/Dockerfile -t cp_exp .
+docker run -it --name cp_exp cp_exp
+```
+
+Inside the container:
+
+```bash
+cargo run --bin baby_fuzzer
+```
+
+For current FMUv3 work, native `setup.sh` plus `cargo run --bin baby_fuzzer` is
+the supported and CI-tested path.

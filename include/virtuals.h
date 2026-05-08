@@ -53,10 +53,12 @@ void raiseirq(unsigned int cpu_index, void *udata);
 void pulseirq(unsigned int cpu_index, void *udata);
 
 /**
- * @brief Raise a periodic IRQ at 1ms intervals.
+ * @brief Raise a periodic IRQ at configurable intervals.
  *
  * This virtual instruction sets up a periodic timer to raise an interrupt request (IRQ)
- * of a specific number every 1 millisecond. The IRQ number is 0 indexed, so raising IRQ 0 will
+ * of a specific number. The default period is 1 millisecond and can be overridden with
+ * the plugin argument timer_irq_period_ns or with a second virtual-instruction argument.
+ * The IRQ number is 0 indexed, so raising IRQ 0 will
  * trigger the first interrupt in the vector table. For example, interrupt number 28 should be raised using the number 44 (28 + 16 for ARM Cortex
  *
  * Example usage in virtuals.txt:

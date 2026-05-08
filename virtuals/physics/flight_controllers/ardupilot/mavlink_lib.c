@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -17,9 +18,33 @@
 
 #define GCS_SYS_ID 255
 #define GCS_COMP_ID 190
+#define DEFAULT_FASTDYN_MAVLINK_FIRMWARE_PORT 14551
 
 int fuzzer_sockfd = -1;
 struct sockaddr_in fuzzer_addr;
+
+static int fastdyn_mavlink_firmware_port(void) {
+    static int cached_port = 0;
+    if (cached_port > 0) {
+        return cached_port;
+    }
+
+    const char *env = getenv("FASTDYN_MAVLINK_FIRMWARE_PORT");
+    if (env != NULL && env[0] != '\0') {
+        char *end = NULL;
+        errno = 0;
+        long value = strtol(env, &end, 10);
+        if (errno == 0 && end != env && *end == '\0' && value > 0 && value <= 65535) {
+            cached_port = (int)value;
+            return cached_port;
+        }
+        fprintf(stderr, "Invalid FASTDYN_MAVLINK_FIRMWARE_PORT=%s, using %d\n",
+                env, DEFAULT_FASTDYN_MAVLINK_FIRMWARE_PORT);
+    }
+
+    cached_port = DEFAULT_FASTDYN_MAVLINK_FIRMWARE_PORT;
+    return cached_port;
+}
 
 // X.25 CRC structure
 typedef struct {
@@ -118,7 +143,7 @@ static bool initialize_fuzzer_socket() {
 
     memset(&fuzzer_addr, 0, sizeof(fuzzer_addr));
     fuzzer_addr.sin_family = AF_INET;
-    fuzzer_addr.sin_port = htons(14551);
+    fuzzer_addr.sin_port = htons(fastdyn_mavlink_firmware_port());
     fuzzer_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     return true;
 }
@@ -195,4 +220,3 @@ int create_fuzzed_mavlink_packet(uint32_t msgid,
 
     return 0;
 }
-

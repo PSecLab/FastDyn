@@ -12,12 +12,28 @@
 #include <fcntl.h>
 #include "fuzz_bbl.h"
 
-// fuzzer needs to restart fastdyn with persistant work directory
+// fuzzer needs to restart fastdyn with persistent work directory
 #define DEFAULT_BBL_DUMP_PATH "fastdyn_work/bbl.txt"
 static const char *bbl_dump_path = DEFAULT_BBL_DUMP_PATH;
 static GHashTable *bbl_set;
 static GHashTable *bbl_size;  /* pc -> instruction count, populated at TB translation time */
 static int fd = -1;
+
+static const char *resolve_bbl_dump_path(void) {
+    const char *path = getenv("FASTDYN_BBL_FILE");
+    if (path && path[0]) {
+        return path;
+    }
+
+    const char *work_dir = getenv("FASTDYN_WORK_DIR");
+    if (work_dir && work_dir[0]) {
+        static char buffer[4096];
+        snprintf(buffer, sizeof(buffer), "%s/bbl.txt", work_dir);
+        return buffer;
+    }
+
+    return DEFAULT_BBL_DUMP_PATH;
+}
 
 void fuzz_bbl_observe(uint32_t pc, uint32_t size) {
     guint bbl_pc = pc & (~1ULL);
@@ -79,6 +95,7 @@ void fuzz_dump_bbl(void)
 void fuzz_bbl_init(void)
 {
     int total = 0;
+    bbl_dump_path = resolve_bbl_dump_path();
 
     bbl_set = g_hash_table_new(g_direct_hash, g_direct_equal);
     if (!bbl_set) {

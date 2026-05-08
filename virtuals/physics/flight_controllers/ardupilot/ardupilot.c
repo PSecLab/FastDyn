@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "virtuals.h"
 #include "phy.h"
 #include <math.h>
@@ -71,6 +73,12 @@ void start_advancing_sim(unsigned int cpu_index, void *udata)
 {
     (void)cpu_index;
     (void)udata;
+
+    if (phy_backend_is("fmu")) {
+        printf("FMU backend advances synchronously from QEMU timer ticks\n");
+        return;
+    }
+
     // TODO: Make this catch-up function it's own thread instead of using a timer
     // that way it can run at a higher frequency if needed and won't cause missed
     // timer events.
@@ -315,6 +323,17 @@ void write_channel(unsigned int cpu_index, void *udata)
 {
     uint8_t chan = (uint8_t)qemu_get_register(ARM_V7M_R1);
     uint16_t pwm = (uint16_t)qemu_get_register(ARM_V7M_R2);
+    static uint16_t last_pwm[16] = {0};
+    if (chan < 16 && (last_pwm[chan] == 0 || abs((int)pwm - (int)last_pwm[chan]) >= 25))
+    {
+        const char *debug_pwm = getenv("FASTDYN_DEBUG_PWM");
+        if (debug_pwm != NULL && debug_pwm[0] != '\0' && strcmp(debug_pwm, "0") != 0)
+        {
+            printf("write_channel: Channel=%u, PWM=%u\n", chan, pwm);
+            fflush(stdout);
+        }
+        last_pwm[chan] = pwm;
+    }
     if (!phy_set_servo_pwm(chan, pwm))
     {
         fprintf(stderr, "Failed to set servo PWM: Channel=%d, PWM=%d\n", chan, pwm);
@@ -749,21 +768,28 @@ void ins_block_read(unsigned int cpu_index, void *udata)
             float gyro_z = imu.gyro.z;
             float temp_celsius = TEMP_ZERO_C_INV;
 
-            // Conversion from FLU to FRD
-            // accel_x = accel_x;
-            // accel_y = -1 * accel_y;
-            // accel_z = -1 * accel_z;
-            // gyro_x = gyro_x;
-            // gyro_y = -1 * gyro_y;
-            // gyro_z = -1 * gyro_z;
+            float temp_accel_x;
+            float temp_accel_y;
+            float temp_accel_z;
+            float temp_gyro_x;
+            float temp_gyro_y;
+            float temp_gyro_z;
 
-            // Invense remapping
-            float temp_accel_x = -1 * accel_y;
-            float temp_accel_y = -1 * accel_x;
-            float temp_accel_z = -1 * accel_z;
-            float temp_gyro_x = -1 * gyro_y;
-            float temp_gyro_y = -1 * gyro_x;
-            float temp_gyro_z = -1 * gyro_z;
+            if (phy_get_imu_frame() == PHY_BODY_FRAME_FRD) {
+                temp_accel_x = accel_y;
+                temp_accel_y = -1 * accel_x;
+                temp_accel_z = accel_z;
+                temp_gyro_x = gyro_y;
+                temp_gyro_y = -1 * gyro_x;
+                temp_gyro_z = gyro_z;
+            } else {
+                temp_accel_x = -1 * accel_y;
+                temp_accel_y = -1 * accel_x;
+                temp_accel_z = -1 * accel_z;
+                temp_gyro_x = -1 * gyro_y;
+                temp_gyro_y = -1 * gyro_x;
+                temp_gyro_z = -1 * gyro_z;
+            }
 
             // Apply remapping and sign adjustments here if needed
             float imu_data[7] = {
@@ -2014,6 +2040,7 @@ int ardupilot_init_virtuals(int argc, char **argv)
     virtual_register("gcs_read", gcs_read);
 
     // GP UART (includes GCS and Lidar)
+    virtual_register("gcs_bytes_available", uart_bytes_available);
     virtual_register("uart_bytes_available", uart_bytes_available);
     virtual_register("uart_write", uart_write);
 
@@ -2053,4 +2080,3 @@ int ardupilot_init_virtuals(int argc, char **argv)
 
     return status;
 }
-

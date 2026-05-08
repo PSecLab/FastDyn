@@ -3,6 +3,7 @@ One of the supported targets by Fastdyn: QEMU.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import signal
@@ -14,6 +15,7 @@ import logging
 FASTDYN_DEFAULT_WORKDIR = "fastdyn_work"
 
 from .. import fastdyn_log as fastdyn_log_conf
+from .. import profiling, timing
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
@@ -30,6 +32,81 @@ def _dedup_preserve_order(items):
 
 def _bool01(v: bool) -> str:
     return "1" if bool(v) else "0"
+
+
+_MEMORY_SIZE_RE = re.compile(r"^(0x[0-9a-fA-F]+|\d+)\s*([kmgtpeKMGTPE]?)(?:i?[bB])?$")
+_MEMORY_SIZE_MULTIPLIERS = {
+    "": 1,
+    "K": 1024,
+    "M": 1024 ** 2,
+    "G": 1024 ** 3,
+    "T": 1024 ** 4,
+    "P": 1024 ** 5,
+    "E": 1024 ** 6,
+}
+
+
+def _parse_memory_size(size):
+    if isinstance(size, int):
+        return size
+
+    text = str(size).strip()
+    match = _MEMORY_SIZE_RE.match(text)
+    if not match:
+        raise ValueError(f"Unsupported QEMU memory size: {size!r}")
+
+    value = int(match.group(1), 0)
+    suffix = match.group(2).upper()
+    return value * _MEMORY_SIZE_MULTIPLIERS[suffix]
+
+
+def _memory_backend_is_file(memory):
+    backend = getattr(memory, "memory_backend", None)
+    backend_name = getattr(backend, "name", str(backend)).upper()
+    return backend_name == "FILE"
+
+
+def _ensure_memory_backend_file(memory):
+    if not _memory_backend_is_file(memory):
+        return
+
+    memory_file = getattr(memory, "memory_file", None)
+    if not memory_file:
+        raise ValueError(f"Memory {memory.memory_name!r} uses a file backend but has no memory_file.")
+
+    size_bytes = _parse_memory_size(memory.memory_size)
+    memory_dir = os.path.dirname(memory_file)
+    if memory_dir:
+        os.makedirs(memory_dir, exist_ok=True)
+
+    with open(memory_file, "ab"):
+        pass
+
+    if os.path.getsize(memory_file) != size_bytes:
+        os.truncate(memory_file, size_bytes)
+        fastdyn_log.info(
+            f"Prepared QEMU memory backend {memory_file} with size {memory.memory_size}."
+        )
+
+
+def _path_has_separator(path):
+    return os.sep in path or (os.altsep is not None and os.altsep in path)
+
+
+def _ensure_executable(executable, description):
+    if os.path.isabs(executable) or _path_has_separator(executable):
+        exists = os.path.isfile(executable) and os.access(executable, os.X_OK)
+    else:
+        exists = shutil.which(executable) is not None
+
+    if exists:
+        return
+
+    raise FileNotFoundError(
+        f"{description} not found or not executable: {executable}\n"
+        "Run `source ./setup.sh --build-qemu` or build the patched QEMU fork "
+        "at the path configured by [Machine].qemu_path."
+    )
 
 
 def _extract_monitor_port(qemu_cmd):
@@ -85,6 +162,8 @@ def _build_qemu_env(qemu_cmd):
             repo_root = os.path.dirname(plugin_dir)
             extra_paths.append(os.path.join(repo_root, "virtuals/fuzzer/fastdyn_fuzz_lib/target/release"))
             extra_paths.append(os.path.join(repo_root, "device_models/postmartem/verifier"))
+            extra_paths.append(os.path.join(repo_root, "out/deps/cjson/install/lib"))
+            extra_paths.append(os.path.join(repo_root, "out/deps/cjson/install/lib64"))
 
     extra_paths = [p for p in extra_paths if os.path.isdir(p)]
     merged = _dedup_preserve_order(extra_paths + existing_paths)
@@ -105,6 +184,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     cpu0 = cpus[0]
     opts = machine.qemu_target_opts
     print_command = opts.print_command
+    _ensure_executable(opts.qemu_path, "QEMU executable")
 
     # QEMU CLI is per-instance: we support SMP (homogeneous CPU model/binary/machine).
     for c in cpus[1:]:
@@ -122,14 +202,10 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
 
     main_mem_id = main_memory.memory_id  # this is what -machine memory-backend must refer to
     share_flag = "on" if getattr(main_memory, "memory_share", True) else "off"
+    _ensure_memory_backend_file(main_memory)
 
     # ------------------------ Base QEMU command ------------------------
     cmd = [opts.qemu_path]
-
-    # put log file under out_path (avoid scattering)
-    qemu_log_file = cpu0.log_file
-    if qemu_log_file and not os.path.isabs(qemu_log_file):
-        qemu_log_file = os.path.join(out_path, qemu_log_file)
 
     qmp_socket = opts.qmp_socket
     # if user left default /tmp/qmp.sock, it will collide across runs; prefer per-run socket
@@ -141,17 +217,29 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         "-cpu", cpu0.cpu,
         "-kernel", cpu0.binary,
         "-qmp", f"unix:{qmp_socket},server,nowait",
-        "-d", cpu0.log_options,
-        "-D", qemu_log_file,
         "-monitor", f"tcp:127.0.0.1:{opts.monitor_port},server,nowait",
     ]
+
+    icount = str(os.environ.get("FASTDYN_QEMU_ICOUNT", opts.icount or "")).strip()
+    if icount.lower() not in ("", "none", "off", "false", "0"):
+        cpu_configs.extend(["-icount", icount])
+
+    log_options = str(cpu0.log_options or "").strip()
+    if log_options.lower() not in ("", "none", "off", "false", "0"):
+        qemu_log_file = cpu0.log_file
+        if qemu_log_file and not os.path.isabs(qemu_log_file):
+            qemu_log_file = os.path.join(out_path, qemu_log_file)
+        cpu_configs.extend(["-d", log_options])
+        if qemu_log_file:
+            cpu_configs.extend(["-D", qemu_log_file])
 
     if len(cpus) > 1:
         cpu_configs.extend(["-smp", str(len(cpus))])
 
     if opts.enable_gdb:
-        log.info("GDB debugging enabled on port 1234 (-s).")
-        cpu_configs.append("-s")
+        gdb_port = int(getattr(opts, "gdb_port", 1234))
+        log.info("GDB debugging enabled on port %s.", gdb_port)
+        cpu_configs.extend(["-gdb", f"tcp::{gdb_port}"])
     if opts.stop_on_start:
         cpu_configs.append("-S")
 
@@ -224,6 +312,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     for idx, key in enumerate(extra_keys, start=1):
         m = memories[key]
         share_flag = "on" if getattr(m, "memory_share", True) else "off"
+        _ensure_memory_backend_file(m)
         memory_config.extend([
             "-object",
             f"memory-backend-file,id={m.memory_id},mem-path={m.memory_file},size={m.memory_size},share={share_flag}",
@@ -312,6 +401,12 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     for c in cpus[1:]:
         if getattr(c, "plugin_library", None) != plugin_lib:
             raise ValueError("Different plugin_library across CPUs is not supported (QEMU loads plugins per instance).")
+    if not os.path.isfile(plugin_lib):
+        raise FileNotFoundError(
+            f"FastDyn QEMU plugin not found: {plugin_lib}\n"
+            "Build it from the FastDyn repository root after patched QEMU is ready, for example:\n"
+            "  make qemu_path=../qemu PHY=true FLIGHT_CONTROLLERS=true FMU=true"
+        )
 
     # ------------------------ Introspection ------------------------
     introspection = cpu0.introspect
@@ -335,6 +430,31 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"twintrace={twintrace_opt}",
         f"twintrace_binary={replay_binary}",
     ]
+
+    if getattr(machine, "fmu_path", None):
+        plugin_kv.append(f"fmu={machine.fmu_path}")
+    if getattr(machine, "fmu_name", None):
+        plugin_kv.append(f"fmu_name={machine.fmu_name}")
+    for name, value in sorted(getattr(machine, "fmu_parameters", {}).items()):
+        if "," in name or "=" in name:
+            raise ValueError(f"FMU parameter name cannot contain ',' or '=': {name!r}")
+        plugin_kv.append(f"fmu_param_{name}={value:.17g}")
+    for name, value in sorted(getattr(machine, "fmu_value_references", {}).items()):
+        if "," in name or "=" in name:
+            raise ValueError(f"FMU value reference name cannot contain ',' or '=': {name!r}")
+        plugin_kv.append(f"fmu_vr_{name}={int(value)}")
+
+    timer_irq_period_ns = os.environ.get(
+        "FASTDYN_TIMER_IRQ_PERIOD_NS",
+        getattr(opts, "timer_irq_period_ns", None),
+    )
+    if isinstance(timer_irq_period_ns, str):
+        timer_irq_period_ns = timer_irq_period_ns.strip()
+    if timer_irq_period_ns not in (None, "", "none", "off", "false", "0", False):
+        timer_irq_period_ns = int(timer_irq_period_ns)
+        if timer_irq_period_ns <= 0:
+            raise ValueError("[Machine].timer_irq_period_ns must be positive")
+        plugin_kv.append(f"timer_irq_period_ns={timer_irq_period_ns}")
 
     if (introspection):
         plugin_kv.extend(introspect_plugin)
@@ -366,9 +486,10 @@ def get_gdb_cmd(machine, out_path):
     gdb_cmd = None
 
     if launch_gdb:
+        gdb_port = int(getattr(opts, "gdb_port", 1234))
         gdb_script_path = os.path.join(out_path, "gdb_init.txt")
         with open(gdb_script_path, "w") as f:
-            f.write("target remote localhost:1234\n")
+            f.write(f"target remote localhost:{gdb_port}\n")
 
         if opts.launch_gdb:
             gdb_cmd = ["xterm", "-e", f"gdb-multiarch -x {gdb_script_path} {binary}"]
@@ -380,9 +501,12 @@ def setup_qemu(machine, work_dir=None):
     """
     Prepares output dir, writes device config, returns QEMU and GDB commands.
     """
-    dev_config_path = helper.write_dev_config_json(output_dir=work_dir, data=machine.parsed_device)
+    with timing.phase("qemu.setup"):
+        with timing.phase("qemu.write_device_config"):
+            dev_config_path = helper.write_dev_config_json(output_dir=work_dir, data=machine.parsed_device)
 
-    qemu_cmd, gdb_cmd, launch_gdb, binary = build_qemu_cmd(machine, dev_config_path, work_dir)
+        with timing.phase("qemu.build_command"):
+            qemu_cmd, gdb_cmd, launch_gdb, binary = build_qemu_cmd(machine, dev_config_path, work_dir)
     return qemu_cmd, gdb_cmd, launch_gdb, binary
 
 
@@ -394,20 +518,31 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
     # best-effort cleanup based on the monitor port in this command
     port = _extract_monitor_port(qemu_cmd)
     if port is not None:
-        kill_qemu_process(port)
+        with timing.phase("qemu.kill_existing", monitor_port=port):
+            kill_qemu_process(port)
 
-    qemu_env = _build_qemu_env(qemu_cmd)
-    qemu_proc = subprocess.Popen(qemu_cmd, env=qemu_env)
+    with timing.phase("qemu.build_env"):
+        qemu_env = _build_qemu_env(qemu_cmd)
+    effective_cmd = profiling.wrap_perf_command(
+        qemu_cmd,
+        name="qemu",
+        work_dir=os.environ.get("FASTDYN_WORK_DIR"),
+    )
+    with timing.phase("qemu.popen", command=" ".join(effective_cmd[:8])):
+        qemu_proc = subprocess.Popen(effective_cmd, env=qemu_env)
+    timing.mark("qemu.pid", child_pid=qemu_proc.pid)
     log.info("Letting QEMU run.")
 
     if launch_gdb:
         if gdb_cmd is not None:
-            subprocess.Popen(gdb_cmd)
+            with timing.phase("qemu.gdb.popen"):
+                subprocess.Popen(gdb_cmd)
         else:
             log.info(f"Connect by running: gdb-multiarch {binary}")
 
     try:
-        qemu_proc.wait()
+        with timing.phase("qemu.wait"):
+            qemu_proc.wait()
     except KeyboardInterrupt:
         try:
             qemu_proc.terminate()
@@ -433,7 +568,8 @@ def kill_qemu_process(port):
     for pid in get_pids_using_port(port):
         try:
             os.kill(pid, signal.SIGKILL)
-            subprocess.run(["stty", "sane"])
+            if os.isatty(0):
+                subprocess.run(["stty", "sane"])
         except ProcessLookupError:
             pass
         except Exception as e:

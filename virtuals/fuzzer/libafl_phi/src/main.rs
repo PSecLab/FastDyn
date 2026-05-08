@@ -2,20 +2,26 @@
 // ----------------------------------- DO NOT MODIFY BELOW ---------------------------------------
 // -----------------------------------------------------------------------------------------------
 
-mod phi_observer;
-mod phi_feedback;
-mod phi_objective;
-mod cpexp_state;
-mod phi_stage;
 mod cpexp_input;
+mod cpexp_state;
 mod lambda_mutational;
 mod mission_execution;
 mod param_shim;
+mod phi_feedback;
+mod phi_objective;
+mod phi_observer;
+mod phi_stage;
 
+use std::env;
 #[cfg(windows)]
 use std::ptr::write_volatile;
-use std::env;
-use std::{path::{self, PathBuf}, process::exit, ptr::write, thread::sleep, time::Duration};
+use std::{
+    path::{self, PathBuf},
+    process::exit,
+    ptr::write,
+    thread::sleep,
+    time::Duration,
+};
 
 use env_logger::Target;
 use gz_msgs::param::{self, Param};
@@ -29,47 +35,43 @@ use libafl::{
     executors::{CommandExecutor, ExitKind, InProcessExecutor},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeoutFeedback},
-    fuzzer::{Fuzzer, StdFuzzer}, generators::RandPrintablesGenerator,
+    fuzzer::{Fuzzer, StdFuzzer},
+    generators::RandPrintablesGenerator,
     inputs::{BytesInput, HasTargetBytes},
     mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
     observers::StdMapObserver,
     schedulers::QueueScheduler,
     stages::{mutational::StdMutationalStage, AflStatsStage, CalibrationStage},
-    state::StdState
+    state::StdState,
 };
 use libafl_bolts::{
     current_nanos, nonnull_raw_mut, nonzero, rands::StdRand, tuples::tuple_list, AsSlice,
 };
 
-use std::process::{Command, Child, Stdio};
+use std::process::{Child, Command, Stdio};
 
-use scirs2_optimize::global::{
-    BayesianOptimizationOptions,
-    BayesianOptimizer,
-    Space
-};
-use scirs2_optimize::prelude::Parameter;
 use scirs2_core::ndarray::Array1;
+use scirs2_optimize::global::{BayesianOptimizationOptions, BayesianOptimizer, Space};
+use scirs2_optimize::prelude::Parameter;
 
-use phi_observer::PhysicalObserver;
+use cpexp_input::{CPExpInput, EnvInput, HasEnvConfig, HasParamBytes, ParamInput, TargetInput};
+use cpexp_state::{CPExpState, HasInputLibrary};
+use lambda_mutational::LambdaMutationalStage;
 use phi_feedback::PhysicalFeedback;
 use phi_objective::PhysicalObjective;
-use cpexp_state::{CPExpState, HasInputLibrary};
+use phi_observer::PhysicalObserver;
 use phi_stage::PhiStage;
-use cpexp_input::{CPExpInput, ParamInput, EnvInput, TargetInput, HasParamBytes, HasEnvConfig};
-use lambda_mutational::LambdaMutationalStage;
 
 use mission_execution::execute_mission;
 
 use libafl::executors::{Executor, WithObservers};
-use std::marker::PhantomData;
 use libafl::state::{HasCorpus, HasExecutions};
+use std::marker::PhantomData;
 
 /**
  * Given a CPExpInput, automatically create a search space for the optimizer.
  */
 fn search_space_from_input_library(input_lib: &CPExpInput) -> Space {
-
     let mut space = Space::new();
 
     // Add parameter inputs to space
@@ -98,7 +100,7 @@ struct FastDynExecutor<S> {
 
 impl<S> FastDynExecutor<S> {
     // pub fn new(_state: &S, fuzz_buffer: *mut FuzzBuffer) -> Self {
-    pub fn new(_state: &S,) -> Self {
+    pub fn new(_state: &S) -> Self {
         Self {
             phantom: PhantomData,
             // fuzz_buffer,
@@ -118,7 +120,6 @@ where
         _mgr: &mut EM,
         input: &TargetInput,
     ) -> Result<ExitKind, libafl::Error> {
-
         let executions = state.executions_mut();
         *executions += 1;
         env::set_var("EXECUTION", executions.to_string());
@@ -129,16 +130,18 @@ where
             param_names.push_str(&param.get_name());
             param_names.push(',');
         }
+        let vehicle = optifuzz_vehicle();
+        let mission_file = optifuzz_mission_file();
 
         let result: ExitKind = execute_mission(
-            input, 
-            param_names, 
-            SYSTEM_UNDER_TEST,
-            MISSION_WAYPOINT_FILE_NAME, 
-            MISSION_TIMEOUT, 
+            input,
+            param_names,
+            &vehicle,
+            &mission_file,
+            MISSION_TIMEOUT,
             POST_ARM_PARAMETER_UPDATE_DELAY,
             NOISE_APPLICATION_SIM_TIME,
-            HEADLESS_MODE
+            HEADLESS_MODE,
         );
 
         Ok(result)
@@ -161,12 +164,12 @@ const CORPUS_LOG_PATH: &str = "./corpus";
 
 /**
  * MISCELLANEOUS CONSTANT VALUES
- * 
+ *
  * Edit these values as needed.
- * 
+ *
  * SYSTEM_UNDER_TEST: The name of the CPS to test.
  * MISSION_WAYPOINT_FILE_NAME: The name of the file containing mission waypoints for the system under test.
- *     NOTE: the file must be in FastDyn/virtuals/fuzzer/physics/flight_controllers/courbet/mavlink/
+ *     For the default FMUv3 backend, this may be a repo-relative path.
  * MISSION_TIMEOUT: The maximum simulation time allowed before it is killed
  * POST_ARM_PARAMETER_UPDATE_DELAY: The time to wait after arming the CPS before updating parameter values.
  * NOISE_APPLICATION_SIM_TIME: The simulation time at which noise should be applied to the system's sensors.
@@ -177,26 +180,84 @@ const CORPUS_LOG_PATH: &str = "./corpus";
  * MAX_EXECUTIONS_PER_LAMBDA_STAGE: The maximum number of mutations to make during each lambda stage.
  * HEADLESS_MODE: Run the fuzzing campaign with or without the Gazebo/MAVproxy GUIs. Mainly for debugging.
  */
-const SYSTEM_UNDER_TEST: &str = "plane"; // Choose either "rover" or "plane"
-const MISSION_WAYPOINT_FILE_NAME: &str = "contest_mission.txt"; // "plane_circle_point.txt";
-const MISSION_TIMEOUT: f64 = 360.0; // seconds
-const POST_ARM_PARAMETER_UPDATE_DELAY: f64 = 60.0; // seconds
+const SYSTEM_UNDER_TEST: &str = "copter"; // Default out-of-box backend is configs/copter462.toml.
+const MISSION_WAYPOINT_FILE_NAME: &str =
+    "virtuals/physics/flight_controllers/courbet/mavlink/copter_mission.waypoints";
+const MISSION_TIMEOUT: f64 = 220.0; // seconds
+const POST_ARM_PARAMETER_UPDATE_DELAY: f64 = 0.0; // seconds
 const NOISE_APPLICATION_SIM_TIME: f64 = 100.0; // seconds
 const RECORDING_TIMESTEP: f64 = 0.01; // seconds
 const INITIAL_EXPLORATION_POINTS: usize = 10;
 const EXECUTIONS_PER_PHI_STAGE: usize = 10;
 const MAX_EXECUTIONS_PER_LAMBDA_STAGE: usize = 10;
-const HEADLESS_MODE: bool = false; // WARNING: Only set to false if fuzzing outside of a docker container...
+const HEADLESS_MODE: bool = true; // Keep the default Docker/native campaign headless.
+
+fn optifuzz_vehicle() -> String {
+    env::var("FASTDYN_OPTIFUZZ_VEHICLE").unwrap_or_else(|_| SYSTEM_UNDER_TEST.to_string())
+}
+
+fn optifuzz_mission_file() -> String {
+    env::var("FASTDYN_OPTIFUZZ_MISSION_FILE")
+        .unwrap_or_else(|_| MISSION_WAYPOINT_FILE_NAME.to_string())
+}
+
+fn optifuzz_env_flag(name: &str) -> bool {
+    matches!(
+        env::var(name)
+            .unwrap_or_else(|_| "0".to_string())
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn run_optifuzz_smoke(input_library: &CPExpInput) {
+    let param_values = input_library
+        .get_param_input()
+        .iter()
+        .map(|param| {
+            let range = param.get_range();
+            ((range.0 + range.1) * 0.5) as f32
+        })
+        .collect::<Vec<f32>>();
+    let param_names = input_library
+        .get_param_input()
+        .iter()
+        .map(|param| param.get_name().as_str())
+        .collect::<Vec<&str>>()
+        .join(",");
+    let input = TargetInput::new(TargetInput::f32_vec_to_bytes(&param_values), String::new());
+    let vehicle = optifuzz_vehicle();
+    let mission_file = optifuzz_mission_file();
+    let result = execute_mission(
+        &input,
+        param_names,
+        &vehicle,
+        &mission_file,
+        MISSION_TIMEOUT,
+        POST_ARM_PARAMETER_UPDATE_DELAY,
+        NOISE_APPLICATION_SIM_TIME,
+        HEADLESS_MODE,
+    );
+    println!(
+        "OptiFuzz smoke finished for vehicle={} with exit kind: {:?}",
+        vehicle, result
+    );
+    if !matches!(result, ExitKind::Ok) {
+        std::process::exit(1);
+    }
+}
 
 pub fn main() {
-
     env_logger::init();
+    if env::var("FASTDYN_OPTIFUZZ_BACKEND").is_err() {
+        env::set_var("FASTDYN_OPTIFUZZ_BACKEND", "fmuv3");
+    }
 
     /**
      * This code translates English descriptions of parameters into actual parameters using LLM.
      * For March NSWCPD Demonstration purposes, we omit this feature as it requires internet.
      */
-
     // let api_key = env::var("OPENAI_API_KEY")
     //     .expect("Set OPENAI_API_KEY in your environment");
 
@@ -216,20 +277,18 @@ pub fn main() {
     // }
 
     // println!("OpenAI says: {}", response);
-
     let cvg_observer = unsafe { StdMapObserver::new("cvg", &mut CVG) }; // Example address
     let coverage_feedback_for_stats = MaxMapFeedback::new(&cvg_observer);
 
     /**
      * BUILDING THE FEEDBACK AND OBJECTIVE OBJECTS
-     * 
+     *
      * These objects define how the fuzzer evaluates input as "interesting" or a solution.
      * Interesting inputs (associated with feedback) are added to the corpus and will be mutated in the future.
      * Solutions (associated with objectives) are saved to the "crashes/" directory.
-     * 
+     *
      * Choose which metrics are used for feedback and objectives by adding them inside the `feedback_or!` macro.
      */
-
     let mut physical_feedback = PhysicalFeedback::new(); // Does the input lower an STL's minimum robustness?
     let mut coverage_feedback = coverage_feedback_for_stats.clone(); // Does the input increase code coverage?
     let crash_feedback = CrashFeedback::new(); // Does the input cause a hardfault in the firmware?
@@ -242,21 +301,24 @@ pub fn main() {
 
     /**
      * DEFINING THE FUZZING INPUTS
-     * 
+     *
      * Here, you may define which inputs you wish to search during the fuzzing campaign.
      * We define two types of inputs: parameter inputs and environment inputs.
      * Parameter inputs are actual ArduPilot firmware parameters which are updated using MAVlink.
      * All other inputs are environment inputs. In this example, we have magnetometer and IMU sensor noise.
-     * 
+     *
      * With the parameter description to LLM functionality, you would not need to manually specify parameter inputs.
      * In any case, you may consult the following references below for ArduPilot parameter descriptions:
-     * 
+     *
      * https://ardupilot.org/rover/docs/parameters-Rover-stable-V4.6.2.html
      * https://ardupilot.org/plane/docs/parameters-Plane-stable-V4.6.2.html
      */
-
-    // We have included the parameters we fuzzed during the ArduPlane campaign here as an example. 
+    // We have included the parameters we fuzzed during the ArduPlane campaign here as an example.
     let param_info_vec: Vec<ParamInput> = vec![
+        ParamInput::new_float("ATC_RAT_YAW_P", (0.05, 0.5), 0.005),
+        ParamInput::new_float("ATC_RAT_YAW_I", (0.0, 0.2), 0.005),
+        ParamInput::new_float("ATC_RAT_YAW_D", (0.0, 0.03), 0.001),
+        ParamInput::new_float("ATC_RAT_YAW_FF", (0.0, 0.2), 0.005),
         // Group 1 — Roll Control Loop
         // ParamInput::new_float("RLL_RATE_P", (0.08, 0.35), 0.005),
         // ParamInput::new_float("RLL_RATE_I", (0.01, 0.6), 0.01),
@@ -313,6 +375,11 @@ pub fn main() {
 
     // Create optimizer
     let input_library = CPExpInput::new(param_info_vec, env_info_vec);
+    if optifuzz_env_flag("FASTDYN_OPTIFUZZ_SMOKE") {
+        run_optifuzz_smoke(&input_library);
+        return;
+    }
+
     let space = search_space_from_input_library(&input_library);
     let mut opt = BayesianOptimizationOptions::default();
     opt.n_initial_points = INITIAL_EXPLORATION_POINTS;
@@ -338,8 +405,8 @@ pub fn main() {
         // false,
         // CPExpInput object for transforming TargetInputs (serializable) into usable values
         input_library,
-
-    ).unwrap();
+    )
+    .unwrap();
 
     // The Monitor trait define how the fuzzer stats are displayed to the user
     #[cfg(not(feature = "tui"))]
@@ -392,7 +459,10 @@ pub fn main() {
 
     let mut stages = tuple_list!(
         PhiStage::new(EXECUTIONS_PER_PHI_STAGE),
-        LambdaMutationalStage::with_max_iterations(mutator, nonzero!(MAX_EXECUTIONS_PER_LAMBDA_STAGE)),
+        LambdaMutationalStage::with_max_iterations(
+            mutator,
+            nonzero!(MAX_EXECUTIONS_PER_LAMBDA_STAGE)
+        ),
         stats_stage,
     );
 

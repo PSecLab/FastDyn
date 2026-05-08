@@ -1,163 +1,316 @@
-# FastDyn Plugin Configuration (`fastdyn_config.toml`)
+# FastDyn TOML Configuration
 
-## 1. Introduction: What is This File?
+FastDyn runs firmware from a single TOML file. The file describes the QEMU
+machine, memory backing, firmware image, FastDyn plugin settings, optional FMI
+v3 plants, runtime helper processes, and profiling options. The same TOML is
+used by `fastdyn run`, `fastdyn loop`, CI smoke tests, and `fastdyn swarm`.
 
-Welcome to the **FastDyn** project!  
-If you're new to **firmware rehosting**—the process of running software from a specific embedded device (like a microcontroller) on a different machine (like your PC)—this document is your guide.
+The maintained vehicle examples are:
 
-This file, `fastdyn_config.toml`, is the central *blueprint* for a complete **QEMU simulation environment**. Running embedded firmware requires us to precisely mimic its original hardware environment. Instead of relying on a fragile, mile-long command line, we define everything here in a structured, human-readable format.
+- `configs/copter462.toml`: ArduCopter 4.6.2 with a Rumoca FMI v3 quadrotor.
+- `configs/rover462.toml`: ArduRover 4.6.2 with a Rumoca FMI v3 rover.
+- `configs/plane462.toml`: ArduPlane 4.6.2 with a Rumoca FMI v3 fixed-wing model.
 
-This approach makes our simulation **reproducible, easy to modify, and simple to share**.
+Run a config with:
 
-### The Workflow
+```bash
+source ./setup.sh --build-qemu
+fastdyn run -c configs/copter462.toml
+```
 
-This file doesn't directly configure QEMU. Instead, a launcher script (e.g., `parse_config.py`) reads this file and translates it into the necessary commands and temporary configuration files that QEMU and our custom plugin understand.
+## Path And Environment Expansion
 
----
+Relative paths are resolved from the FastDyn repository root. Runtime helper
+strings support `${NAME:-default}` expansion, so a config can provide defaults
+while `fastdyn swarm` injects per-worker ports:
 
-## 2. High-Level Structure
+```toml
+"--out=udpout:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}"
+```
 
-The configuration is organized into three main logical sections:
+Important injected environment variables are:
 
-- **[Memory]**: Defines the *address space* of our simulated chip—where the RAM is, its size, and how it's created on your computer.
-- **[CPU]**: Configures the virtual processor and provides powerful tools to modify the firmware's behavior as it runs.
-- **[Device]**: The most detailed section. This is where we simulate the hardware peripherals (like UART, GPIO, Timers) that the firmware expects to find.
+- `FASTDYN_WORK_DIR`: current run work directory.
+- `FASTDYN_CONFIG`: absolute config path.
+- `FASTDYN_MONITOR_PORT`: QEMU monitor TCP port.
+- `FASTDYN_MAVLINK_FIRMWARE_PORT`: firmware-facing MAVLink UDP port.
+- `FASTDYN_MAVLINK_GCS_PORT`: GCS/helper-facing MAVLink UDP port.
+- `FASTDYN_MAVCESIUM_PORT`: MAVCesium HTTP port.
+- `FASTDYN_RUMOCA_HTTP_PORT` and `FASTDYN_RUMOCA_WS_PORT`: standalone Rumoca viewer ports.
+- `FASTDYN_QEMU_MEMORY_DIR`: per-run RAM backing directory.
+- `FASTDYN_QMP_SOCKET`: per-run QMP socket path.
 
----
+## Machine
 
-## 3. Section Details
+`[Machine]` controls QEMU and global board timing.
 
-### [Memory] Section
+```toml
+[Machine]
+platform = "STM32F427"
+qemu_path = "../qemu/build/qemu-system-arm"
+monitor_port = 5555
+qmp_socket = "/tmp/qmp.sock"
+log_file = "qemu.log"
+log_options = "none"
+icount = { shift = 5, sleep = false, align = false }
+timer_irq_period_ns = 1000000
+semihosting = true
+semihosting_config = "enable=on,target=native"
+coverage = false
+print_command = false
+```
 
-In embedded systems, the CPU interacts with peripherals by writing to or reading from specific memory addresses. This is called **Memory-Mapped I/O (MMIO)**.  
-This section sets up the foundational memory map for our simulation.
+For high-fidelity ArduPilot/FMU runs, keep `timer_irq_period_ns = 1000000`.
+That gives the firmware a 1 ms board tick. With `icount.sleep = false`, QEMU is
+advanced by instruction-counted simulation time rather than wall time, which is
+the path used for faster-than-realtime campaigns.
+
+## Memory
+
+Memory banks map to QEMU `memory-backend-*` objects. Swarm runs override the RAM
+file directory per worker, so workers do not share memory.
 
 ```toml
 [Memory]
-# The size of the main system RAM. (e.g., "512M", "256K")
-main_ram_size = "512M"
 
-# The directory on the host where memory-backing files are stored.
-# /dev/shm is a high-performance shared memory directory on Linux.
-shared_mem_path = "/dev/shm"
+[Memory.main]
+id = "ram0"
+base_address = "0x20000000"
+memory_size = "512M"
+memory_type = "SRAM"
+backend = "file"
+memory_file = "../qemu/ws/my_m4_ram3"
+share = true
+prealloc = false
 
-# The filename for the main RAM's backing file on your PC.
-main_ram_file = "my_m4_ram3"
-
-# The size of a secondary, shared RAM region (e.g., on-chip SRAM).
-shared_ram_size = "512K"
-
-# The filename for the shared RAM's backing file.
-shared_ram_file = "my_m4_ram"
+[[Memory.ram1]]
+id = "ram1"
+index = 1
+base_address = "0x30000000"
+memory_size = "512K"
+memory_type = "SRAM"
+backend = "file"
+memory_file = "../qemu/ws/my_m4_ram"
+share = true
+prealloc = false
 ```
 
----
+## CPU
 
-### [CPU] Section
-
-This section configures the virtual processor and allows us to **instrument the firmware**, which is essential for rehosting when we don't have real hardware.
+`[[CPU.cpu0]]` identifies the firmware, monitor ELF, FastDyn plugin, and virtual
+instruction configuration files.
 
 ```toml
 [CPU]
-# The QEMU machine model to use.
+
+[[CPU.cpu0]]
+arch = "arm"
 machine = "cortexm"
-
-# The specific CPU model.
-cpu = "cortex-m7"
-
-# Path to the firmware binary we want to run.
-binary = "/path/to/your/RTOSDemo.axf"
-
-# Path to the CMSIS-SVD file (chip datasheet in XML form).
-platform_svd_path = "/path/to/your/stm32f4.svd"
-
-# (Optional) Path to a helper Python script for custom analysis.
-context_minimizer_path = "/path/to/context_minimizer.py"
-
-# --- Virtual Instructions ---
-[[CPU.virtuals]]
-    at = "main+1"
-    instruction = "raise_irq"
-    args = ["TIM_0_IRQ"]
-
-# --- Instruction Modifiers ---
-[[CPU.modifiers]]
-    at = "main+8"
-    patch = "r15 <- r14"
+cpu = "cortex-m4"
+plugin_library = "build/libfastdyn.so"
+monitor_elf = "../qemu/ws/monitor.elf"
+binary = "virtuals/physics/flight_controllers/courbet/bin/arducopter_v462"
+init_nsvtor = "0x08004000"
+twintrace = "None"
+hardware_trace = "hardware_log/io.log"
+introspect = false
+existing_config_path = "virtuals/physics/flight_controllers/courbet/copter462/unlabeled_conf"
 ```
 
----
+## FMU
 
-### [Device] Section
-
-This is the core of **hardware simulation**.  
-A **peripheral** is a piece of hardware on the chip (e.g., UART, GPIO, Timer).  
-A **Device Model** is software that pretends to be that hardware.
-
-#### [Device.Models] — The Model Registry
-
-This defines the *toolbox* of models available to simulate hardware.
+`[FMU]` lets FastDyn build and load Rumoca FMI v3 models directly from Modelica.
+The generated FMU is used by the C physics backend in the QEMU plugin.
+Keep the Modelica model name vehicle-oriented, such as
+`FastDyn.Copter`; the FMU is the generated artifact format, not
+part of the model identity. FastDyn vehicle models should define the
+ArduPilot-facing sensor and actuator variables explicitly while inheriting
+generic dynamics from `third_party/common/modelica_models`.
 
 ```toml
-[Device.Models]
-    [Device.Models.elder]
-        backend = "stlink"
-        scroll_file = "elder_scroll.ini"
+[FMU]
+active = "quadrotor"
+auto_build = true
 
-    [Device.Models.classic]
+[FMU.models.quadrotor]
+model = "FastDyn.Copter"
+model_file = "modelica/FastDyn/Copter.mo"
+source_roots = ["modelica", "third_party/common/modelica_models"]
+output = "out/fmi3/Copter"
+build = true
+release = false
 
-    [Device.Models.passthrough]
-        backend = "stlink"
-
-    [Device.Models.unhandled]
+[FMU.models.quadrotor.parameters]
+lat0 = 40.414929
+lon0 = -86.932387
+ground_alt_wgs84 = 149.0
+pwm_min = 1100.0
+pwm_max = 1900.0
+omega_max = 1300.0
 ```
 
-#### Peripheral Definitions
+Useful controls:
 
-Here, you define actual peripherals (from the SVD file) and assign models to handle them.
+- `active`: selects a model under `[FMU.models]`.
+- `auto_build`: rebuilds the FMU when it is missing or stale.
+- `source_roots`: Modelica package roots passed to Rumoca.
+- `build`: packages an `.fmu` when true; otherwise emits the generated source tree.
+- `release`: builds Rumoca with Cargo release mode.
+- `[FMU.models.<name>.parameters]`: numeric Modelica parameter overrides.
 
-**Example: UART**
+The copter defaults match the active Gazebo `gs_drone` ArduPilot PWM endpoints:
+PWM `1100..1900` maps linearly to aerodynamic motor speed, then the FMU plant
+applies its explicit first-order motor lag.
+
+Override selection on the command line with:
+
+```bash
+fastdyn run -c configs/copter462.toml --fmu quadrotor
+```
+
+## Rumoca Standalone Viewer
+
+`[Rumoca]` starts an optional separate `rumoca lockstep run` process. This is
+for standalone lockstep experiments and web viewing of a Rumoca scene. The
+normal ArduPilot configs use the FMU through the QEMU plugin and leave this
+disabled by default.
 
 ```toml
-[Device.uart]
-    ranges = ["0x40011000-0x40011FFF"]
-    description = "Main USART peripheral"
+[Rumoca]
+enabled = false
+config = "third_party/common/rumoca/examples/quadrotor_sil/quadrotor_standby.toml"
 
-    scroll_config = """
-[uart]
-scroll = "/path/to/your/uart_gen.so"
-"""
-
-    [[Device.uart.handlers]]
-        model   = "qemu"
-        type    = "stm32f2xx-usart"
-        enabled = true
-
-    [[Device.uart.handlers]]
-        model   = "elder"
-        enabled = true
+[Rumoca.webviewer]
+http_port = "${FASTDYN_RUMOCA_HTTP_PORT:-8080}"
+ws_port = "${FASTDYN_RUMOCA_WS_PORT:-8081}"
+scene = "third_party/common/rumoca/examples/quadrotor_sil/quadrotor_scene.js"
 ```
 
----
+When enabled, FastDyn prints a local viewer URL such as
+`http://127.0.0.1:8080`.
 
-## 4. How to Add a New Peripheral
+## Runtime Helpers
 
-To add a new device (e.g., a timer):
-
-1. **Define the Peripheral Table**: Add a new `[Device.timer0]` block.
-2. **Set its Range**: Look up the address range in the SVD file or datasheet.
-3. **Add Handlers**: Decide which model will simulate it.  
-   Start with `classic` or `unhandled` if unsure.
-4. *(Optional)* **Add Scroll Config**: If it uses the `elder` model, include its INI settings.
-
-**Example: Adding a Timer**
+`[Run]` and `[Run.processes.<name>]` start helper processes next to QEMU. The
+current ArduPilot configs use helpers for MAVProxy/MAVCesium and mission or
+health monitoring.
 
 ```toml
-[Device.timer0]
-    ranges = ["0x40000000-0x400003FF"]
-    description = "General-purpose Timer 0"
+[Run]
+cwd = "."
+env = { PYTHONPATH = "." }
 
-    [[Device.timer0.handlers]]
-        model = "classic"
-        enabled = true
+[Run.processes.mavproxy]
+enabled = true
+quiet = true
+cwd = "virtuals/physics/flight_controllers/courbet/mavlink"
+env = { PYTHONPATH = "." }
+command = [
+    "mavproxy.py",
+    "--daemon",
+    "--master=udpout:127.0.0.1:${FASTDYN_MAVLINK_FIRMWARE_PORT:-14551}",
+    "--out=udpout:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
+    "--load-module=fastdyn_cesium:{\"port\":${FASTDYN_MAVCESIUM_PORT:-5000}}",
+]
+ready_message = "MAVCesium web viewer: open http://127.0.0.1:${FASTDYN_MAVCESIUM_PORT:-5000}/mavcesium/"
+
+[Run.processes.mission]
+enabled = true
+background = true
+terminate_run_on_exit = true
+command = [
+    "python3",
+    "virtuals/physics/flight_controllers/courbet/mavlink/mav_command_and_control.py",
+    "--connect",
+    "udpin:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
+    "--monitor-sec",
+    "180",
+    "virtuals/physics/flight_controllers/courbet/mavlink/copter_init.param",
+    "virtuals/physics/flight_controllers/courbet/mavlink/copter_mission.waypoints",
+]
 ```
+
+Process fields:
+
+- `enabled`: include or skip the helper.
+- `command`: string or list of strings.
+- `cwd`: helper working directory.
+- `env`: helper-specific environment.
+- `ready_message`: printed immediately after the helper starts.
+- `background`: run concurrently with QEMU when true.
+- `quiet`: redirect helper stdout/stderr to `/dev/null`.
+- `start_delay_sec`: delay helper startup.
+- `stop_on_exit`: terminate the helper when FastDyn exits.
+- `terminate_run_on_exit`: shut QEMU down when this helper exits.
+- `shell`: force shell execution for list commands.
+
+Skip all helpers for one run with:
+
+```bash
+fastdyn run -c configs/copter462.toml --no-run-processes
+```
+
+## Profiling And Timing
+
+```toml
+[Run.profiling]
+timing = true
+timing_echo = true
+python = false
+perf = "off" # off | stat | record
+perf_frequency_hz = 99
+fmu = true
+```
+
+Timing events are written to `fastdyn_work/fastdyn_timing.jsonl` and summarized
+with:
+
+```bash
+fastdyn timing-summary fastdyn_work/fastdyn_timing.jsonl
+```
+
+`python = true` profiles Python helper scripts with `cProfile`.
+`perf = "stat"` or `"record"` wraps QEMU with Linux `perf` when host permissions
+allow it. Keep profilers disabled for lowest-overhead fuzzing campaigns after
+you have identified bottlenecks.
+
+## Device Models
+
+`[Device.Models]` registers handler types, and `[Device.<name>]` assigns
+address ranges to handlers. This is the traditional FastDyn peripheral model
+configuration and is still used alongside the FMU physics backend.
+
+```toml
+[Device.Models.classic]
+
+[Device.Models.passthrough]
+backend = "stlink"
+
+[Device.remaining_space]
+ranges = [["0x40000000", "0x400107FF"], ["0x40010C00", "0x40010FFF"]]
+irq = [["1", "100"]]
+description = "Peripheral ranges not modeled by a specific handler."
+
+[[Device.remaining_space.handlers]]
+model = "classic"
+enabled = false
+```
+
+## Parallel Runs
+
+`fastdyn swarm` runs many isolated copies of one config. Each worker receives
+its own work directory, RAM backing directory, MAVLink ports, MAVCesium port,
+Rumoca viewer ports, GDB port, and QMP socket.
+
+```bash
+fastdyn swarm -c configs/copter462.toml -n 20 -o out/swarm/copter --base-port 15000
+```
+
+Use `--dry-run` to inspect the assigned ports without launching QEMU:
+
+```bash
+fastdyn swarm -c configs/copter462.toml -n 20 -o out/swarm/copter --dry-run
+```
+
+The CI smoke tests run two-worker swarms for copter, rover, and plane to confirm
+FMU loading, board timing, MAVCesium URL generation, and port isolation.

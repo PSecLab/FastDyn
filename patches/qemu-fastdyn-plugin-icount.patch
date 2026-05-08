@@ -1,0 +1,134 @@
+diff --git a/plugins/api.c b/plugins/api.c
+index f285fcf53f..9f78d24395 100644
+--- a/plugins/api.c
++++ b/plugins/api.c
+@@ -49,6 +49,8 @@
+ #include "plugin.h"
+ #include "elf.h"
+ #include "hw/core/cpu.h"
++#include "exec/icount.h"
++#include "system/cpu-timers-internal.h"
+ 
+ /* Uninstall and Reset handlers */
+ 
+@@ -91,6 +93,33 @@ int64_t qemu_plugin_host_start_ns(void) {
+ 	return qemu_clock_get_ns(QEMU_CLOCK_START);
+ }
+ 
++static int64_t qemu_plugin_get_virtual_time_ns(void)
++{
++    int64_t icount;
++    CPUState *cpu;
++
++    if (!icount_enabled()) {
++        return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    }
++
++    /*
++     * Plugin callbacks can run from translated code while can_do_io is false.
++     * qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) would try to commit the current
++     * CPU's partial icount there, which QEMU correctly rejects.  For plugins,
++     * return a read-only view of virtual time instead: committed global icount
++     * plus this CPU's in-flight budget consumption.
++     */
++    icount = qatomic_read_i64(&timers_state.qemu_icount);
++    cpu = current_cpu;
++    if (cpu && cpu->running) {
++        icount += cpu->icount_budget -
++            (cpu->neg.icount_decr.u16.low + cpu->icount_extra);
++    }
++
++    return qatomic_read_i64(&timers_state.qemu_icount_bias) +
++        icount_to_ns(icount);
++}
++
+ 
+ void qemu_plugin_pause_vm(void) {
+ 	qemu_system_vmstop_request(RUN_STATE_PAUSED);
+@@ -114,7 +143,7 @@ void budget_exhausted(void * arg) {
+ 	printf("Budgeting time!!\n");
+ 
+ 	qemu_mutex_lock(&bc->lock);
+-	uint64_t ts = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++	uint64_t ts = qemu_plugin_get_virtual_time_ns();
+ 	if (ts >= bc->total_budget) {
+ 		if (runstate_get() != RUN_STATE_PAUSED) {
+ 			bc->vm_old_state = runstate_get();
+@@ -122,7 +151,7 @@ void budget_exhausted(void * arg) {
+ 			printf("Stopping vm at %ld \n", ts);
+ 		}
+ 		//Try to account for drift
+-		bc->total_budget = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++		bc->total_budget = qemu_plugin_get_virtual_time_ns();
+     }
+     else {
+ 		vm_resume(bc->vm_old_state);
+@@ -206,7 +235,7 @@ static void ptimer_callback(void *opaque) {
+     }
+ 
+     // Reschedule for next aligned period
+-    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t now = qemu_plugin_get_virtual_time_ns();
+ 
+     // If we're behind, skip missed intervals to stay aligned
+ 	int missed =-1;
+@@ -229,7 +258,7 @@ uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_
+ 		ctx->data = data;
+ 		ctx->cb =cb;
+ 		ctx->period_ns = period;
+-		ctx->next_fire_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ctx->period_ns;
++		ctx->next_fire_ns = qemu_plugin_get_virtual_time_ns() + ctx->period_ns;
+ 		timer_mod_ns(ctx->timer, ctx->next_fire_ns);
+ 	} else {
+ 		printf("Too many timers requested, i will die now");
+@@ -605,7 +634,7 @@ GArray *qemu_plugin_get_registers(void)
+ 
+ 
+ int64_t qemu_plugin_get_virtual_timer(void) {
+-	return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++	return qemu_plugin_get_virtual_time_ns();
+ }
+ 
+ extern void raise_irq(CPUState *cs, int irq_num, int secure);
+diff --git a/target/arm/tcg/m_helper.c b/target/arm/tcg/m_helper.c
+index 3dcd0b41ba..f69f797531 100644
+--- a/target/arm/tcg/m_helper.c
++++ b/target/arm/tcg/m_helper.c
+@@ -1675,17 +1675,6 @@ static void do_v7m_exception_exit(ARMCPU *cpu)
+                 v7m_stack_read(cpu, &env->regs[10], frameptr + 0x20, mmu_idx) &&
+                 v7m_stack_read(cpu, &env->regs[11], frameptr + 0x24, mmu_idx);
+ 
+-			/* After reading registers from the stack */
+-			printf("Frame Pointer (SP):  0x%08x\n", frameptr);
+-printf("R4 = 0x%08x\n", env->regs[4]);
+-printf("R5 = 0x%08x\n", env->regs[5]);
+-printf("R6 = 0x%08x\n", env->regs[6]);
+-printf("R7 = 0x%08x\n", env->regs[7]);
+-printf("R8 = 0x%08x\n", env->regs[8]);
+-printf("R9 = 0x%08x\n", env->regs[9]);
+-printf("R10 = 0x%08x\n", env->regs[10]);
+-printf("R11 = 0x%08x\n", env->regs[11]);
+-
+             frameptr += 0x28;
+         }
+ 
+@@ -1700,19 +1689,6 @@ printf("R11 = 0x%08x\n", env->regs[11]);
+             v7m_stack_read(cpu, &env->regs[15], frameptr + 0x18, mmu_idx) &&
+             v7m_stack_read(cpu, &xpsr, frameptr + 0x1c, mmu_idx);
+ 
+-		if (pop_ok) {
+-			printf("Context Switch:\n");
+-			printf("Frame Pointer (SP):  0x%08x\n", frameptr);
+-    printf("R0  = 0x%08x\n", env->regs[0]);
+-    printf("R1  = 0x%08x\n", env->regs[1]);
+-    printf("R2  = 0x%08x\n", env->regs[2]);
+-    printf("R3  = 0x%08x\n", env->regs[3]);
+-    printf("R12 = 0x%08x\n", env->regs[12]);
+-    printf("LR  = 0x%08x\n", env->regs[14]);
+-    printf("PC  = 0x%08x\n", env->regs[15]);
+-    printf("xPSR= 0x%08x\n", xpsr);
+-}
+-
+         if (!pop_ok) {
+             /*
+              * v7m_stack_read() pended a fault, so take it (as a tail

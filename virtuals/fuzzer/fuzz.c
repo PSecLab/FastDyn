@@ -31,10 +31,38 @@ static char g_fuzzing_input[1024];
 
 static uint32_t g_prev_pc;
 
-#define CVG_PATH "fastdyn_work/cvg.bin"
+static const char *coverage_output_path(void) {
+    const char *path = getenv("FASTDYN_COVERAGE_FILE");
+    if (path && path[0]) {
+        return path;
+    }
+
+    const char *work_dir = getenv("FASTDYN_WORK_DIR");
+    if (work_dir && work_dir[0]) {
+        static char buffer[4096];
+        snprintf(buffer, sizeof(buffer), "%s/cvg.bin", work_dir);
+        return buffer;
+    }
+
+    return "fastdyn_work/cvg.bin";
+}
 
 // list of consecutive address+size values listing writable regions of memory, count is total entries not # of pairs
-#define WLIST_PATH "fastdyn_work/bin-writable-ranges"
+static const char *writable_ranges_path(void) {
+    const char *path = getenv("FASTDYN_WRITABLE_RANGES_FILE");
+    if (path && path[0]) {
+        return path;
+    }
+
+    const char *work_dir = getenv("FASTDYN_WORK_DIR");
+    if (work_dir && work_dir[0]) {
+        static char buffer[4096];
+        snprintf(buffer, sizeof(buffer), "%s/bin-writable-ranges", work_dir);
+        return buffer;
+    }
+
+    return "fastdyn_work/bin-writable-ranges";
+}
 static size_t wlist_count = 0;
 static uint32_t *wlist = NULL;
 
@@ -493,7 +521,7 @@ static void fuzz_destroy(void) {
         g_fuzz_exit_callback();
     }
     fuzz_dump_bbl();
-    fuzz_serialize_coverage(CVG_PATH);
+    fuzz_serialize_coverage(coverage_output_path());
 }
 
 int fuzz_init(int argc, char **argv) {
@@ -508,7 +536,7 @@ int fuzz_init(int argc, char **argv) {
 
     core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
 
-    wlist = fuzz_get_writable_ranges(WLIST_PATH, &wlist_count);
+    wlist = fuzz_get_writable_ranges(writable_ranges_path(), &wlist_count);
     if (wlist == NULL || (wlist_count & 1)) {
         utils_die("[anchor] Couldn't parse writable memory definitions");
     }

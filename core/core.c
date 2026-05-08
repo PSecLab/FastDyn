@@ -55,6 +55,8 @@ int isdigit(int c);
 #include <stdatomic.h>
 
 static _Atomic uint64_t g_icount = 0;
+static GArray *g_register_descriptors;
+static __thread GByteArray *g_register_value;
 
 static const char * runtime;
 
@@ -353,31 +355,36 @@ int counter;
 uint32_t qemu_get_register(int reg);
 uint32_t qemu_get_register(int reg)
 {
-    g_autoptr(GArray) reg_list = qemu_plugin_get_registers();
-    g_autoptr(GByteArray) reg_value = g_byte_array_new();
 	int offset = 0;
 	int oreg = reg;
 
 	if (reg >= ARM_V7M_S0)
 		oreg = 17 + ((reg - ARM_V7M_S0) / 2);
 
-
-    if (reg_list) {
-            qemu_plugin_reg_descriptor *rd = &g_array_index(
-                reg_list, qemu_plugin_reg_descriptor, oreg);
-            int count = qemu_plugin_read_register(rd->handle, reg_value);
-            g_assert(count > 0);
-    }
-
 	if ((reg >= ARM_V7M_S0) && ((reg - ARM_V7M_S0)  %2)) {
 			//S1...
 			offset = 4;
 	}
 
-    uint32_t return_data = reg_value->data[offset + 0];
-    return_data = (((uint32_t) (reg_value->data[offset + 1])) << 8)  | return_data;
-    return_data = (((uint32_t) (reg_value->data[offset + 2])) << 16) | return_data;
-    return_data = (((uint32_t) (reg_value->data[offset + 3])) << 24) | return_data;
+    if (!g_register_descriptors) {
+            g_register_descriptors = qemu_plugin_get_registers();
+    }
+    if (!g_register_value) {
+            g_register_value = g_byte_array_sized_new(8);
+    }
+
+    if (g_register_descriptors) {
+            qemu_plugin_reg_descriptor *rd = &g_array_index(
+                g_register_descriptors, qemu_plugin_reg_descriptor, oreg);
+            g_byte_array_set_size(g_register_value, 0);
+            int count = qemu_plugin_read_register(rd->handle, g_register_value);
+            g_assert(count > offset + 3);
+    }
+
+    uint32_t return_data = g_register_value->data[offset + 0];
+    return_data = (((uint32_t) (g_register_value->data[offset + 1])) << 8)  | return_data;
+    return_data = (((uint32_t) (g_register_value->data[offset + 2])) << 16) | return_data;
+    return_data = (((uint32_t) (g_register_value->data[offset + 3])) << 24) | return_data;
     return return_data;
 }
 

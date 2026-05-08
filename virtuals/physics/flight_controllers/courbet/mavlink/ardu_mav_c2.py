@@ -10,8 +10,8 @@ import socket
 
 MAVPROXY_CMD = [
     "mavproxy.py",
-    "--master=udpout:127.0.0.1:14551",
-    "--out=udpout:127.0.0.1:14552",
+    f"--master=udpout:127.0.0.1:{os.environ.get('FASTDYN_MAVLINK_FIRMWARE_PORT', '14551')}",
+    f"--out=udpout:127.0.0.1:{os.environ.get('FASTDYN_MAVLINK_GCS_PORT', '14552')}",
 ]
 
 MISSION_IN_PROGRESS = 3
@@ -188,7 +188,9 @@ def main():
     # Allow startup
     time.sleep(0.5)
 
-    mav = mavutil.mavlink_connection("udp:127.0.0.1:14552")
+    mav = mavutil.mavlink_connection(
+        f"udp:127.0.0.1:{os.environ.get('FASTDYN_MAVLINK_GCS_PORT', '14552')}"
+    )
     mav.wait_heartbeat()
 
     print("Connected")
@@ -222,7 +224,7 @@ def main():
         cleanup(master_fd, proc)
         sys.exit(1)
 
-    SOCKET_PATH = "/tmp/rust_receiver.sock"
+    SOCKET_PATH = os.environ.get("FASTDYN_OPTIFUZZ_SOCKET", "/tmp/rust_receiver.sock")
 
     message = "throttle armed"
 

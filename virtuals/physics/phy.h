@@ -50,6 +50,11 @@ typedef struct {
     imu_t imu[17];
 } imu_batch_t;
 
+typedef enum {
+    PHY_BODY_FRAME_FLU = 0,
+    PHY_BODY_FRAME_FRD = 1,
+} phy_body_frame_t;
+
 // Wind vane apparent
 typedef struct {
     float direction;
@@ -68,6 +73,7 @@ typedef struct {
 typedef struct phy_backend {
 
     const char *name;
+    phy_body_frame_t imu_frame;
 
     int  (*init)(void);
     void (*shutdown)(void);
@@ -102,6 +108,8 @@ typedef struct phy_backend_entry {
  * Returns 1 on success, 0 if the name is undefined.
  */
 int phy_select_backend(const char *name);
+int phy_backend_is(const char *name);
+phy_body_frame_t phy_get_imu_frame(void);
 
 /**
  * @brief Generic API for physics backends

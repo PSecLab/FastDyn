@@ -9,7 +9,8 @@ use csv::Reader;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions, create_dir_all};
+use std::env;
+use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command};
@@ -26,15 +27,21 @@ use banquo_parser::{parse_formula, ParsedFormula};
 //     evaluate,
 // };
 
-use banquo::{EvaluationError, Formula, Trace, evaluate, Predicate, predicate};
 use banquo::operators::{Always, And, Eventually, Implies, Not, Or};
 use banquo::predicate::FormulaError;
+use banquo::{evaluate, predicate, EvaluationError, Formula, Predicate, Trace};
 
 use crate::cpexp_state::{HasLatestRobustness, HasOptimizer};
 
 /// Path to the text file containing STL-style formulas, one per line.
 /// Lines starting with `#` and blank lines are ignored.
 const STL_FORMULAS_PATH: &str = "stl_formulas.txt";
+
+fn optifuzz_backend_is_fmuv3() -> bool {
+    env::var("FASTDYN_OPTIFUZZ_BACKEND")
+        .unwrap_or_else(|_| "fmuv3".to_string())
+        .eq_ignore_ascii_case("fmuv3")
+}
 
 #[derive(Deserialize)]
 struct State {
@@ -92,11 +99,11 @@ fn create_state(
 ) -> HashMap<String, f64> {
     HashMap::from([
         ("time".to_string(), sim_time),
-        ("x".to_string(), x), 
-        ("y".to_string(), y), 
+        ("x".to_string(), x),
+        ("y".to_string(), y),
         ("z".to_string(), z),
-        ("roll".to_string(), roll), 
-        ("pitch".to_string(), pitch), 
+        ("roll".to_string(), roll),
+        ("pitch".to_string(), pitch),
         ("yaw".to_string(), yaw),
         ("lin_velo_x".to_string(), lin_velo_x),
         ("lin_velo_y".to_string(), lin_velo_y),
@@ -111,31 +118,39 @@ fn create_state(
 }
 
 fn create_default_trace(mut csv_reader: csv::Reader<std::fs::File>) -> Trace<HashMap<String, f64>> {
-
     let mut trace: Trace<HashMap<String, f64>> = Trace::new();
     for result in csv_reader.deserialize() {
         let state: State = result.unwrap();
-        trace.insert(state.time, create_state(
-            state.time, 
-            state.x, state.y, state.z, 
-            state.roll, state.pitch, state.yaw,
-            state.lin_velo_x, state.lin_velo_y, state.lin_velo_z,
-            state.ang_velo_x, state.ang_velo_y, state.ang_velo_z,
-            state.lin_accel_x, state.lin_accel_y, state.lin_accel_z,
-        ));
+        trace.insert(
+            state.time,
+            create_state(
+                state.time,
+                state.x,
+                state.y,
+                state.z,
+                state.roll,
+                state.pitch,
+                state.yaw,
+                state.lin_velo_x,
+                state.lin_velo_y,
+                state.lin_velo_z,
+                state.ang_velo_x,
+                state.ang_velo_y,
+                state.ang_velo_z,
+                state.lin_accel_x,
+                state.lin_accel_y,
+                state.lin_accel_z,
+            ),
+        );
     }
 
     trace
-
 }
 
 /**
  * A helper function to create the ConTest trace state.
  */
-fn create_contest_state(
-    sim_time: f64,
-    lyapunov: f64,
-) -> HashMap<String, f64> {
+fn create_contest_state(sim_time: f64, lyapunov: f64) -> HashMap<String, f64> {
     HashMap::from([
         ("time".to_string(), sim_time),
         ("lyapunov".to_string(), lyapunov),
@@ -143,7 +158,6 @@ fn create_contest_state(
 }
 
 fn create_contest_trace(mut csv_reader: csv::Reader<std::fs::File>) -> Trace<HashMap<String, f64>> {
-
     let mut trace: Trace<HashMap<String, f64>> = Trace::new();
     for result in csv_reader.deserialize() {
         let record: ContestState = result.unwrap();
@@ -153,16 +167,15 @@ fn create_contest_trace(mut csv_reader: csv::Reader<std::fs::File>) -> Trace<Has
     }
 
     trace
-
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct PhysicalObserver {
     name: Cow<'static, str>,
-    trace_time_step: f64, // Time step between recorded trace points
-    sim_time_limit: f64, // Maximum simulation time to record
-    trace_log_dir: String, // Directory to store the trace logs
-    robustness_log_dir: String, // Directory to store the robustness logs
+    trace_time_step: f64,            // Time step between recorded trace points
+    sim_time_limit: f64,             // Maximum simulation time to record
+    trace_log_dir: String,           // Directory to store the trace logs
+    robustness_log_dir: String,      // Directory to store the robustness logs
     latest_robustness_vec: Vec<f64>, // Vector to store latest robustness values for each STL formula
 
     /// Parsed STL-style formulas loaded from `stl_formulas.txt` at startup.
@@ -185,9 +198,7 @@ impl Named for PhysicalObserver {
 }
 
 impl PhysicalObserver {
-
     pub fn new(step: f64, limit: f64, trace_log_dir: &str, robustness_log_dir: &str) -> Self {
-        
         let step: f64 = if step <= 0.0 { 0.1 } else { step };
         let limit: f64 = if limit <= 0.0 { 10.0 } else { limit };
 
@@ -252,7 +263,7 @@ impl PhysicalObserver {
             // issues tied to the `line` binding.
             let formula_str = line.trim().to_owned();
 
-            // Skip blank lines. 
+            // Skip blank lines.
             if formula_str.is_empty() {
                 continue;
             }
@@ -286,46 +297,77 @@ impl PhysicalObserver {
 
         (formulas, opt_indices)
     }
-
 }
 
-impl<I, S> Observer<I, S> for PhysicalObserver 
+impl<I, S> Observer<I, S> for PhysicalObserver
 where
-    S: HasExecutions + HasOptimizer + HasLatestRobustness, 
+    S: HasExecutions + HasOptimizer + HasLatestRobustness,
 {
-
     fn pre_exec(&mut self, state: &mut S, _input: &I) -> Result<(), Error> {
-        
+        if optifuzz_backend_is_fmuv3() {
+            return Ok(());
+        }
+
         if self.recorder_process.is_some() {
             // The recorder process should be none...
             panic!("Error: Recorder process is NOT none in pre_exec!");
         }
 
         // Get the path of ./trace_recorder no matter where you run ./baby_fuzzer
-        let mut recorder_path = std::env::current_exe().expect("Failed to get current executable path");
+        let mut recorder_path =
+            std::env::current_exe().expect("Failed to get current executable path");
         recorder_path.pop(); // remove baby_fuzzer filename
         recorder_path.push("trace_recorder");
 
         let spawn_result = Command::new(recorder_path)
-             .args([(state.executions() + 1).to_string(),
-                self.trace_time_step.to_string(), 
-                self.sim_time_limit.to_string(), 
-                self.trace_log_dir.clone()
-            ])   
+            .args([
+                (state.executions() + 1).to_string(),
+                self.trace_time_step.to_string(),
+                self.sim_time_limit.to_string(),
+                self.trace_log_dir.clone(),
+            ])
             .spawn();
 
         if spawn_result.is_err() {
-            panic!("Error: Failed to start trace_recorder process: {}", spawn_result.err().unwrap());
+            panic!(
+                "Error: Failed to start trace_recorder process: {}",
+                spawn_result.err().unwrap()
+            );
         } else {
             self.recorder_process = Some(spawn_result.unwrap());
         }
 
         Ok(())
-
     }
 
-    fn post_exec(&mut self, state: &mut S, _input: &I, _exit_kind: &ExitKind,) -> Result<(), Error> {
-        
+    fn post_exec(&mut self, state: &mut S, _input: &I, _exit_kind: &ExitKind) -> Result<(), Error> {
+        if optifuzz_backend_is_fmuv3() {
+            let robustness = match _exit_kind {
+                ExitKind::Ok => 1.0,
+                ExitKind::Crash | ExitKind::Timeout => -1.0,
+                _ => 0.0,
+            };
+            self.latest_robustness_vec.clear();
+            self.latest_robustness_vec.push(robustness);
+            state.set_latest_robustness(robustness);
+
+            let log_dir = Path::new(&self.robustness_log_dir);
+            create_dir_all(log_dir).expect("Unable to create robustness log directory");
+            let robustness_log_path = format!(
+                "{}/robustness_{}.csv",
+                self.robustness_log_dir,
+                state.executions()
+            );
+            let mut file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(&robustness_log_path)
+                .expect("Unable to create robustness log file");
+            writeln!(file, "FMUv3ExitKind,{}", robustness).unwrap();
+            return Ok(());
+        }
+
         if self.recorder_process.is_none() {
             // The recorder process should NOT be none...
             panic!("Error: Recorder process is none in post_exec!");
@@ -338,12 +380,13 @@ where
         }
         self.recorder_process = None;
 
-        let newest_trace_log_path = format!("{}/trace_{}.csv", self.trace_log_dir, state.executions());
+        let newest_trace_log_path =
+            format!("{}/trace_{}.csv", self.trace_log_dir, state.executions());
 
         // let csv_reader_status = csv::ReaderBuilder::new()
         //     .has_headers(false)
         //     .from_path(&newest_trace_log_path);
-        
+
         // if csv_reader_status.is_err() {
         //     println!("Warning: Failed to open trace log file for execution {}", state.executions());
         //     println!("Skipping physical observation...");
@@ -353,7 +396,8 @@ where
         // let mut csv_reader = csv_reader_status.unwrap();
         // let mut trace: Trace<HashMap<String, f64>> = create_default_trace(csv_reader);
 
-        let newest_lyapunov_log_path = format!("{}/lyapunov_{}.csv", self.trace_log_dir, state.executions());
+        let newest_lyapunov_log_path =
+            format!("{}/lyapunov_{}.csv", self.trace_log_dir, state.executions());
         let initial_distance_to_waypoint: f64 = 1000.0;
         let epsilon: f64 = 100.0; // WP_RADIUS
         let mission_timeout: f64 = 180.0;
@@ -374,9 +418,12 @@ where
         let csv_reader_status = csv::ReaderBuilder::new()
             .has_headers(false)
             .from_path(&newest_lyapunov_log_path);
-        
+
         if csv_reader_status.is_err() {
-            println!("Warning: Failed to open lyapunov log file for execution {}", state.executions());
+            println!(
+                "Warning: Failed to open lyapunov log file for execution {}",
+                state.executions()
+            );
             println!("Skipping physical observation...");
             return Ok(());
         }
@@ -392,25 +439,24 @@ where
 
         /**
          * DEFINING STL FORMULAS
-         * 
+         *
          * Signal-Temporal Logic (STL) formulas are the foundation of CP-Explore's physical observations.
          * They guide the joint fuzzer and optimizer's search for compromising inputs.
          * By Resolute Hunter, users will be able to specify STL forrmulas in English in "stl_formulas.txt".
          * For now, the user must manually create formulas.
-         * 
+         *
          * The example formlua below was used in the ArduPlane fuzzing campaign to monitor for altitude instability.
          * For more information about creating STL formulas, see the Banquo crate documentation at the link below:
-         * 
+         *
          * https://docs.rs/banquo/latest/banquo/
          */
-
         // First, you must define a list of predicates.
         // These are inequalities that relate metrics from the CPS's physical state to arbitrary float expressions.
         // See the State struct (near line 40) for the available metrics you can use in predicates.
         // The State struct only contains a subset of the available metrics for now. We will complete the list later.
         // let min_z_pred = predicate!{ 50.0 <= z };
         // let time_pred = predicate!{ 110.0 <= time };
-        let exponential_stability_pred = predicate!{ lyapunov <= 0.0 };
+        let exponential_stability_pred = predicate! { lyapunov <= 0.0 };
 
         // After creating the predicates, use the logical operators to form a complete STL formula.
         // "For all simulation times, if the simulation time is greater than 110, then the plane's Z coordinate must
@@ -420,7 +466,8 @@ where
 
         // After creating all your formulas, make sure to push their evaluations into the robustness vector, like this:
         // self.latest_robustness_vec.push(evaluate(&trace, &min_z_formula).unwrap());
-        self.latest_robustness_vec.push(evaluate(&trace, &contest_formula).unwrap());
+        self.latest_robustness_vec
+            .push(evaluate(&trace, &contest_formula).unwrap());
 
         // ------------------------------------------------------------------------------------------------
         // ------------------------------------- ONLY MODIFY ABOVE ----------------------------------------
@@ -473,7 +520,11 @@ where
         // state.set_latest_robustness(min_optimized_robustness);
 
         // Also, log the robustness values to a file for later analysis
-        let robustness_log_path = format!("{}/robustness_{}.csv", self.robustness_log_dir, state.executions());
+        let robustness_log_path = format!(
+            "{}/robustness_{}.csv",
+            self.robustness_log_dir,
+            state.executions()
+        );
         let log_dir = Path::new(&self.robustness_log_dir);
         create_dir_all(log_dir).expect("Unable to create robustness log directory");
 
