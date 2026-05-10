@@ -3,6 +3,15 @@
 # Run the Gazebo simulation and attach the necessary services
 # Usage: ./run_and_attach_services.sh <vehicle_type>
 
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
+
+export GZ_SIM_SYSTEM_PLUGIN_PATH=$PROJECT_ROOT/third_party/courbet_deps/ardupilot_gazebo/build:$GZ_SIM_SYSTEM_PLUGIN_PATH
+export GZ_SIM_RESOURCE_PATH=$PROJECT_ROOT/third_party/courbet_deps/ardupilot_gazebo/models:$PROJECT_ROOT/third_party/courbet_deps/ardupilot_gazebo/worlds:$GZ_SIM_RESOURCE_PATH
+export GZ_SIM_RESOURCE_PATH=$PROJECT_ROOT/third_party/courbet_deps/SITL_Models/Gazebo/models:$PROJECT_ROOT/third_party/courbet_deps/SITL_Models/Gazebo/worlds:$GZ_SIM_RESOURCE_PATH
+
+export GZ_PARTITION="courbet"
+export GZ_IP=127.0.0.1
+
 VEHICLE_TYPE=$1
 if [ -z "$VEHICLE_TYPE" ]; then
     echo "Usage: $0 <vehicle_type> [headless]"

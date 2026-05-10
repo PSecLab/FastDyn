@@ -4,6 +4,10 @@
 [submodule "third_party/courbet_deps/mavlink_headers"]
 	path = third_party/courbet_deps/mavlink_headers
 	url = https://github.com/mavlink/c_library_v2.git
+[submodule "third_party/courbet_deps/ardupilot_gazebo"]
+	path = third_party/courbet_deps/ardupilot_gazebo
+	url = https://github.com/mhcho1994/ardupilot_gazebo.git
+	branch = FastDyn
 [submodule "third_party/courbet_deps/SITL_Models"]
 	path = third_party/courbet_deps/SITL_Models
 	url = https://github.com/michaelprooney/SITL_Models.git
@@ -13,6 +17,7 @@
 [submodule "third_party/common/rumoca"]
 	path = third_party/common/rumoca
 	url = https://github.com/cognipilot/rumoca.git
+	branch = pr_fmuv3
 [submodule "third_party/common/modelica_models"]
 	path = third_party/common/modelica_models
 	url = https://github.com/cognipilot/modelica_models.git

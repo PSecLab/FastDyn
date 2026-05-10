@@ -14,13 +14,15 @@
 #include "mavlink.h"
 
 #define RING_BUFFER_SIZE 512
-#define DEFAULT_UDP_PORT 14551
+#define DEFAULT_GCS_UDP_PORT 14551
+#define DEFAULT_GPS_INPUT_UDP_PORT 14553
 #define MAX_PACKET_SIZE 1024
 #define RED   "\033[31m"
 #define RESET "\033[0m"
 
 
 static pthread_t gcs_listener_tid;
+static pthread_t gps_input_listener_tid;
 static bool gcs_listener_running = false;
 
 static struct sockaddr_in gcs_addr;
@@ -36,27 +38,40 @@ static int flight_log_fd_index = 0;
 
 fuzzed_input_t g_fuzzed_input = {0};
 
-static int fastdyn_mavlink_firmware_port(void) {
-    static int cached_port = 0;
-    if (cached_port > 0) {
-        return cached_port;
+typedef struct {
+    RingBuffer *ring_buffer;
+    uint16_t port;
+    bool updates_gcs_endpoint;
+    const char *name;
+} udp_listener_config_t;
+
+static udp_listener_config_t gcs_listener_config;
+static udp_listener_config_t gps_input_listener_config;
+
+static uint16_t udp_port_from_env(const char *name, uint16_t default_port) {
+    const char *value = getenv(name);
+    if (!value || value[0] == '\0') {
+        return default_port;
     }
 
-    const char *env = getenv("FASTDYN_MAVLINK_FIRMWARE_PORT");
-    if (env != NULL && env[0] != '\0') {
-        char *end = NULL;
-        errno = 0;
-        long value = strtol(env, &end, 10);
-        if (errno == 0 && end != env && *end == '\0' && value > 0 && value <= 65535) {
-            cached_port = (int)value;
-            return cached_port;
-        }
-        fprintf(stderr, "Invalid FASTDYN_MAVLINK_FIRMWARE_PORT=%s, using %d\n",
-                env, DEFAULT_UDP_PORT);
+    char *end = NULL;
+    errno = 0;
+    long port = strtol(value, &end, 10);
+    if (errno != 0 || *end != '\0' || port <= 0 || port > 65535) {
+        fprintf(stderr, "Invalid %s=%s, using default port %u\n",
+                name, value, default_port);
+        return default_port;
     }
 
-    cached_port = DEFAULT_UDP_PORT;
-    return cached_port;
+    return (uint16_t)port;
+}
+
+static uint16_t gcs_udp_port(void) {
+    const char *mavlink_in = getenv("MAVLINK_IN_PORT");
+    if (mavlink_in && mavlink_in[0] != '\0') {
+        return udp_port_from_env("MAVLINK_IN_PORT", DEFAULT_GCS_UDP_PORT);
+    }
+    return udp_port_from_env("FASTDYN_MAVLINK_FIRMWARE_PORT", DEFAULT_GCS_UDP_PORT);
 }
 
 void print_fuzzed_input(const fuzzed_input_t* input) {
@@ -123,12 +138,14 @@ void sigint_handler(int sig) {
     printf("[Main] Closing all flight log file descriptors...\n");
     close_all_flight_log_fds();
     printf("[Main] Flight log file descriptors closed.\n");
-    printf("[Main] Sending cancellation request to GCS listener thread...\n");
+    printf("[Main] Sending cancellation request to MAVLink listener threads...\n");
     pthread_cancel(gcs_listener_tid);
+    pthread_cancel(gps_input_listener_tid);
     pthread_join(gcs_listener_tid, NULL);
+    pthread_join(gps_input_listener_tid, NULL);
     gcs_listener_running = false;
     print_fuzzed_input(&g_fuzzed_input);
-    printf("[Main] GCS listener thread joined. Exiting.\n");
+    printf("[Main] MAVLink listener threads joined. Exiting.\n");
     exit(0);
 }
 
@@ -184,8 +201,9 @@ void mavlink_input_byte(uint8_t c) {
 }
 
 // UDP listener process
-static void* gcs_listener(void *rb) {
-    RingBuffer * ring_buffer = (RingBuffer *)rb;
+static void* udp_listener(void *arg) {
+    udp_listener_config_t *config = (udp_listener_config_t *)arg;
+    RingBuffer * ring_buffer = config->ring_buffer;
 
     int sockfd;
     struct sockaddr_in servaddr, cliaddr;
@@ -199,8 +217,7 @@ static void* gcs_listener(void *rb) {
     memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = INADDR_ANY;
-    int udp_port = fastdyn_mavlink_firmware_port();
-    servaddr.sin_port = htons(udp_port);
+    servaddr.sin_port = htons(config->port);
 
     if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
         perror("bind failed");
@@ -208,7 +225,8 @@ static void* gcs_listener(void *rb) {
         exit(EXIT_FAILURE);
     }
 
-    printf("[GCSReceiver]: Listening for incoming data on UDP port %d...\n", udp_port);
+    printf("[%s]: Listening for incoming data on UDP port %u...\n",
+           config->name, config->port);
 
     while (1) {
         socklen_t len = sizeof(cliaddr);
@@ -229,7 +247,7 @@ static void* gcs_listener(void *rb) {
         // fprintf(stderr, "[GCSReceiver]: Received %zd bytes from %s:%d\n", n,
         //         inet_ntoa(cliaddr.sin_addr), ntohs(cliaddr.sin_port));
 
-        if (!send_sockfd_initialized) {
+        if (config->updates_gcs_endpoint && !send_sockfd_initialized) {
             send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
             if (send_sockfd < 0) {
                 perror("send socket creation failed");
@@ -284,7 +302,21 @@ void start_gcs_listener(RingBuffer *rb) {
         exit(EXIT_FAILURE);
     }
 
-    pthread_create(&gcs_listener_tid, NULL, gcs_listener, (void *)rb);
+    gcs_listener_config = (udp_listener_config_t) {
+        .ring_buffer = rb,
+        .port = gcs_udp_port(),
+        .updates_gcs_endpoint = true,
+        .name = "GCSReceiver"
+    };
+    gps_input_listener_config = (udp_listener_config_t) {
+        .ring_buffer = rb,
+        .port = udp_port_from_env("GPS_INPUT_PORT", DEFAULT_GPS_INPUT_UDP_PORT),
+        .updates_gcs_endpoint = false,
+        .name = "GPSInputReceiver"
+    };
+
+    pthread_create(&gcs_listener_tid, NULL, udp_listener, (void *)&gcs_listener_config);
+    pthread_create(&gps_input_listener_tid, NULL, udp_listener, (void *)&gps_input_listener_config);
 
     gcs_listener_running = true;
 }
@@ -382,7 +414,7 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
     uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
 
-    // Send over the global UDP socket to the configured GCS listener port.
+    // Send over the global UDP socket to the dedicated GPS_INPUT port.
     if (!gps_input_sockfd_initialized) {
         gps_input_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
         if (gps_input_sockfd < 0) {
@@ -392,7 +424,7 @@ void send_mavlink_gps_input(uint8_t system_id, uint8_t component_id, const gps_i
 
         memset(&gps_input_addr, 0, sizeof(gps_input_addr));
         gps_input_addr.sin_family = AF_INET;
-        gps_input_addr.sin_port = htons(fastdyn_mavlink_firmware_port());
+        gps_input_addr.sin_port = htons(udp_port_from_env("GPS_INPUT_PORT", DEFAULT_GPS_INPUT_UDP_PORT));
         gps_input_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
         gps_input_sockfd_initialized = true;
