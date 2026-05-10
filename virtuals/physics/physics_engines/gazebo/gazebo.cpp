@@ -332,7 +332,12 @@ static int get_imu_batch(imu_batch_t *imu_batch) {
     //     return 0;
     // }
     // imu_batch->count = count; non existing field
-    for (int i = 0; i < count; i++) {
+    int samples_to_copy = count;
+    if (samples_to_copy > 17) {
+        samples_to_copy = 17;
+    }
+
+    for (int i = 0; i < samples_to_copy; i++) {
         if (!std::getline(ss, line)) {
             return 0;
         }
@@ -362,6 +367,10 @@ static int get_imu_batch(imu_batch_t *imu_batch) {
         if (!std::getline(line_ss, value, ',')) return 0;
         auto [gyro_z, ec6] = std::from_chars(value.data(), value.data() + value.size(), imu_batch->imu[i].gyro.z);
         if (ec6 != std::errc()) return 0;
+    }
+
+    for (int i = samples_to_copy; i < 17; i++) {
+        imu_batch->imu[i] = imu_batch->imu[samples_to_copy - 1];
     }
 
     // debug print out the first

@@ -6,7 +6,8 @@
 	url = https://github.com/mavlink/c_library_v2.git
 [submodule "third_party/courbet_deps/ardupilot_gazebo"]
 	path = third_party/courbet_deps/ardupilot_gazebo
-	url = https://github.com/ArduPilot/ardupilot_gazebo.git
+	url = https://github.com/mhcho1994/ardupilot_gazebo.git
+	branch = FastDyn
 [submodule "third_party/courbet_deps/SITL_Models"]
 	path = third_party/courbet_deps/SITL_Models
 	url = https://github.com/michaelprooney/SITL_Models.git
