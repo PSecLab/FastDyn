@@ -13,13 +13,13 @@ import logging
 from .utils import helper
 from . import timing
 
-from . import fastdyn_log as fastdyn_log_conf
 from .utils import parse_config as parse_helper
 
 from fastdyn.introspect.introspect import *
 
 from .machine import VirtualInstruction
 
+from . import fastdyn_log as fastdyn_log_conf
 log = logging.getLogger(__name__)
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
@@ -250,13 +250,13 @@ class CPU:
 
     def update_cpu_param(self, param, val):
         if not hasattr(self, param):
-            print(f"Unknown CPUConfig field: {param}")
+            fastdyn_log.error(f"Unknown CPUConfig field: {param}")
             return False
         try:
             setattr(self, param, val)
             return True
         except (AttributeError, TypeError, ValueError) as e:
-            print(f"Unable to set '{param}' to {val!r}: {e}")
+            fastdyn_log.error(f"Unable to set '{param}' to {val!r}: {e}")
             return False
 
     def add_introspection(self):
@@ -264,7 +264,7 @@ class CPU:
         if self.introspect:
             schema_content = introspect_rtos(self, self.binary)
 
-        print(schema_content)
+        fastdyn_log.info(f"Introspection Schema:\n{schema_content}")
 
         return schema_content
 

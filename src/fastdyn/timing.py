@@ -9,7 +9,11 @@ from pathlib import Path
 import sys
 import time
 from typing import Iterator
+import logging
 
+from . import fastdyn_log as fastdyn_log_conf
+log = logging.getLogger(__name__)
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 _FALSE_VALUES = {"0", "false", "off", "no", "disabled"}
 
@@ -101,7 +105,7 @@ def mark(phase: str, *, echo: bool = False, **fields: object) -> None:
 
     if echo and echo_enabled():
         suffix = " ".join(f"{key}={value}" for key, value in fields.items())
-        print(f"[timing] {process_name()}:{phase}" + (f" {suffix}" if suffix else ""), flush=True)
+        fastdyn_log.info(f"[timing] {process_name()}:{phase}" + (f" {suffix}" if suffix else ""))
 
 
 @contextmanager
@@ -150,4 +154,4 @@ def phase(name: str, *, echo: bool = True, **fields: object) -> Iterator[None]:
         _write(end_record)
 
         if echo and echo_enabled():
-            print(f"[timing] {process_name()}:{name} {duration_s:.3f}s {status}", flush=True)
+            fastdyn_log.info(f"[timing] {process_name()}:{name} {duration_s:.3f}s {status}")

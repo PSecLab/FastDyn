@@ -145,7 +145,7 @@ fastdyn_setup_qemu_build() {
   if [[ ! -f "$qemu_root/build/build.ninja" ]]; then
     (cd "$qemu_root/build" && ../configure --target-list=arm-softmmu --enable-plugins) || return
   fi
-  make -C "$qemu_root/build" qemu-system-arm || return
+  make -C "$qemu_root/build" -j"$(nproc)" qemu-system-arm || return
 }
 
 fastdyn_setup_cjson() {

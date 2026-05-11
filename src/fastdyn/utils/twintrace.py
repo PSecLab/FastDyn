@@ -153,14 +153,14 @@ def convert(in_path, out_path, *, only_model=None,
         fout.write(HDR_STRUCT.pack(MAGIC, VERSION, RECORD_SIZE, count))
 
     if only_model:
-        print(f"[+] Filter:  model == [{only_model}]")
+        fastdyn_log.info(f"[+] Filter:  model == [{only_model}]")
     if target_ranges is not None:
         ranges_str = ", ".join(f"0x{s:x}-0x{e:x}" for s, e in target_ranges)
-        print(f"[+] Filter:  addr in [{ranges_str}]")
+        fastdyn_log.info(f"[+] Filter:  addr in [{ranges_str}]")
     if target_irqs is not None:
         irqs_str = ", ".join(str(i) for i in sorted(target_irqs_set))
-        print(f"[+] Filter:  irq in [{irqs_str}]")
-    print(f"[+] Wrote:   {count} records (from {matched} parsed lines)")
+        fastdyn_log.info(f"[+] Filter:  irq in [{irqs_str}]")
+    fastdyn_log.info(f"[+] Wrote:   {count} records (from {matched} parsed lines)")
     # print(f"[+] Wrote:   {count} records")
     # print(f"[+] Skipped: {skipped} non-matching lines")
     # print(f"[+] Record size: {RECORD_SIZE} bytes")
@@ -172,7 +172,7 @@ def replay_binary_verifier(replay_binary):
 
     with open(replay_binary,"rb") as f:
         magic, ver, rsz, count = HDR.unpack(f.read(HDR.size))
-        print(magic, ver, rsz, count)
+        fastdyn_log.info(magic, ver, rsz, count)
         for i in range(5):
             icount, pc, addr, value, size, typ = REC.unpack(f.read(REC.size))
             if typ == 0:
@@ -185,7 +185,7 @@ def replay_binary_verifier(replay_binary):
                 tname = "IRQ_SERVED"
             else:
                 tname = f"UNK({typ})"
-            print(i, icount, hex(pc), hex(addr), hex(value), size, tname)
+            fastdyn_log.info(i, icount, hex(pc), hex(addr), hex(value), size, tname)
 
 
 def main():

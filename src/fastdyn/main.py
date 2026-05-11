@@ -1184,7 +1184,7 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
         curr_machine = fastdyn_handle.machines[machine]
         for cpu in curr_machine.cpus:
             cpu.add_virtual_instruction(anchors_lst)
-            print(cpu.virtuals)
+            fastdyn_log.info(f"Virtual Instructions for {cpu}: {cpu.virtuals}")
 
     #run all the machines requested by the user
     for idx, machine in enumerate(fastdyn_handle.machines):

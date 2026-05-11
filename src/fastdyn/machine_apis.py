@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import List, Tuple, Any, Dict, Optional
 
 from .utils import helper
+import logging
+
+log = logging.getLogger(__name__)
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 # =============================================================================
 # CPU lifecycle tools
@@ -17,13 +21,13 @@ def create_cpu() -> CPUConfig:
 
 def populate_cpu_config(cpu_config: CPUConfig, param, val):
     if not hasattr(cpu_config, param):
-        print(f"Unknown CPUConfig field: {param}")
+        fastdyn_log.error(f"Unknown CPUConfig field: {param}")
         return False
     try:
         setattr(cpu_config, param, val)
         return True
     except (AttributeError, TypeError, ValueError) as e:
-        print(f"Unable to set '{param}' to {val!r}: {e}")
+        fastdyn_log.error(f"Unable to set '{param}' to {val!r}: {e}")
         return False
 
 def machine_add_cpu(machine: Machine, cpu_config: CPUConfig) -> bool:
@@ -44,7 +48,7 @@ def add_virtual_instruction(vi: VirtualInstruction, cpu_config: CPUConfig) -> bo
     field_name = "virtuals"
 
     if not hasattr(cpu_config, field_name):
-        print(f"Unknown CPUConfig field: {field_name}")
+        fastdyn_log.error(f"Unknown CPUConfig field: {field_name}")
         return False
 
     try:
@@ -56,7 +60,7 @@ def add_virtual_instruction(vi: VirtualInstruction, cpu_config: CPUConfig) -> bo
             setattr(cpu_config, field_name, lst)
 
         if not isinstance(lst, list):
-            print(f"CPUConfig.{field_name} is not a list (got {type(lst)})")
+            fastdyn_log.error(f"CPUConfig.{field_name} is not a list (got {type(lst)})")
             return False
 
         # build: "at instruction args"
@@ -73,14 +77,14 @@ def add_virtual_instruction(vi: VirtualInstruction, cpu_config: CPUConfig) -> bo
         return True
 
     except (AttributeError, TypeError, ValueError) as e:
-        print(f"Unable to add virtual instruction {vi!r}: {e}")
+        fastdyn_log.error(f"Unable to add virtual instruction {vi!r}: {e}")
         return False
 
 def add_modifier_instruction(mod: InstructionModifier, cpu_config: CPUConfig) -> bool:
     field_name = "modifiers"
 
     if not hasattr(cpu_config, field_name):
-        print(f"Unknown CPUConfig field: {field_name}")
+        fastdyn_log.error(f"Unknown CPUConfig field: {field_name}")
         return False
 
     try:
@@ -92,7 +96,7 @@ def add_modifier_instruction(mod: InstructionModifier, cpu_config: CPUConfig) ->
             setattr(cpu_config, field_name, lst)
 
         if not isinstance(lst, list):
-            print(f"CPUConfig.{field_name} is not a list (got {type(lst)})")
+            fastdyn_log.error(f"CPUConfig.{field_name} is not a list (got {type(lst)})")
             return False
 
         # build: "at patch"
@@ -105,7 +109,7 @@ def add_modifier_instruction(mod: InstructionModifier, cpu_config: CPUConfig) ->
         return True
 
     except (AttributeError, TypeError, ValueError) as e:
-        print(f"Unable to add instruction modifier {mod!r}: {e}")
+        fastdyn_log.error(f"Unable to add instruction modifier {mod!r}: {e}")
         return False
 
 # =============================================================================
@@ -114,13 +118,13 @@ def add_modifier_instruction(mod: InstructionModifier, cpu_config: CPUConfig) ->
 
 def populate_memory_config(memory: MemoryConfig, param, val):
     if not hasattr(memory, param):
-        print(f"Unknown MemoryConfig field: {param}")
+        fastdyn_log.error(f"Unknown MemoryConfig field: {param}")
         return False
     try:
         setattr(memory, param, val)
         return True
     except (AttributeError, TypeError, ValueError) as e:
-        print(f"Unable to set '{param}' to {val!r}: {e}")
+        fastdyn_log.error(f"Unable to set '{param}' to {val!r}: {e}")
         return False
 
 # =============================================================================

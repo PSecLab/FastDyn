@@ -15,6 +15,12 @@ import sys
 import threading
 import time
 from typing import Callable, Iterator
+import logging
+
+
+from . import fastdyn_log as fastdyn_log_conf
+log = logging.getLogger(__name__)
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 try:
     import tomllib
@@ -546,7 +552,7 @@ class RuntimeProcessManager:
                 time.sleep(process.start_delay_sec)
         log.info("Running configured helper '%s': %s", process.name, _command_to_string(process.command))
         if process.ready_message:
-            print(process.ready_message, flush=True)
+            fastdyn_log.info(process.ready_message)
         command, shell = profiling.wrap_python_profile_command(
             process.command,
             name=process.name,
@@ -596,7 +602,7 @@ class RuntimeProcessManager:
         self.handles.append(RuntimeProcessHandle(process, proc))
         timing.mark(f"helper.{process.name}.pid", child_pid=proc.pid)
         if process.ready_message:
-            print(process.ready_message, flush=True)
+            fastdyn_log.info(process.ready_message)
 
     def start(self) -> None:
         with timing.phase("helpers.start", count=len(self.processes)):

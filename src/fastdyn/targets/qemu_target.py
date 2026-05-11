@@ -332,7 +332,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     if twintrace_opt == "replay":
         #create a binary for faster parsing of hardware log for the replayer
         replay_binary = os.path.join(out_path, "replay_bin.ttbin")
-        print(replay_hardware_log)
+        fastdyn_log.info(replay_hardware_log)
 
         # Decide what to put in the .ttbin based on the TOML's replay-time
         # routing. Two replay modes the framework supports (per paper §RQ2,

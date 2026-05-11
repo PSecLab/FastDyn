@@ -123,7 +123,7 @@ def diff_isr_analysis(diff_data, periph_hw, periph_em):
     else:
         if len(isr_hw) != len(isr_sw):
             fastdyn_log.warn(f"Number of ISRs by the emulated device model ({len(isr_sw)}) does not match with the hardware ({len(isr_hw)}) - Warning only (timing artifact expected)")
-        
+
         # Compare available iterations but cleanly ignore exact mismatches to prevent infinite LLM retry loops
         min_len = min(len(isr_hw), len(isr_sw))
         for isr_iter in range(min_len):
@@ -587,7 +587,7 @@ def parse_irq_file(path, periph_name, ignore_registers=None):
     current_iter = []
 
     if not os.path.exists(path):
-        print(f'IRQ trace file does not exist: {path}')
+        fastdyn_log.error(f'IRQ trace file does not exist: {path}')
         return iterations
 
     with open(path, 'r') as file:

@@ -115,11 +115,11 @@ def run(out_file, bin_path):
             if stack is not None:
                 f.write(f"0x{stack:08X}\t0x0")
     except Exception as e:
-        print("[binary_wrange.py] Couldn't open ", out_file, e)
+        fastdyn_log.error("[binary_wrange.py] Couldn't open ", out_file, e)
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python merge_writable_sections.py <firmware.elf>")
+        fastdyn_log.error("Usage: python merge_writable_sections.py <firmware.elf>")
         sys.exit(1)
-    
+
     run("fastdyn_work/bin-writable-ranges", sys.argv[1])
