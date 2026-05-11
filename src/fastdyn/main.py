@@ -1197,7 +1197,7 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
 @cli.command(
     'llm',
     help=(
-        'Sends a prompt from a work directory to the ChatGPT API and processes '
+        'Sends a prompt from a work directory to an LLM provider and processes '
         'the response. For initial_prompt.txt: extracts C code and writes the model. '
         'For revised_prompt.txt: parses SEARCH/REPLACE blocks and patches the model.'
     )
@@ -1222,7 +1222,14 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
     default='gpt-4o',
     show_default=True,
     type=str,
-    help='OpenAI model name to use.'
+    help='Model name to use.'
+)
+@click.option(
+    '--model-provider',
+    default='openai',
+    show_default=True,
+    type=click.Choice(['openai', 'ollama'], case_sensitive=False),
+    help='LLM provider backend.'
 )
 @click.option(
     '--env-file',
@@ -1236,7 +1243,7 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
     default=0.2,
     show_default=True,
     type=float,
-    help='Sampling temperature. Lower values produce more deterministic output.'
+    help='Sampling temperature. For Ollama, the default is 0.1 unless this option is explicitly set.'
 )
 @click.option(
     "--reasoning-effort",
@@ -1277,8 +1284,32 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
     show_default=True,
     help='Enable evaluation metrics logging. Writes per-call metrics to fastdyn_llm_history/metrics.jsonl.'
 )
-def llm(work_dir, output, model, env_file, temperature, reasoning_effort, stateless, compile, sdk_dir, max_retries, evaluate):
-    """Sends a prompt to the ChatGPT API and processes the response."""
+@click.option(
+    '--ollama-url',
+    default='http://127.0.0.1:11434',
+    show_default=True,
+    type=str,
+    help='Base URL for the Ollama HTTP server. Use SSH port forwarding for remote servers.'
+)
+@click.option(
+    '--ollama-num-ctx',
+    default=262144,
+    show_default=True,
+    type=int,
+    help='Ollama num_ctx option. Set to 0 to use the server/model default.'
+)
+@click.option(
+    '--ollama-timeout',
+    default=1800.0,
+    show_default=True,
+    type=float,
+    help='Timeout in seconds for non-streaming Ollama requests.'
+)
+@click.pass_context
+def llm(ctx, work_dir, output, model, model_provider, env_file, temperature,
+        reasoning_effort, stateless, compile, sdk_dir, max_retries, evaluate,
+        ollama_url, ollama_num_ctx, ollama_timeout):
+    """Sends a prompt to the selected LLM provider and processes the response."""
     from fastdyn.llm.llm_client import LLMClient, LLMClientError, load_api_key
     from fastdyn.llm.response_parser import (
         extract_c_code, parse_search_replace_blocks, ParsingError
@@ -1337,16 +1368,39 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
                 )
                 sys.exit(1)
 
-    # -- Load API key ---------------------------------------------------------
-    try:
-        api_key = load_api_key(env_file)
-    except LLMClientError as e:
-        log.error(str(e))
-        sys.exit(1)
+    model_provider = model_provider.lower()
 
     # -- Initialize LLM client ------------------------------------------------
     try:
-        client = LLMClient(api_key=api_key, model=model, temperature=temperature, reasoning_effort=reasoning_effort)
+        if model_provider == "ollama":
+            from fastdyn.llm.ollama_client import OllamaClient
+
+            if reasoning_effort and reasoning_effort != "none":
+                log.warning(
+                    "--reasoning-effort is ignored for --model-provider ollama. "
+                    "Use Ollama model configuration for reasoning controls."
+                )
+
+            temperature_source = None
+            if hasattr(ctx, "get_parameter_source"):
+                temperature_source = ctx.get_parameter_source("temperature")
+            ollama_temperature = 0.1 if str(temperature_source).endswith("DEFAULT") else temperature
+
+            client = OllamaClient(
+                model=model,
+                base_url=ollama_url,
+                temperature=ollama_temperature,
+                num_ctx=ollama_num_ctx or None,
+                timeout=ollama_timeout,
+            )
+        else:
+            api_key = load_api_key(env_file)
+            client = LLMClient(
+                api_key=api_key,
+                model=model,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+            )
     except LLMClientError as e:
         log.error(str(e))
         sys.exit(1)
@@ -1366,6 +1420,7 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         entry["iteration"] = history_iter
         entry["attempt"] = attempt_num
         entry["type"] = call_type
+        entry["model_provider"] = model_provider
         entry["reasoning_effort"] = reasoning_effort
         if extra:
             entry.update(extra)

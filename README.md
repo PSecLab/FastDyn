@@ -393,20 +393,22 @@ sudo apt-get install -y libsundials-dev pkg-config
 
 ---
 
-## LLM Integration (ChatGPT API)
+## LLM Integration
 
-FastDyn can send generated prompts directly to the OpenAI ChatGPT API, process the
-response, and write or patch the device model automatically.
+FastDyn can send generated prompts directly to an LLM provider, process the
+response, and write or patch the device model automatically. OpenAI remains the
+default provider. Ollama can be used as an optional local HTTP backend.
 
 ### Setup
 
 #### 1. Install Dependencies
 
-The `openai` and `python-dotenv` packages are required. They are included in
+The `openai` and `python-dotenv` packages are required for the default OpenAI
+provider. They are included in
 `requirements.txt`, so running `./setup.sh` or `pip install -r requirements.txt`
 will install them.
 
-#### 2. Configure Your API Key
+#### 2. Configure Your API Key for OpenAI
 
 Create a file at `~/.fastdyn.env` with your OpenAI API key:
 
@@ -423,6 +425,8 @@ export OPENAI_API_KEY=sk-your-key-here
 
 The tool checks the environment variable first, then falls back to `~/.fastdyn.env`.
 You can also specify a custom env file with `--env-file /path/to/.env`.
+
+Ollama does not require an API key.
 
 #### 3. Configure Build Paths (for `--compile`)
 
@@ -451,6 +455,23 @@ boardrunner llm -d fastdyn_work -o boardrunner/boardrunner_sdk/model/model.c --m
 
 # Disable the conversation-reset line for multi-turn context
 boardrunner llm -d fastdyn_work_adc -o model.c --no-stateless
+
+# Use Ollama through a local or SSH-forwarded HTTP endpoint
+boardrunner llm -d fastdyn_work_adc \
+  -o boardrunner/boardrunner_sdk/model/model.c \
+  --compile \
+  --model qwen3-coder-next \
+  --model-provider ollama \
+  --ollama-url http://127.0.0.1:11434 \
+  --evaluate
+```
+
+If Ollama runs on a remote GPU server, expose it locally before running
+FastDyn:
+
+```bash
+ssh -N -L 11434:127.0.0.1:11434 h100
+curl http://127.0.0.1:11434/api/tags
 ```
 
 ### Command Reference
@@ -459,23 +480,27 @@ boardrunner llm -d fastdyn_work_adc -o model.c --no-stateless
 | -------------------------------- | ----------------------------- | ----------------------------------------- |
 | `-d` / `--work-dir`              | (required)                    | Work directory with prompt files          |
 | `-o` / `--output`                | (required)                    | Model .c file path                        |
-| `--model`                        | `gpt-4o`                      | OpenAI model name                         |
+| `--model`                        | `gpt-4o`                      | Model name                                |
+| `--model-provider`               | `openai`                      | Provider backend: `openai` or `ollama`    |
 | `--env-file`                     | `~/.fastdyn.env`              | Path to .env file with API key            |
 | `--temperature`                  | `0.2`                         | Sampling temperature                      |
 | `--stateless` / `--no-stateless` | `--stateless`                 | Keep or strip the conversation reset line |
 | `--compile` / `--no-compile`     | `--no-compile`                | Compile model after writing               |
 | `--sdk-dir`                      | `boardrunner/boardrunner_sdk` | Path to boardrunner SDK                   |
 | `--max-retries`                  | `1`                           | Max retry attempts on failure             |
+| `--ollama-url`                   | `http://127.0.0.1:11434`      | Ollama server base URL                    |
+| `--ollama-num-ctx`               | `262144`                      | Ollama `num_ctx`; use `0` for default     |
+| `--ollama-timeout`               | `1800`                        | Ollama request timeout in seconds         |
 
 ### How It Works
 
-1. **Initial prompt** (`initial_prompt.txt`): The tool sends the prompt to ChatGPT,
-   extracts the C code from the fenced code block in the response, and writes it to
-   the output file.
+1. **Initial prompt** (`initial_prompt.txt`): The tool sends the prompt to the
+   selected LLM provider, extracts the C code from the fenced code block in the
+   response, and writes it to the output file.
 
-2. **Revised prompt** (`revised_prompt.txt`): The tool sends the prompt to ChatGPT,
-   parses SEARCH/REPLACE blocks from the response, and applies them as patches to
-   the existing model file.
+2. **Revised prompt** (`revised_prompt.txt`): The tool sends the prompt to the
+   selected LLM provider, parses SEARCH/REPLACE blocks from the response, and
+   applies them as patches to the existing model file.
 
 3. **On failure**: If a patch fails or compilation fails, the tool prompts you to
    send a follow-up request to the LLM with the error context for automatic correction.
