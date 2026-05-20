@@ -32,6 +32,9 @@
 
 #include "introspection/inspct.h"
 
+#include <sys/mman.h>
+#include <fcntl.h>
+
 // External dependencies from core.c
 extern AddressList addressLists[];
 extern size_t listCount;
@@ -39,7 +42,7 @@ extern uint32_t qemu_get_register(int reg);
 extern void qemu_set_register(uint32_t value, int reg);
 
 // Global to track last sim time from QEMU
-_Atomic int64_t last_sim_time_ns = 0;
+_Atomic int64_t * last_sim_time_ns = NULL;
 static uint64_t periodic_irq_period_ns = 1000000ULL;
 
 //TODO: remove this.
@@ -105,6 +108,25 @@ void raiseirq(unsigned int cpu_index, void *udata) {
     qemu_plugin_raise_irq(num, false);
 }
 
+/**
+ * Create a shared memory region holding the latest sim time so external processes,
+ * like simulation observers, can read it. Also initializes the sim time to 0.
+ * Returns 0 on success, -1 on failure.
+ */
+int shared_sim_time_init() {
+
+    int fd = shm_open("/last_sim_time_ns", O_CREAT | O_RDWR, 0666);
+    ftruncate(fd, sizeof(_Atomic int64_t));
+    last_sim_time_ns = (_Atomic int64_t *) mmap(0, sizeof(_Atomic int64_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (!last_sim_time_ns) {
+        return -1;
+    }
+
+    atomic_store(last_sim_time_ns, 0);
+    close(fd);
+    return 0;
+}
+
 void kick_irq(void *opaque) {
     int irq_num = *((int *)opaque);
 
@@ -121,7 +143,8 @@ void kick_irq(void *opaque) {
     }
 
     // Keep the legacy async catch-up path informed for other physics backends.
-    atomic_store(&last_sim_time_ns, sim_time_ns);
+    atomic_store(last_sim_time_ns, sim_time_ns);
+
     // // TODO:
     // static bool physics_initialized = false;
     // if (!physics_initialized) {
@@ -608,6 +631,10 @@ int virtuals_init(int argc, char **argv, const char *schema_path) {
 		if ((status = inspct_init(argc, argv, schema_path)) < 0)
 				utils_warn("Introspection failed");
 #if ENABLE_PHY
+        // It is ok to conditonally initialize here since sim_time is only used when PHY is enabled
+		if ((status = shared_sim_time_init() < 0)) {
+                utils_warn("Shared simulation time initialization failed");
+        }
 		if ((status = phy_init(argc, argv)) < 0)
 				utils_warn("Physics Engine failed");
 #endif

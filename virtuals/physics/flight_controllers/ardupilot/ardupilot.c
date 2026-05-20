@@ -40,7 +40,7 @@ static void catch_up(void *opaque)
 
     while (1)
     {
-        int64_t sim_ns = atomic_load(&last_sim_time_ns);
+        int64_t sim_ns = atomic_load(last_sim_time_ns);
 // #if ENABLE_LIBFUZZ
 //         if (!fuzz_is_running())
 //         {
