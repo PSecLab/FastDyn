@@ -18,7 +18,7 @@
 0x8083cd0 gcs_send_text
 0x808b908 gcs_send_banner_once *
 0x803fca0 gcs_read *
-0x803fcc0 gcs_bytes_available *
+0x803fcc0 uart_bytes_available *
 0x8085038 gcs_send_mavlink_message *
 0x815158a raise_periodic_irq 66
 0x80326b2 gps_get_type_mavlink

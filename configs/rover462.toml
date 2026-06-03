@@ -43,6 +43,7 @@ semihosting_config = "enable=on,target=native"
 coverage=true
 finline='None'
 print_command = true          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
+reset_memory_files = true     # clear file-backed RAM before QEMU starts to avoid stale SRAM across runs
 
 [CPU]
 [[CPU.cpu0]]

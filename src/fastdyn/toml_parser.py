@@ -44,6 +44,7 @@ def parser(out_dir, machine_name, toml_config, svd_path):
     if isinstance(q.finline, str) and q.finline.strip().lower() == "none":
         q.finline = None
     q.print_command       = toml_parser.machine_info.get("print_command", False)
+    q.reset_memory_files  = toml_parser.machine_info.get("reset_memory_files", False)
 
     #add cmsis svd if Platform name provided by the user
     if toml_parser.machine_info.get("platform") is not None:

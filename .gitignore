@@ -26,3 +26,12 @@ boardrunner/boardrunner_sdk/build_api_tests_standalone/
 
 # LLM outputs
 fastdyn_llm_history
+
+# Mavlink Logs
+*.tlog
+*.tlog.raw
+*.ulog
+*.parm
+
+# Local run output
+*.out

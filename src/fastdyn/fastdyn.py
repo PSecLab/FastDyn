@@ -68,6 +68,7 @@ class QemuTargetOpts:
         self.monitor_port: Optional[int] = 5555
         self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
         self.print_command = False
+        self.reset_memory_files = False
 
 class Machine:
     def __init__(self, machine_name, platform_name):

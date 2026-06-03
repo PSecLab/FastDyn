@@ -92,8 +92,24 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:virtuals/physics/physics_engines/gazebo/
 Now go back to the Fastdyn directory and build Fastdyn itself:
 
 ```bash
-cd ../../../
-make
+cd ../../../../..
+make -j$(nproc)
+```
+
+Then build the Courbet Gazebo `services` binary:
+
+```bash
+cd virtuals/physics/flight_controllers/courbet/gazebo
+mkdir -p build
+cd build
+cmake ..
+make -j$(nproc)
+```
+
+Now go back to the Fastdyn directory:
+
+```bash
+cd ../../../../../..
 ```
 
 ### Setting up SITL Models
@@ -133,10 +149,10 @@ Then build it in place:
 
 ```bash
 cd third_party/courbet_deps/ardupilot_gazebo
-mkdir -p build
-cd build
-cmake ..
-make
+export GZ_VERSION=harmonic
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
+make -j$(nproc)
 ```
 
 
@@ -145,7 +161,7 @@ make
 Start up Gazebo with the desired world file, for example:
 
 ```bash
-cd Fastdyn/virtuals/physics/flight_controllers/courbet/gazebo
+cd FastDyn/virtuals/physics/flight_controllers/courbet/gazebo
 ./run_and_attach_services.sh rover
 ```
 

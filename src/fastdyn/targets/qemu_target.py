@@ -93,6 +93,37 @@ def _build_qemu_env(qemu_cmd):
 
     return env
 
+def _reset_file_memory_backends(machine):
+    """
+    Clear persistent file-backed RAM images before launching QEMU.
+
+    QEMU's memory-backend-file maps the given file as RAM. If that file is
+    reused, stale bytes from a previous firmware run can survive into the next
+    boot. Truncating keeps the configured path but lets QEMU grow a fresh image.
+    """
+    if not getattr(machine.qemu_target_opts, "reset_memory_files", False):
+        return
+
+    for memory in (machine.memories or {}).values():
+        if getattr(getattr(memory, "memory_backend", None), "name", None) != "FILE":
+            continue
+
+        memory_file = getattr(memory, "memory_file", "")
+        if not memory_file:
+            continue
+
+        memory_dir = os.path.dirname(memory_file)
+        if memory_dir:
+            os.makedirs(memory_dir, exist_ok=True)
+
+        try:
+            with open(memory_file, "wb"):
+                pass
+        except OSError as exc:
+            raise RuntimeError(f"Unable to reset memory backend file {memory_file!r}: {exc}") from exc
+
+        fastdyn_log.info(f"Reset file-backed memory image: {memory_file}")
+
 def build_qemu_cmd(machine, dev_config_path, out_path):
     """
     Builds the full qemu command from machine + qemu_target_opts.
@@ -393,6 +424,7 @@ def setup_qemu(machine, work_dir=None):
     """
     Prepares output dir, writes device config, returns QEMU and GDB commands.
     """
+    _reset_file_memory_backends(machine)
     dev_config_path = helper.write_dev_config_json(output_dir=work_dir, data=machine.parsed_device)
 
     qemu_cmd, gdb_cmd, launch_gdb, binary = build_qemu_cmd(machine, dev_config_path, work_dir)
