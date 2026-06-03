@@ -25,9 +25,19 @@
     .section  .text.Reset_Handler
   .weak  Reset_Handler
   .type  Reset_Handler, %function
-Reset_Handler: 
-  ldr   sp, =_estack       
+Reset_Handler:
+  ldr   sp, =_estack
 
+  @ Enable the FPU (CPACR @ 0xE000ED88 |= CP10/CP11 full access). This firmware
+  @ is built -mfloat-abi=hard but has no SystemInit, and the analysis harness
+  @ jumps directly into FP functions; without this the first FP instruction
+  @ faults to the default handler (infinite loop).
+  ldr r0, =0xE000ED88
+  ldr r1, [r0]
+  orr r1, r1, #(0xF << 20)
+  str r1, [r0]
+  dsb
+  isb
 
   ldr r0, =_sdata
   ldr r1, =_edata

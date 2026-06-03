@@ -5,15 +5,16 @@
 # - Includes syscalls.c to satisfy newlib (_sbrk, _write, ...), so you don't get undefined symbol _sbrk
 
 # ---------------- Toolchain / paths ----------------
-TOOLCHAIN := /home/zzhong/proj/bind/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi
+TOOLCHAIN := /home/zhong/proj/bind/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi
 
 CC        := clang
 CXX       := clang++
-LLVM_LINK := llvm-link
-LLVM_DIS  := llvm-dis
-LLC       := llc
+LLVM_LINK := llvm-link-14
+LLVM_DIS  := llvm-dis-14
+LLC       := llc-14
 
-BIN       := RTOSDemo.axf
+# BIN       := RTOSDemo.axf
+BIN       := RunningAverage.axf
 BUILD_DIR := build
 
 # Adjust these if needed:
@@ -28,7 +29,9 @@ GCCLIB             := $(TOOLCHAIN)/lib/gcc/arm-none-eabi/13.3.1/thumb/v7-m/nofp
 SYSLIB             := $(TOOLCHAIN)/arm-none-eabi/lib/thumb/v7-m/nofp
 
 # ---------------- Sources ----------------
-CPP_SOURCES := main.cpp RunningAverage.cpp Adafruit_AHRS_Madgwick.cpp Adafruit_AHRS_Mahony.cpp arduino_sensorkit.cpp ardupilot.cpp cleanflight.cpp ntc_thermistor.cpp paparazzi.cpp pathtracing.cpp
+# CPP_SOURCES := main.cpp RunningAverage.cpp Adafruit_AHRS_Madgwick.cpp Adafruit_AHRS_Mahony.cpp arduino_sensorkit.cpp ardupilot.cpp cleanflight.cpp ntc_thermistor.cpp paparazzi.cpp pathtracing.cpp
+# CPP_SOURCES := main.cpp arduino_sensorkit.cpp
+CPP_SOURCES := main.cpp RunningAverage.cpp
 C_SOURCES   := syscalls.c
 ASM_SOURCES := startup.s
 
@@ -58,7 +61,7 @@ INCLUDE_DIRS += -I$(HAL_INSTALL)/Inc
 
 # ---------------- Compile flags ----------------
 # Keep -flto=thin so .o contains LLVM bitcode; llvm-link can consume them.
-COMMON_CFLAGS := $(ARCH_FLAGS) $(DEFS) $(INCLUDE_DIRS) -O0 -g -flto=thin -ffreestanding
+COMMON_CFLAGS := $(ARCH_FLAGS) $(DEFS) $(INCLUDE_DIRS) -Os -g -flto=thin -ffreestanding
 
 CFLAGS   := $(COMMON_CFLAGS)
 CXXFLAGS := $(COMMON_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit
