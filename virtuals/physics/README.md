@@ -18,9 +18,9 @@ OPTIFUZZ has several dependencies and requires a specific setup to build and run
 $PWD/
  |-- optifuzz_ws/
     |-- qemu/
-    |-- courbet/
-    |-- SITL_Models/
+    |-- FastDyn/
     |-- ArduPilot/
+    |-- libhw/
 ```
 
 ### Our QEMU Fork
@@ -55,7 +55,7 @@ touch qemu/ws/memory/my_m4_ram3
 Pull down the courbet repository linked in the open science section.
 
 ```bash
-cd courbet
+cd Fastdyn
 ```
 
 Ensure the Makefile looks like this:
@@ -66,8 +66,8 @@ libhw_path   ?= ../libhw
 LIBGZ        ?= true
 LIBHW        ?= false
 LIBFUZZ		 ?= false
-DEV          ?= false
-DEBUG_PRINT  ?= false
+DEV          ?= true    #enable this to get the io trace
+DEBUG_PRINT  ?= true
 LIBPY        ?= false
 ```
 
@@ -76,7 +76,7 @@ LIBPY        ?= false
 Then build the courbet gazebo plugins and library:
 
 ```bash
-cd courbet/courbet/gazebo
+cd virtuals/physics/physics_engines/gazebo
 mkdir build
 cd build
 cmake ..
@@ -85,10 +85,14 @@ make
 
 Ensure you go to the `libgz_wrapper.so` and add it to your `LD_LIBRARY_PATH`.
 
-Now go back to the courbet directory and build courbet itself:
+```bash
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:virtuals/physics/physics_engines/gazebo/build/lib/
+```
+
+Now go back to the Fastdyn directory and build Fastdyn itself:
 
 ```bash
-cd ../..
+cd ../../../
 make
 ```
 
@@ -105,7 +109,7 @@ sudo apt-get update
 sudo apt-get install gz-harmonic
 ```
 
-All of the gazebo models are in the `SITL_Models` directory. You will also need to install the [ArduPilot Gazebo Plugins](https://github.com/ArduPilot/ardupilot_gazebo) and the [waves simulator](https://github.com/srmainwaring/asv_wave_sim/tree/master) if you plan on testing the boat or sub  if you have not already.
+All of the gazebo models are in `third_party/courbet_deps/SITL_Models`. You will also need the ArduPilot Gazebo plugins in `third_party/courbet_deps/ardupilot_gazebo` and the [waves simulator](https://github.com/srmainwaring/asv_wave_sim/tree/master) if you plan on testing the boat or sub if you have not already.
 
 ### Setting up ArduPilot
 First, clone the ArduPilot repository:
@@ -120,27 +124,42 @@ https://ardupilot.org/dev/docs/setting-up-sitl-on-linux.html
 
 All you need is to be able to run mavproxy with the map and console for our COURBET setup.
 
+### Setting up Ardupilot-Gazebo Plugins
 
-## Running Courbet independently of OPTIFUZZ
+```bash
+git submodule update --init third_party/courbet_deps/ardupilot_gazebo
+```
+Then build it in place:
+
+```bash
+cd third_party/courbet_deps/ardupilot_gazebo
+mkdir -p build
+cd build
+cmake ..
+make
+```
+
+
+## Running FastDyn independently of OPTIFUZZ
 
 Start up Gazebo with the desired world file, for example:
 
 ```bash
-cd courbet/courbet/gazebo
+cd Fastdyn/virtuals/physics/flight_controllers/courbet/gazebo
 ./run_and_attach_services.sh rover
 ```
 
 Run MAVProxy with the appropriate parameters:
 
 ```bash
-cd courbet/courbet/mavproxy
+cd FastDyn/virtuals/physics/flight_controllers/courbet/mavlink
 ./run_mavproxy.sh
 ```
 
-Then finally run your desired COURBET QEMU script that can be found in the `courbet/courbet/scripts` directory.
+Then finally run FastDyn using the TOML config for the desired vehicle.
 
 ```bash
-bash ../roverv462.sh
+fastdyn run -c configs/rover462.toml
 ```
 
 

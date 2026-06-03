@@ -60,6 +60,7 @@ class QemuTargetOpts:
         self.finline: Optional[str] = None
         self.coverage: bool = False
         self.enable_gdb: bool = False
+        self.gdb_port: int = 1234
         self.stop_on_start: bool = False
         self.launch_gdb: bool = False
         self.semihosting: bool = True
@@ -171,6 +172,9 @@ class CPU:
 
         self.plugin_library: Optional[str] = "build/libfastdyn.so"
         self.monitor_elf: Optional[str] = None
+        self.symbol_file: Optional[str] = None
+        self.optifuzz: bool = False
+        self.loader_addr: Optional[Union[int, str]] = None
 
         self.log_file: Optional[str] = "qemu.log"
         self.log_options: Optional[str] = "in_asm,op"

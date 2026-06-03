@@ -3,18 +3,18 @@
 qemu_path    ?= ../qemu
 libhw_path   ?= ../libhw
 aflnet_path  ?= ../aflnet
-LIBGZ        ?= false
+LIBGZ        ?= true
 LIBHW        ?= false
 LIBFUZZ		 ?= false
 AFLNET 		 ?= false
-DEV          ?= false
-DEBUG_PRINT  ?= false
+DEV          ?= true	#enable this to get the io trace
+DEBUG_PRINT  ?= true
 LIBPY        ?= false
 SUNDIALS     ?= false
 BOARD_RUNNER ?= false
-PHY			?= false
+PHY			?= true
 FMU			?= false
-FLIGHT_CONTROLLERS ?= false
+FLIGHT_CONTROLLERS ?= true
 
 # Top-level target: clean, configure with meson, then build with ninja
 all: setup

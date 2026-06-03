@@ -10,3 +10,6 @@
 [submodule "third_party/common/cmsis-svd-data"]
 	path = third_party/common/cmsis-svd-data
 	url = https://github.com/cmsis-svd/cmsis-svd-data.git
+[submodule "third_party/courbet_deps/ardupilot_gazebo"]
+	path = third_party/courbet_deps/ardupilot_gazebo
+	url = https://github.com/mhcho1994/ardupilot_gazebo.git

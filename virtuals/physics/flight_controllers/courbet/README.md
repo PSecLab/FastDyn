@@ -19,6 +19,7 @@ git clone --recurse-submodules https://github.com/PSecLab/FastDyn.git
 This will install the submodules for:
 - SITL_Models
 - MavLink Headers
+- ArduPilot Gazebo
 
 ## QEMU installation and FastDyn build
 

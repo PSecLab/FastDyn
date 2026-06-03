@@ -139,19 +139,26 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     cpu_configs = [
         "-machine", f"{cpu0.machine},memory-backend={main_mem_id}",
         "-cpu", cpu0.cpu,
-        "-kernel", cpu0.binary,
         "-qmp", f"unix:{qmp_socket},server,nowait",
         "-d", cpu0.log_options,
         "-D", qemu_log_file,
         "-monitor", f"tcp:127.0.0.1:{opts.monitor_port},server,nowait",
     ]
 
+    if getattr(cpu0, "loader_addr", None) not in (None, "", False):
+        cpu_configs.extend([
+            "-device",
+            f"loader,file={cpu0.binary},addr={cpu0.loader_addr}",
+        ])
+    else:
+        cpu_configs.extend(["-kernel", cpu0.binary])
+
     if len(cpus) > 1:
         cpu_configs.extend(["-smp", str(len(cpus))])
 
     if opts.enable_gdb:
-        log.info("GDB debugging enabled on port 1234 (-s).")
-        cpu_configs.append("-s")
+        log.info(f"GDB debugging enabled on port {opts.gdb_port}.")
+        cpu_configs.extend(["-gdb", f"tcp::{opts.gdb_port}"])
     if opts.stop_on_start:
         cpu_configs.append("-S")
 
@@ -336,6 +343,12 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"twintrace_binary={replay_binary}",
     ]
 
+    if getattr(cpu0, "symbol_file", None):
+        plugin_kv.append(f"symbols={cpu0.symbol_file}")
+
+    if getattr(cpu0, "optifuzz", False):
+        plugin_kv.append("optifuzz=1")
+
     if (introspection):
         plugin_kv.extend(introspect_plugin)
 
@@ -368,7 +381,7 @@ def get_gdb_cmd(machine, out_path):
     if launch_gdb:
         gdb_script_path = os.path.join(out_path, "gdb_init.txt")
         with open(gdb_script_path, "w") as f:
-            f.write("target remote localhost:1234\n")
+            f.write(f"target remote localhost:{opts.gdb_port}\n")
 
         if opts.launch_gdb:
             gdb_cmd = ["xterm", "-e", f"gdb-multiarch -x {gdb_script_path} {binary}"]

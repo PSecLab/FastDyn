@@ -29,6 +29,7 @@ def parser(out_dir, machine_name, toml_config, svd_path):
     q.qemu_path          = toml_parser.machine_info.get("qemu_path", "qemu-system-arm")
 
     q.enable_gdb         = toml_parser.machine_info.get("enable_gdb", False)
+    q.gdb_port           = toml_parser.machine_info.get("gdb_port", 1234)
     q.stop_on_start      = toml_parser.machine_info.get("stop_on_start", False)
     q.launch_gdb         = toml_parser.machine_info.get("launch_gdb", False)
 
@@ -40,6 +41,8 @@ def parser(out_dir, machine_name, toml_config, svd_path):
 
     q.coverage           = toml_parser.machine_info.get("coverage", False)
     q.finline            = toml_parser.machine_info.get("finline", None)
+    if isinstance(q.finline, str) and q.finline.strip().lower() == "none":
+        q.finline = None
     q.print_command       = toml_parser.machine_info.get("print_command", False)
 
     #add cmsis svd if Platform name provided by the user
@@ -68,6 +71,9 @@ def parser(out_dir, machine_name, toml_config, svd_path):
         #additional params if set by the user
         cpu_obj.plugin_library  =   curr_cpu.get('plugin_library', 'build/libfastdyn.so')
         cpu_obj.monitor_elf     =   curr_cpu.get('monitor_elf', '../ws/monitor.elf')
+        cpu_obj.symbol_file     =   curr_cpu.get('symbol_file', None)
+        cpu_obj.optifuzz        =   curr_cpu.get('optifuzz', False)
+        cpu_obj.loader_addr     =   curr_cpu.get('loader_addr', None)
 
         #symbol resolution per cpu
 		#if curr_cpu.get("map_file") is not None:
