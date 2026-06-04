@@ -24,11 +24,12 @@ import fastdyn.targets.qemu_target as qemu_target
 from fastdyn.llm.handlers import llm_history_next
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
+framework_log = fastdyn_log.getFastdynLogger()
 
 @click.group()
 @click.version_option(prog_name="Fastdyn Framework",version=__version__)
 def cli():
-    log.info('****** Fastdyn Framework {0} *******'.format(__version__ ))
+    framework_log.info('****** Fastdyn Framework {0} *******'.format(__version__ ))
 
 
 @cli.command('run',help= 'Runs the firmware on QEMU using the passed config file.')
@@ -1171,8 +1172,73 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         break
 
 
+@cli.command(
+    'static-analyze',
+    help='Run static analysis on the binary.',
+)
+@click.option(
+    '-c', '--config', required=True,
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the FastDyn TOML config file.',
+    metavar='PATH',
+)
+@click.option(
+    '--binary',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None, metavar='PATH',
+    help='Override the binary path from the config.',
+)
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None, metavar='PATH',
+    help='Override the SVD file or directory path.',
+)
+@click.option(
+    '--force',
+    is_flag=True, default=False,
+    help='Recompute artifacts even if a cache entry already exists.',
+)
+@click.option(
+    '--format',
+    type=click.Choice(['json']), default='json', show_default=True,
+    help='Output format (only json is supported currently).',
+)
+def static_analyze(config, binary, svd, force, format):
+    from fastdyn.binary.static_analyze import (
+        build_static_analyze_config,
+        run_static_analyze,
+    )
 
+    """Run static analysis on firmware and write artifacts to cache-dir."""
+    svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
+
+    fastdyn_handle = toml_parser.parser(
+        "fastdyn_static",
+        machine_name="machine0",
+        toml_config=config,
+        svd_path=svd_path,
+    )
+
+    machine = fastdyn_handle.machines.get("machine0")
+    if machine is None:
+        raise click.ClickException("Unable to create machine0 from the FastDyn config.")
+    if not machine.cpus:
+        raise click.ClickException("Static analysis requires at least one CPU in the FastDyn config.")
+
+    cpu0 = machine.cpus[0]
+    if binary is not None:
+        cpu0.binary = binary
+
+    analysis_cfg = build_static_analyze_config(
+        machine=machine,
+        cpu=cpu0,
+        config_path=config,
+        force=force,
+    )
+
+    # -- Phase A: Static analysis -------------------------------------------
+    run_static_analyze(analysis_cfg)
 
 if __name__ == "__main__":
     cli()
-

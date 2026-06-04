@@ -1,4 +1,12 @@
 # ==============================================================================
+#                               Rehosting Configuration
+# ==============================================================================
+[Rehosting]
+[Rehosting.directories]
+static_analysis_cache_dir = "./fastdyn_static_analysis"
+firmware_source_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/source_code_ardupilot/ardupilot"]
+
+# ==============================================================================
 #                              Memory Configuration
 # ==============================================================================
 [Memory]

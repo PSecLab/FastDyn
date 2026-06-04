@@ -6,7 +6,11 @@ Doxyfile.bak
 *.log
 *.egg-info
 *tmp
+
+#Fastdyn work directories
 *fastdyn_work*
+*fastdyn_static_analysis*
+
 fastdyn-env
 build
 *.bin

@@ -4,7 +4,7 @@ import tomli
 import sys
 
 from . import helper
-from typing import Optional, Dict, Any, Iterable, Tuple, Union
+from typing import Optional, Dict, Any, Tuple, Union
 import os, sys
 import re
 from .. import fastdyn_log as fastdyn_log_conf

@@ -82,6 +82,10 @@ class Machine:
 
         #optional params -- useful for svd
         self.irq_map = {}
+        self.svd_file: Optional[str] = None
+        self.svd_key: Optional[str] = None
+        self.static_analysis_cache_dir: Optional[str] = None
+        self.firmware_source_roots: list[str] = []
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
@@ -121,6 +125,30 @@ class Machine:
 
         return True
 
+    def add_rehosting_info(self, rehosting_info=None):
+        rehosting_info = rehosting_info or {}
+        rehosting_dirs = rehosting_info.get("directories", {}) or {}
+
+        firmware_source_roots = rehosting_dirs.get(
+            "firmware_source_roots",
+            rehosting_dirs.get(
+                "source_roots",
+                rehosting_dirs.get("source_code_dir"),
+            ),
+        )
+        if firmware_source_roots in (None, ""):
+            firmware_source_roots = []
+        elif not isinstance(firmware_source_roots, list):
+            firmware_source_roots = [firmware_source_roots]
+
+        self.static_analysis_cache_dir = rehosting_dirs.get(
+            "static_analysis_cache_dir",
+            "fastdyn_static",
+        )
+        self.firmware_source_roots = [str(path) for path in firmware_source_roots]
+
+        return True
+
     #TODO: Update this
     def list_devices(self):
         pass
@@ -145,6 +173,8 @@ class Machine:
             sys.exit(1)
 
         fastdyn_log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
+        self.svd_file = svd_file
+        self.svd_key = svd_key
         svd_device = parse_helper.get_svd_device(svd_file)
 
         fastdyn_log.info("Creating IRQ Map using the CMSIS SVD")
