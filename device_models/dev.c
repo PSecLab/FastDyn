@@ -124,8 +124,11 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 // Filter out QEMU internals ('g') only and we dont filter ('v)
 //It is not always injecting double interrupts every ms
     if (handler && (handler[0] == 'g')) {
+           if (probe_run) probe_check_write(pc, address, value);
            return 0;
     }
+    
+    if (probe_run) probe_check_write(pc, address, value);
     // Continue internal operation
     return 1;
 }
@@ -206,11 +209,11 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
     }
 
     if (handler && (handler[0] == 'g')) {
-        if (probe_run) probe_check_read(pc, address);
+        if (probe_run) probe_check_read(pc, address, value);
         return 0;
     }
 
-    if (probe_run) probe_check_read(pc, address);
+    if (probe_run) probe_check_read(pc, address, value);
     // Continue internal operation
     return 1;
 }

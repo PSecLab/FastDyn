@@ -71,6 +71,7 @@ class QemuTargetOpts:
         self.reset_memory_files = False
         self.probe_run = False
         self.probe_faults = None
+        self.probe_milestones = None
         self.probe_out_dir = None
 
 class Machine:
@@ -89,6 +90,7 @@ class Machine:
         self.svd_key: Optional[str] = None
         self.static_analysis_cache_dir: Optional[str] = None
         self.firmware_source_roots: list[str] = []
+        self.milestones: list[str] = []
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
@@ -153,6 +155,9 @@ class Machine:
             "modeling_dir",
             "boardrunner/boardrunner_sdk/model"
         )
+        self.milestones = rehosting_info.get("milestones", {}).get("targets", [])
+        if not isinstance(self.milestones, list):
+            self.milestones = []
 
         return True
 

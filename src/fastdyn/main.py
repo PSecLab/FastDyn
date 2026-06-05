@@ -159,6 +159,28 @@ def probe_run(config, map_file, work_dir, svd, persist_work_dir):
             if not os.path.exists(work_dir):
                 os.makedirs(work_dir)
 
+            # Resolve milestones
+            if machine.milestones:
+                milestone_addrs = []
+                symbols_path = os.path.join(cache_dir, "symbols.json")
+                if os.path.exists(symbols_path):
+                    with open(symbols_path, "r") as f:
+                        syms = json.load(f)
+                    # Create a quick dict for lookup
+                    sym_dict = {sym.get("name", ""): sym.get("address") for sym in syms}
+                    for m in machine.milestones:
+                        if m in sym_dict:
+                            addr = sym_dict[m]
+                            # Strip thumb bit
+                            addr &= ~1
+                            milestone_addrs.append(addr)
+                
+                if milestone_addrs:
+                    milestones_json = os.path.join(work_dir, "probe_milestones.json")
+                    with open(milestones_json, "w") as f:
+                        json.dump({"milestones": milestone_addrs}, f)
+                    machine.qemu_target_opts.probe_milestones = milestones_json
+
             fastdyn_handle.run(machine_name=machine_name, target="qemu", out_path=work_dir)
 
         result_path = os.path.join(work_dir, "probe_result.json")
@@ -557,6 +579,82 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
                     out_dir=work_dir,
                     no_vio=no_vio
                 )
+
+@cli.command(
+    'trace-analyze',
+    help='Combines probe-run traces and static analysis to generate an LLM prompt.'
+)
+@click.option('-c','--config',required = True, type= click.Path(resolve_path=True,exists=True),
+                        help='The Path to the config file.')
+@click.option('-o','--work-dir',default="./fastdyn_work",metavar='PATH',
+        show_default=True,
+        type=click.Path(resolve_path=True,writable=True),
+        help='Path to the work directory.')
+@click.option('--out-prompt', default="prompt.txt", help="Output file for the generated prompt.")
+def trace_analyze(config, work_dir, out_prompt):
+    import json
+    import os
+    from pathlib import Path
+
+    work_dir_path = Path(work_dir)
+    probe_result_path = work_dir_path / "probe_result.json"
+
+    if not probe_result_path.exists():
+        log.error(f"Could not find {probe_result_path}. Did you run probe-run?")
+        sys.exit(1)
+
+    with open(probe_result_path, "r") as f:
+        probe_res = json.load(f)
+
+    exit_reason = probe_res.get("exit_reason", "Unknown")
+    pc = probe_res.get("pc", "0x0")
+    bbl_trace = probe_res.get("bbl_trace", [])
+    extra_info = probe_res.get("extra_info", "")
+
+    svd_path = "third_party/common/cmsis-svd-data"
+    fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
+    machine = fastdyn_handle.machines["machine0"]
+    analysis_cfg = build_static_analyze_config(machine=machine, cpu=machine.cpus[0], config_path=config, force=False)
+    _, _, cache_dir = validate_static_analyze_cache(analysis_cfg)
+
+    symbols_path = Path(cache_dir) / "symbols.json"
+    symbols = []
+    if symbols_path.exists():
+        with open(symbols_path, "r") as f:
+            symbols = json.load(f)
+
+    def resolve_pc(addr):
+        addr_int = int(addr, 16)
+        closest_sym = None
+        closest_dist = 0xFFFFFFFF
+        for sym in symbols:
+            sym_addr = sym.get("address")
+            if sym_addr is not None:
+                if isinstance(sym_addr, str):
+                    sym_addr = int(sym_addr, 16) if sym_addr.startswith("0x") else int(sym_addr)
+                if sym_addr <= addr_int:
+                    dist = addr_int - sym_addr
+                    if dist < closest_dist:
+                        closest_dist = dist
+                        closest_sym = sym.get("name")
+        return closest_sym if closest_sym else addr
+
+    prompt = f"The firmware execution stopped due to: {exit_reason}\n"
+    prompt += f"Final PC: {pc} ({resolve_pc(pc)})\n"
+    if extra_info:
+        prompt += f"Extra context (e.g. MMIO Address or SP): {extra_info}\n"
+
+    prompt += "\nRecent Execution Trace (Basic Blocks):\n"
+    for b in bbl_trace[-50:]:  # last 50 blocks
+        prompt += f"  - {b} ({resolve_pc(b)})\n"
+
+    prompt += "\nPlease analyze the failure and suggest a fix or a device model."
+
+    out_path = work_dir_path / out_prompt
+    with open(out_path, "w") as f:
+        f.write(prompt)
+
+    log.info(f"Generated LLM prompt at {out_path}")
 
 @cli.command(
     'verifier',

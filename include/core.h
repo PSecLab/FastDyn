@@ -9,6 +9,7 @@
  * @return uint64_t The current PC.
  */
 uint64_t core_get_pc(void);
+uint64_t core_get_sp(void);
 uint64_t core_get_icount(void);
 
 /**

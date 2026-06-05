@@ -7,6 +7,8 @@ static_analysis_cache_dir = "./fastdyn_static_analysis"
 firmware_source_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/source_code_ardupilot/ardupilot"]
 modeling_dir = "/scratch/Fastdyn/ardurover_rehosting_fastdyn/FastDyn/boardrunner/boardrunner_sdk/model"
 
+[Rehosting.milestones]
+targets = ["HAL_ChibiOS::run"]
 # ==============================================================================
 #                              Memory Configuration
 # ==============================================================================
