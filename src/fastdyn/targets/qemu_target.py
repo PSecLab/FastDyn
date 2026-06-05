@@ -370,9 +370,14 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"virtual={virtuals_path}",
         f"modifier={modifiers_path}",
         f"coverage={_bool01(opts.coverage)}",
+        f"probe_run={_bool01(opts.probe_run)}",
         f"twintrace={twintrace_opt}",
         f"twintrace_binary={replay_binary}",
     ]
+    if opts.probe_faults:
+        plugin_kv.append(f"probe_faults={opts.probe_faults}")
+    if opts.probe_out_dir:
+        plugin_kv.append(f"probe_out_dir={opts.probe_out_dir}")
 
     if getattr(cpu0, "symbol_file", None):
         plugin_kv.append(f"symbols={cpu0.symbol_file}")

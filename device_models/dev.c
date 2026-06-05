@@ -6,6 +6,7 @@
 #include "models.c"
 #include "cJSON.h"
 #include <stdio.h>
+#include <probe.h>
 
 extern twintrace_mode_t twintrace_mode;
 extern const char *twintrace_bin_path;
@@ -80,6 +81,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
         utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled (Unknown Region): \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
                         sec, usec, address, size, size * 2, value, pc);
 #endif
+        if (probe_run) probe_check_unhandled_access(pc, address, 1);
         return 1; // Continue internal operation
     }
 
@@ -116,6 +118,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
                         sec, usec, address, size, size * 2, value, pc);
 #endif
         dev_debug("IO Access not handled");
+        if (probe_run) probe_check_unhandled_access(pc, address, 1);
     }
 
 // Filter out QEMU internals ('g') only and we dont filter ('v)
@@ -145,6 +148,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
             "[%5ld.%06ld] IO Read Access NOT Handled (Unknown Region): \t address=0x%08" PRIx64 ", size=%u bytes, pc=0x%08" PRIx64 "\n",
             sec, usec, (uint64_t)address, size, (uint64_t)pc);
 #endif
+        if (probe_run) probe_check_unhandled_access(pc, address, 0);
         return 1;
     }
 
@@ -198,12 +202,15 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
             sec, usec, (uint64_t)address, size, (uint64_t)pc);
 #endif
         dev_debug("IO Access not handled");
+        if (probe_run) probe_check_unhandled_access(pc, address, 0);
     }
 
     if (handler && (handler[0] == 'g')) {
+        if (probe_run) probe_check_read(pc, address);
         return 0;
     }
 
+    if (probe_run) probe_check_read(pc, address);
     // Continue internal operation
     return 1;
 }

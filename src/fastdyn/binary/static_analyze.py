@@ -21,6 +21,7 @@ from .passes import (
     symbols,
     unresolved_source_summary,
     vector_table,
+    probe_faults,
 )
 from .. import fastdyn_log as fastdyn_log_conf
 
@@ -50,6 +51,7 @@ REQUIRED_ARTIFACTS = [
     "mmio_constants.json",
     "peripheral_hint_summary.json",
     "unresolved_source_summary.json",
+    "probe_faults.json",
 ]
 
 STATIC_ANALYSIS_PASSES: list[tuple[str, str, Callable[[AnalysisContext], None]]] = [
@@ -66,6 +68,7 @@ STATIC_ANALYSIS_PASSES: list[tuple[str, str, Callable[[AnalysisContext], None]]]
     ("callgraph", "Callgraph", callgraph.run),
     ("constants", "Constants", constants.run),
     ("unresolved_source_summary", "Unresolved source summary", unresolved_source_summary.run),
+    ("probe_faults", "Probe faults", probe_faults.run),
 ]
 
 
@@ -152,6 +155,14 @@ def build_static_analyze_config(machine, cpu, config_path, force=False) -> Stati
         sram_base=_coerce_int(getattr(main, "memory_start", None), default=0x20000000),
         force=force,
     )
+
+
+def validate_static_analyze_cache(config: StaticAnalyzeConfig) -> tuple[bool, str, str]:
+    cache_dir = Path(config.cache_dir).expanduser().resolve()
+    cache_inputs = build_cache_inputs(config, REQUIRED_ARTIFACTS, PIPELINE_VERSION)
+    cache_key = build_cache_key(cache_inputs)
+    valid, reason = cache_is_valid(cache_dir, cache_key, REQUIRED_ARTIFACTS)
+    return valid, reason, str(cache_dir)
 
 
 def run_static_analyze(config: StaticAnalyzeConfig) -> str:

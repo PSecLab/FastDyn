@@ -42,6 +42,7 @@ int isdigit(int c);
 #if ENABLE_LIBPY
 #include <python.h>
 #endif
+#include <probe.h>
 
 #include <virtuals.h>  // For lookup_callback function
 #include <virtuals/virt_fuzz.h> // Coverage handling whether built with fuzzer or not
@@ -59,13 +60,14 @@ static _Atomic uint64_t g_icount = 0;
 static const char * runtime;
 
 static int coverage = 0;
+int probe_run = 0;
 
 AddressList addressLists[MAX_LISTS];
 size_t listCount = 0;
 
 twintrace_mode_t twintrace_mode = TT_OFF;
 const char *twintrace_bin_path = NULL;
-int introspection_enabled = 0;
+static int introspection_enabled = 0;
 const char *introspection_schema_path = NULL;
 
 /**
@@ -714,7 +716,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
                     }
 #endif
                     fuzz_bbl_observe((uint32_t)qemu_plugin_insn_vaddr(insn), (uint32_t)n);
-                    
+
                     qemu_plugin_u64 entry_tmp;
                     entry_tmp.offset = (size_t)&core_cc_ret.list->log_buf;
 
@@ -920,6 +922,31 @@ static const char* safe_arg(const char* s) {
     return s;
 }
 
+static void parse_probe_run_args(int argc, char **argv)
+{
+    const char *probe = safe_arg(utils_get_arg("probe_run", argc, argv));
+
+    probe_run = 0;
+    if (!probe) {
+        return;
+    }
+
+    if (!strcasecmp(probe, "true") || !strcasecmp(probe, "on") || !strcmp(probe, "1")) {
+        probe_run = 1;
+    } else if (!strcasecmp(probe, "false") || !strcasecmp(probe, "off") || !strcmp(probe, "0")) {
+        probe_run = 0;
+    } else {
+        fprintf(stderr, "fastdyn: unknown probe_run mode: '%s'\n", probe);
+        utils_die("bad probe_run mode");
+    }
+
+    if (probe_run) {
+        const char *faults = safe_arg(utils_get_arg("probe_faults", argc, argv));
+        const char *out_dir = safe_arg(utils_get_arg("probe_out_dir", argc, argv));
+        probe_init(faults, out_dir);
+    }
+}
+
 static void parse_twintrace_args(int argc, char **argv)
 {
     const char *tt  = safe_arg(utils_get_arg("twintrace", argc, argv));
@@ -960,7 +987,7 @@ static void parse_twintrace_args(int argc, char **argv)
 void parse_introspect_args(int argc, char **argv) {
     const char *intro = utils_get_arg("introspection", argc, argv);
     const char *schema = utils_get_arg("introspection_schema", argc, argv);
-    
+
     intro = safe_arg(intro);
     schema = safe_arg(schema);
 
@@ -987,7 +1014,7 @@ void parse_introspect_args(int argc, char **argv) {
 
     // Forward the parsed schema path to virtuals_init
     virtuals_init(argc, argv, introspection_schema_path);
-    
+
 }
 
 void parse_rules_file(const char *filename);
@@ -1023,7 +1050,7 @@ void parse_rules_file(const char *filename) {
             fprintf(stderr, "Max rules limit reached (%d), skipping rest\n", MAX_RULES);
             break;
         }
-        
+
         rules[rules_count].address = strtoull(addr_str, NULL, 0);
         rules[rules_count].func = cb;
 
@@ -1053,6 +1080,8 @@ static int core_parse_arguments(int argc, char ** argv) {
 	//parse args for introspection
 	//TODO: Fix this dubmass design
     parse_introspect_args(argc, argv);
+    parse_probe_run_args(argc, argv);
+
 	const char *filename= utils_get_arg("detour", argc, argv);
     if (filename) {
             num_tuples = read_tuples_from_file(filename, address_tuples, MAX_TUPLES);
@@ -1128,6 +1157,9 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         }
     #endif
 
+    if (probe_run) {
+        probe_register_hooks(id);
+    }
 
     return 0;
 }

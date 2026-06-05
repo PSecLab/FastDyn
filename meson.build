@@ -156,6 +156,7 @@ qemu_include = include_directories(
 # --- Collect all source files
 srcs += files(
   'core/core.c',
+  'core/probe.c',
   'utils/utils.c',
   'virtuals/virtuals.c',
 )

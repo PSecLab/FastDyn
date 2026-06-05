@@ -69,6 +69,9 @@ class QemuTargetOpts:
         self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
         self.print_command = False
         self.reset_memory_files = False
+        self.probe_run = False
+        self.probe_faults = None
+        self.probe_out_dir = None
 
 class Machine:
     def __init__(self, machine_name, platform_name):
@@ -146,6 +149,10 @@ class Machine:
             "fastdyn_static",
         )
         self.firmware_source_roots = [str(path) for path in firmware_source_roots]
+        self.modeling_dir = rehosting_dirs.get(
+            "modeling_dir",
+            "boardrunner/boardrunner_sdk/model"
+        )
 
         return True
 

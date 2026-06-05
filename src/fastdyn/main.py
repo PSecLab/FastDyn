@@ -8,6 +8,8 @@ import subprocess
 import signal
 import sys
 from pathlib import Path
+import json
+import shutil
 
 from . import fastdyn_log
 from fastdyn.__init__ import __version__
@@ -22,6 +24,9 @@ from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 import fastdyn.targets.qemu_target as qemu_target
 from fastdyn.llm.handlers import llm_history_next
+from fastdyn.binary.static_analyze import build_static_analyze_config, validate_static_analyze_cache
+from fastdyn.llm.compiler import compile_model
+
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
 framework_log = fastdyn_log.getFastdynLogger()
@@ -88,6 +93,155 @@ def run(config, map_file, work_dir, svd, persist_work_dir):
                            target="qemu",
                            out_path=work_dir
                            )
+
+
+@cli.command('probe-run', help='Runs the firmware on QEMU in FastDyn probe mode using the passed config file.')
+@click.option('-c','--config',required = True, type= click.Path(resolve_path=True,exists=True),
+                        help='The Path to the config file.',
+                        metavar= 'PATH')
+@click.option(
+    '-m', '--map-file', #TODO: Remove this and from the codebase, deadcode
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the symbol map file.',
+    default=None,
+    metavar='PATH'
+)
+@click.option('-o','--work-dir',default="./fastdyn_work",metavar='PATH',
+        show_default=True,
+        type=click.Path(resolve_path=True,writable=True),
+        help='Path to the work directory.')
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    metavar='PATH',
+    help='Optional path to an SVD file or directory.'
+)
+@click.option(
+    '-p', '--persist-work-dir',
+    is_flag=True,
+    default=False,
+    help='Optional Flag to persist the existing work directory.'
+)
+def probe_run(config, map_file, work_dir, svd, persist_work_dir):
+    if work_dir is None:
+        work_dir = "fastdyn_work"
+    svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
+
+    # Ensure libhw.so can be found by QEMU
+    hw_out_dir = "/scratch/Fastdyn/ardurover_rehosting_fastdyn/libhw/out"
+    if hw_out_dir not in os.environ.get("LD_LIBRARY_PATH", ""):
+        os.environ["LD_LIBRARY_PATH"] = hw_out_dir + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")
+
+    while True:
+        fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
+
+        for idx, _ in enumerate(fastdyn_handle.machines):
+            machine_name = f"machine{idx}"
+            machine = fastdyn_handle.machines[machine_name]
+            if not machine.cpus:
+                raise click.ClickException(f"{machine_name} has no CPU configured.")
+
+            analysis_cfg = build_static_analyze_config(
+                machine=machine,
+                cpu=machine.cpus[0],
+                config_path=config,
+                force=False,
+            )
+            valid, reason, cache_dir = validate_static_analyze_cache(analysis_cfg)
+            if not valid:
+                raise click.ClickException(f"probe-run requires a valid static cache. Reason: {reason}")
+
+            machine.qemu_target_opts.probe_run = True
+            machine.qemu_target_opts.probe_faults = os.path.join(cache_dir, "probe_faults.json")
+            machine.qemu_target_opts.probe_out_dir = os.path.abspath(work_dir)
+
+            if not os.path.exists(work_dir):
+                os.makedirs(work_dir)
+
+            fastdyn_handle.run(machine_name=machine_name, target="qemu", out_path=work_dir)
+
+        result_path = os.path.join(work_dir, "probe_result.json")
+        if not os.path.exists(result_path):
+            break
+
+        with open(result_path, "r") as f:
+            result = json.load(f)
+
+        reason = result.get("exit_reason", "")
+        if not reason.startswith("unhandled_mmio"):
+            log.info(f"Exited probe-run loop due to: {reason}")
+            break
+
+        addr_str = result.get("extra_info", "0")
+        addr = int(addr_str, 16) if addr_str.startswith("0x") else int(addr_str)
+
+        svd_map_path = os.path.join(cache_dir, "svd_map.json")
+        with open(svd_map_path, "r") as f:
+            svd_map = json.load(f)
+
+        peri_found = None
+        for p in svd_map.get("peripherals", []):
+            base = int(p["base_address"], 16)
+            end = int(p["end_address"], 16)
+            if base <= addr <= end:
+                peri_found = p
+                break
+
+        if not peri_found:
+            log.error(f"Address {addr_str} not found in any peripheral!")
+            break
+
+        p_name = peri_found["name"].lower()
+        p_base = peri_found["base_address"]
+        p_end = peri_found["end_address"]
+
+        modeling_dir = machine.modeling_dir
+        sdk_dir = os.path.dirname(os.path.abspath(modeling_dir))
+
+        template_code = f"""#include <stdint.h>
+#include <device.h>
+
+void* {p_name}_init(ConfigSection* model_info) {{
+    return NULL;
+}}
+
+uint64_t {p_name}_read(void *opaque, uint64_t addr, unsigned size) {{
+    return 0;
+}}
+
+void {p_name}_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {{
+    return;
+}}
+"""
+        model_file = os.path.join(modeling_dir, f"{p_name}.c")
+        if os.path.exists(model_file):
+            log.warning(f"Model file {model_file} already exists!")
+            break
+
+        with open(model_file, "w") as f:
+            f.write(template_code)
+
+        log.info(f"Generated {model_file} for peripheral {p_name}")
+
+        with open(config, "a") as f:
+            f.write(f"\n[Device.{p_name}]\n")
+            f.write(f"    ranges = [[\"{p_base}\", \"{p_end}\"]]\n")
+            f.write(f"    description = \"{peri_found['name']}\"\n")
+            f.write(f"    read_priority = \"elder\"\n")
+            f.write(f"    [[Device.{p_name}.handlers]]\n")
+            f.write(f"        model   = \"elder\"\n")
+            f.write(f"        enabled = true\n")
+            f.write(f"        scroll = \"boardrunner/boardrunner_sdk/build/{p_name}.so\"\n")
+
+        log.info(f"Appended {p_name} to config {config}")
+
+        success, out = compile_model(sdk_dir)
+        if not success:
+            log.error(f"Compilation failed: {out}")
+            break
+
+        log.info("Compilation successful, restarting QEMU...")
 
 
 @cli.command('loop', help='Like run, but restarts automatically. On a clean exit the work directory is wiped; on a crash it is preserved (--persist-work-dir) so state can be inspected.')
@@ -1050,7 +1204,6 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
     # -- Evaluation metrics setup -----------------------------------------------
     metrics_path = None
     if evaluate:
-        import json as _json
         metrics_path = os.path.join(history_dir, "metrics.jsonl")
         log.info("Evaluation mode enabled. Metrics will be written to %s", metrics_path)
 

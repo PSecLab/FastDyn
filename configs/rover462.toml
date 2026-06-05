@@ -5,6 +5,7 @@
 [Rehosting.directories]
 static_analysis_cache_dir = "./fastdyn_static_analysis"
 firmware_source_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/source_code_ardupilot/ardupilot"]
+modeling_dir = "/scratch/Fastdyn/ardurover_rehosting_fastdyn/FastDyn/boardrunner/boardrunner_sdk/model"
 
 # ==============================================================================
 #                              Memory Configuration
@@ -67,9 +68,9 @@ init_nsvtor = "0x08004000"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 introspect = false
-existing_config_path = "virtuals/physics/flight_controllers/courbet/rover462/unlabeled_conf"
+# existing_config_path = "virtuals/physics/flight_controllers/courbet/rover462/unlabeled_conf"
 symbol_file = "virtuals/physics/flight_controllers/courbet/bin/ardurover_v462"
-optifuzz = true
+optifuzz = false
 
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
@@ -102,11 +103,128 @@ logger_content = """
     # This model explicitly marks memory as unhandled.
 
 # --- Peripheral Definitions ---
-[Device.remaining_space]
-    ranges = [["0x40000000", "0x400107FF"],["0x40010C00", "0x40010FFF"], ["0x40011400", "0xE0000000"], ["0xE0000000", "0xEFFFFFFF"]]
-    irq = [['1','100']]
-    description = "Memory regions that will handled by passthrough and are not of interest for the modeling."
+[Device.scb]
+    ranges = [["0xe000ed00", "0xe000ed41"]]
+    description = "SCB"
+    read_priority = "elder"
+    [[Device.scb.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/scb.so"
 
-    [[Device.remaining_space.handlers]]
-        model = "classic"
-        enabled = false
+[Device.fpu]
+    ranges = [["0xe000ef34", "0xe000ef41"]]
+    description = "FPU"
+    read_priority = "elder"
+    [[Device.fpu.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/fpu.so"
+
+[Device.fpu_cpacr]
+    ranges = [["0xe000ed88", "0xe000ed8d"]]
+    description = "FPU_CPACR"
+    read_priority = "elder"
+    [[Device.fpu_cpacr.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/fpu_cpacr.so"
+
+[Device.rcc]
+    ranges = [["0x40023800", "0x40023c00"]]
+    description = "RCC"
+    read_priority = "elder"
+    [[Device.rcc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/rcc.so"
+
+[Device.gpioa]
+    ranges = [["0x40020000", "0x40020400"]]
+    description = "GPIOA"
+    read_priority = "elder"
+    [[Device.gpioa.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioa.so"
+
+[Device.gpiob]
+    ranges = [["0x40020400", "0x40020800"]]
+    description = "GPIOB"
+    read_priority = "elder"
+    [[Device.gpiob.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiob.so"
+
+[Device.gpioc]
+    ranges = [["0x40020800", "0x40020c00"]]
+    description = "GPIOC"
+    read_priority = "elder"
+    [[Device.gpioc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioc.so"
+
+[Device.gpiod]
+    ranges = [["0x40020c00", "0x40021000"]]
+    description = "GPIOD"
+    read_priority = "elder"
+    [[Device.gpiod.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiod.so"
+
+[Device.gpioe]
+    ranges = [["0x40021000", "0x40021400"]]
+    description = "GPIOE"
+    read_priority = "elder"
+    [[Device.gpioe.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioe.so"
+
+[Device.gpiof]
+    ranges = [["0x40021400", "0x40021800"]]
+    description = "GPIOF"
+    read_priority = "elder"
+    [[Device.gpiof.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiof.so"
+
+[Device.gpiog]
+    ranges = [["0x40021800", "0x40021c00"]]
+    description = "GPIOG"
+    read_priority = "elder"
+    [[Device.gpiog.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiog.so"
+
+[Device.gpioh]
+    ranges = [["0x40021c00", "0x40022000"]]
+    description = "GPIOH"
+    read_priority = "elder"
+    [[Device.gpioh.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioh.so"
+
+[Device.gpioi]
+    ranges = [["0x40022000", "0x40022400"]]
+    description = "GPIOI"
+    read_priority = "elder"
+    [[Device.gpioi.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioi.so"
+
+[Device.pwr]
+    ranges = [["0x40007000", "0x40007400"]]
+    description = "PWR"
+    read_priority = "elder"
+    [[Device.pwr.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/pwr.so"
