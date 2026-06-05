@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .binary_utils.artifact_io import write_json_artifact
+from .binary_utils.cache import build_cache_inputs, build_cache_key, cache_is_valid
 from .passes import (
     binary_metadata,
     callgraph,
@@ -25,6 +26,47 @@ from .. import fastdyn_log as fastdyn_log_conf
 
 
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
+
+PIPELINE_VERSION = 1
+REQUIRED_ARTIFACTS = [
+    "binary.json",
+    "sections.json",
+    "segments.json",
+    "svd_map.json",
+    "svd_summary.json",
+    "symbols.json",
+    "functions.json",
+    "compile_units.json",
+    "source_map.json",
+    "vector_table.json",
+    "irq_handlers.json",
+    "memory_map.json",
+    "firmware_identity.json",
+    "strings.json",
+    "callgraph.json",
+    "reset_path_candidates.json",
+    "constants.json",
+    "literal_pools.json",
+    "mmio_constants.json",
+    "peripheral_hint_summary.json",
+    "unresolved_source_summary.json",
+]
+
+STATIC_ANALYSIS_PASSES: list[tuple[str, str, Callable[[AnalysisContext], None]]] = [
+    ("binary_metadata", "Binary metadata", binary_metadata.run),
+    ("svd_summary", "SVD summary", svd_summary.run),
+    ("symbols", "Symbols", symbols.run),
+    ("functions", "Functions", functions.run),
+    ("compile_units", "Compile units", compile_units.run),
+    ("source_map", "Source map", source_map.run),
+    ("vector_table", "Vector table", vector_table.run),
+    ("memory_map", "Memory map", memory_map.run),
+    ("firmware_identity", "Firmware identity", firmware_identity.run),
+    ("strings", "Strings", strings.run),
+    ("callgraph", "Callgraph", callgraph.run),
+    ("constants", "Constants", constants.run),
+    ("unresolved_source_summary", "Unresolved source summary", unresolved_source_summary.run),
+]
 
 
 @dataclass
@@ -116,6 +158,16 @@ def run_static_analyze(config: StaticAnalyzeConfig) -> str:
     cache_dir = Path(config.cache_dir).expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    cache_inputs = build_cache_inputs(config, REQUIRED_ARTIFACTS, PIPELINE_VERSION)
+    cache_key = build_cache_key(cache_inputs)
+
+    if not config.force:
+        valid, reason = cache_is_valid(cache_dir, cache_key, REQUIRED_ARTIFACTS)
+        if valid:
+            fastdyn_log.info("Static analyze cache is valid: %s", cache_dir)
+            return str(cache_dir)
+        fastdyn_log.info("Static analyze cache miss: %s", reason)
+
     if config.force:
         for artifact in cache_dir.glob("*.json"):
             artifact.unlink()
@@ -132,26 +184,10 @@ def run_static_analyze(config: StaticAnalyzeConfig) -> str:
     if config.source_roots:
         fastdyn_log.info("  Source roots: %s", config.source_roots)
 
-    passes: list[tuple[str, str, Callable[[AnalysisContext], None]]] = [
-        ("binary_metadata", "Binary metadata", binary_metadata.run),
-        ("svd_summary", "SVD summary", svd_summary.run),
-        ("symbols", "Symbols", symbols.run),
-        ("functions", "Functions", functions.run),
-        ("compile_units", "Compile units", compile_units.run),
-        ("source_map", "Source map", source_map.run),
-        ("vector_table", "Vector table", vector_table.run),
-        ("memory_map", "Memory map", memory_map.run),
-        ("firmware_identity", "Firmware identity", firmware_identity.run),
-        ("strings", "Strings", strings.run),
-        ("callgraph", "Callgraph", callgraph.run),
-        ("constants", "Constants", constants.run),
-        ("unresolved_source_summary", "Unresolved source summary", unresolved_source_summary.run),
-    ]
-
-    for pass_name, pass_label, pass_fn in passes:
+    for pass_name, pass_label, pass_fn in STATIC_ANALYSIS_PASSES:
         _run_pass(context, pass_name, pass_label, pass_fn)
 
-    _write_manifest(context)
+    _write_manifest(context, cache_key, cache_inputs)
 
     fastdyn_log.info("Static analyze complete: %s", cache_dir)
     return str(cache_dir)
@@ -175,11 +211,13 @@ def _run_pass(
         }
 
 
-def _write_manifest(context: AnalysisContext) -> None:
+def _write_manifest(context: AnalysisContext, cache_key: str, cache_inputs: dict[str, Any]) -> None:
     manifest = {
         "schema_version": 1,
         "command": "fastdyn static-analyze",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "cache_key": cache_key,
+        "cache_inputs": cache_inputs,
         "config": asdict(context.config),
         "passes": context.pass_results,
         "artifacts": sorted(
