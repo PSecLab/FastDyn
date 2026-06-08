@@ -378,6 +378,8 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         plugin_kv.append(f"probe_faults={opts.probe_faults}")
     if opts.probe_milestones:
         plugin_kv.append(f"probe_milestones={opts.probe_milestones}")
+    if opts.probe_ignores:
+        plugin_kv.append(f"probe_ignores={opts.probe_ignores}")
     if opts.probe_out_dir:
         plugin_kv.append(f"probe_out_dir={opts.probe_out_dir}")
 

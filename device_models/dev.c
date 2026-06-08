@@ -123,11 +123,15 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 
 // Filter out QEMU internals ('g') only and we dont filter ('v)
 //It is not always injecting double interrupts every ms
-    if (handler && (handler[0] == 'g')) {
+// Also bypass for system-space (PPB) regions named "nvic-default" when a
+// FastDyn model handled the access. QEMU's ppb_default_write is a no-op, but
+// bypassing avoids double-dispatch and keeps parity with dev_read.
+    if (handler && ((handler[0] == 'g') ||
+                    (handled && strcmp(handler, "nvic-default") == 0))) {
            if (probe_run) probe_check_write(pc, address, value);
            return 0;
     }
-    
+
     if (probe_run) probe_check_write(pc, address, value);
     // Continue internal operation
     return 1;
@@ -208,7 +212,14 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
         if (probe_run) probe_check_unhandled_access(pc, address, 0);
     }
 
-    if (handler && (handler[0] == 'g')) {
+    // Bypass QEMU's native handler when:
+    //   1. Region name starts with 'g'  (peripheral MMIO space, existing rule), OR
+    //   2. Region is "nvic-default" AND a FastDyn model handled the read.
+    //      "nvic-default" is QEMU's catch-all RAZ region for unimplemented PPB
+    //      sub-ranges (e.g. DWT, CoreDebug). If we registered a model for one of
+    //      those addresses we must inject its value instead of QEMU's zero.
+    if (handler && ((handler[0] == 'g') ||
+                    (dev_to_use != NULL && strcmp(handler, "nvic-default") == 0))) {
         if (probe_run) probe_check_read(pc, address, value);
         return 0;
     }
@@ -307,7 +318,8 @@ void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev) {
 
     hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
     unsigned idx_start = dev_addr_to_slot(start, region_base);
-    unsigned idx_end   = dev_addr_to_slot(end, region_base);
+    // 'end' is exclusive, so the last valid address in the range is 'end - 1'.
+    unsigned idx_end   = dev_addr_to_slot(end - 1, region_base);
 
     unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
     if (idx_end >= max_slots) idx_end = max_slots - 1;
@@ -782,6 +794,10 @@ int dev_init(int argc, char ** argv) {
 		for (int i = 0; i < current_config->section_count; i++) {
 				DeviceModel * current = find_device_model(entries[i].model);
 				if (!current) {
+                        fprintf(stderr, "Could not find model: '%s'. Available models:\n", entries[i].model);
+                        for (int j = 0; j < num_devices; j++) {
+                            fprintf(stderr, " - %s\n", all_devices[j]->name);
+                        }
 						utils_die("Device Model not found.");
 				}
 				current->init(entries[i].args);

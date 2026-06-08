@@ -10,6 +10,7 @@ Doxyfile.bak
 #Fastdyn work directories
 *fastdyn_work*
 *fastdyn_static_analysis*
+*fastdyn_recent_run*
 
 fastdyn-env
 build

@@ -12,7 +12,7 @@ extern int probe_run;
  * @param milestones_json_path Path to the probe_milestones.json file (can be NULL).
  * @param out_dir Path to the output directory (where to save probe_result.json).
  */
-void probe_init(const char *faults_json_path, const char *milestones_json_path, const char *out_dir);
+void probe_init(const char *faults_json_path, const char *milestones_json_path, const char *out_dir, const char *ignores_json_path);
 
 /**
  * @brief Monitor ALL MMIO reads for polling loops.

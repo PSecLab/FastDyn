@@ -165,8 +165,8 @@ Build both the normal runtime artifacts and the opt-in API tests:
 
 ```bash
 cmake -S . -B build \
-  -DFASTDYN_INCLUDE_DIR=/path/to/FastDyn/include \
-  -DQEMU_INCLUDE_DIR=/path/to/qemu/include \
+  -DFASTDYN_INCLUDE_DIR=/scratch/Fastdyn/ardurover_rehosting_fastdyn/FastDyn/include \
+  -DQEMU_INCLUDE_DIR=/scratch/Fastdyn/ardurover_rehosting_fastdyn/qemu/include \
   -DBOARDRUNNER_BUILD_API_TESTS=ON
 
 cmake --build build -j

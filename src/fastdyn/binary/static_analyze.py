@@ -15,6 +15,7 @@ from .passes import (
     firmware_identity,
     functions,
     memory_map,
+    macros,
     source_map,
     strings,
     svd_summary,
@@ -28,7 +29,7 @@ from .. import fastdyn_log as fastdyn_log_conf
 
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
 REQUIRED_ARTIFACTS = [
     "binary.json",
     "sections.json",
@@ -52,6 +53,7 @@ REQUIRED_ARTIFACTS = [
     "peripheral_hint_summary.json",
     "unresolved_source_summary.json",
     "probe_faults.json",
+    "macro_context.json",
 ]
 
 STATIC_ANALYSIS_PASSES: list[tuple[str, str, Callable[[AnalysisContext], None]]] = [
@@ -64,12 +66,62 @@ STATIC_ANALYSIS_PASSES: list[tuple[str, str, Callable[[AnalysisContext], None]]]
     ("vector_table", "Vector table", vector_table.run),
     ("memory_map", "Memory map", memory_map.run),
     ("firmware_identity", "Firmware identity", firmware_identity.run),
+    ("macros", "Macro context", macros.run),
     ("strings", "Strings", strings.run),
     ("callgraph", "Callgraph", callgraph.run),
     ("constants", "Constants", constants.run),
     ("unresolved_source_summary", "Unresolved source summary", unresolved_source_summary.run),
     ("probe_faults", "Probe faults", probe_faults.run),
 ]
+
+
+@dataclass
+class MacroAnalysisOptions:
+    enabled: bool = False
+    strategy: str = "auto"
+    source_project_root: Optional[str] = None
+    build_dir: Optional[str] = None
+    allow_build: bool = False
+    reuse_existing_build: bool = True
+    build_timeout_sec: int = 900
+    project: Optional[str] = None
+    vehicle: Optional[str] = None
+    version: Optional[str] = None
+    board: Optional[str] = None
+    compiler_c: Optional[str] = None
+    compiler_cxx: Optional[str] = None
+    max_units: Optional[int] = None
+
+    @classmethod
+    def from_toml(cls, raw_options: Optional[dict[str, Any]]) -> "MacroAnalysisOptions":
+        raw_options = raw_options or {}
+        if not raw_options:
+            return cls()
+
+        options = cls(
+            enabled=bool(raw_options.get("enabled", True)),
+            strategy=str(raw_options.get("strategy", "auto")).strip().lower(),
+            source_project_root=raw_options.get("source_project_root"),
+            build_dir=raw_options.get("build_dir"),
+            allow_build=bool(raw_options.get("allow_build", False)),
+            reuse_existing_build=bool(raw_options.get("reuse_existing_build", True)),
+            build_timeout_sec=int(raw_options.get("build_timeout_sec", 900)),
+            project=raw_options.get("project"),
+            vehicle=raw_options.get("vehicle"),
+            version=raw_options.get("version"),
+            board=raw_options.get("board"),
+            compiler_c=raw_options.get("compiler_c"),
+            compiler_cxx=raw_options.get("compiler_cxx"),
+            max_units=raw_options.get("max_units"),
+        )
+        if options.max_units is not None:
+            options.max_units = int(options.max_units)
+        if options.strategy not in {"auto", "dwarf", "rebuild", "none"}:
+            raise ValueError(
+                "Rehosting.static_analysis.macros.strategy must be one of "
+                "auto, dwarf, rebuild, none"
+            )
+        return options
 
 
 @dataclass
@@ -85,6 +137,7 @@ class StaticAnalyzeConfig:
     flash_size: Optional[int] = None
     sram_base: int = 0x20000000
     force: bool = False
+    macro_options: MacroAnalysisOptions = field(default_factory=MacroAnalysisOptions)
 
 
 @dataclass
@@ -154,6 +207,9 @@ def build_static_analyze_config(machine, cpu, config_path, force=False) -> Stati
         flash_size=_coerce_size(getattr(flash, "memory_size", None), default=None),
         sram_base=_coerce_int(getattr(main, "memory_start", None), default=0x20000000),
         force=force,
+        macro_options=MacroAnalysisOptions.from_toml(
+            getattr(machine, "static_analysis_macros", {}) or {}
+        ),
     )
 
 
@@ -182,6 +238,10 @@ def run_static_analyze(config: StaticAnalyzeConfig) -> str:
     if config.force:
         for artifact in cache_dir.glob("*.json"):
             artifact.unlink()
+        macro_dir = cache_dir / "macros"
+        if macro_dir.exists():
+            import shutil
+            shutil.rmtree(macro_dir)
 
     context = AnalysisContext(
         config=config,

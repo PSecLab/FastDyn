@@ -283,6 +283,23 @@ class MMIOAnalyzer:
                         for sub_r in r.registers:
                             if p.base_address + sub_r.address_offset == addr:
                                 return p.name, sub_r.name, sub_r.description
+                return p.name, "UNKNOWN_REG", "Register not explicitly defined in SVD"
+
+        # Fallback for common ARM Cortex-M core peripherals missing from SVD
+        core_peripherals = [
+            ("DWT", 0xe0001000, 0xe0002000),
+            ("ITM", 0xe0000000, 0xe0001000),
+            ("TPIU", 0xe0040000, 0xe0041000),
+            ("CoreDebug", 0xe000edf0, 0xe000ee00),
+            ("SysTick", 0xe000e010, 0xe000e020),
+            ("NVIC", 0xe000e100, 0xe000e500),
+            ("SCB", 0xe000ed00, 0xe000ed90),
+            ("FPU", 0xe000ef30, 0xe000ef50),
+        ]
+        for name, start, end in core_peripherals:
+            if start <= addr < end:
+                return name, "UNKNOWN_REG", "Core Peripheral"
+
         return None, None, None
 
     def load_and_correlate_log(self, log_path: str) -> List[MMIOAccess]:

@@ -949,8 +949,9 @@ static void parse_probe_run_args(int argc, char **argv)
     if (probe_run) {
         const char *faults = safe_arg(utils_get_arg("probe_faults", argc, argv));
         const char *milestones = safe_arg(utils_get_arg("probe_milestones", argc, argv));
+        const char *ignores = safe_arg(utils_get_arg("probe_ignores", argc, argv));
         const char *out_dir = safe_arg(utils_get_arg("probe_out_dir", argc, argv));
-        probe_init(faults, milestones, out_dir);
+        probe_init(faults, milestones, out_dir, ignores);
     }
 }
 

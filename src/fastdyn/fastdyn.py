@@ -72,6 +72,7 @@ class QemuTargetOpts:
         self.probe_run = False
         self.probe_faults = None
         self.probe_milestones = None
+        self.probe_ignores = None
         self.probe_out_dir = None
 
 class Machine:
@@ -89,8 +90,10 @@ class Machine:
         self.svd_file: Optional[str] = None
         self.svd_key: Optional[str] = None
         self.static_analysis_cache_dir: Optional[str] = None
+        self.static_analysis_macros: dict[str, Any] = {}
         self.firmware_source_roots: list[str] = []
         self.milestones: list[str] = []
+        self.ignore_functions: list[str] = []
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
@@ -151,6 +154,8 @@ class Machine:
             "fastdyn_static",
         )
         self.firmware_source_roots = [str(path) for path in firmware_source_roots]
+        static_analysis_info = rehosting_info.get("static_analysis", {}) or {}
+        self.static_analysis_macros = static_analysis_info.get("macros", {}) or {}
         self.modeling_dir = rehosting_dirs.get(
             "modeling_dir",
             "boardrunner/boardrunner_sdk/model"

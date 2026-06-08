@@ -35,9 +35,17 @@ static int num_bounds = 0;
 static uint64_t milestone_addrs[MAX_MILESTONES];
 static int num_milestones = 0;
 
+// Ignores
+#define MAX_IGNORES 20
+static uint64_t ignore_addrs[MAX_IGNORES];
+static int num_ignores = 0;
+static uint64_t ignored_execution_count = 0;
+#define MAX_IGNORED_BBLS 1000000
+
 // BBL Trace
 #define BBL_TRACE_SIZE 10000
-static uint64_t bbl_trace[BBL_TRACE_SIZE];
+static uint64_t bbl_trace_pc[BBL_TRACE_SIZE];
+static uint32_t bbl_trace_count[BBL_TRACE_SIZE];
 static int bbl_idx = 0;
 
 // Coverage tracking
@@ -73,7 +81,10 @@ static void probe_write_result(const char *reason, uint64_t pc, uint64_t extra_i
         int count = (bbl_idx < BBL_TRACE_SIZE) ? bbl_idx : BBL_TRACE_SIZE;
         int start = (bbl_idx < BBL_TRACE_SIZE) ? 0 : (bbl_idx % BBL_TRACE_SIZE);
         for (int i = 0; i < count; i++) {
-            fprintf(f, "    \"0x%08" PRIx64 "\"%s\n", bbl_trace[(start + i) % BBL_TRACE_SIZE], (i == count - 1) ? "" : ",");
+            fprintf(f, "    {\"pc\": \"0x%08" PRIx64 "\", \"count\": %u}%s\n", 
+                bbl_trace_pc[(start + i) % BBL_TRACE_SIZE],
+                bbl_trace_count[(start + i) % BBL_TRACE_SIZE],
+                (i == count - 1) ? "" : ",");
         }
         fprintf(f, "  ]\n");
 
@@ -100,11 +111,44 @@ static void probe_atexit(void) {
 // TB translation callback to detect fault handlers
 static void probe_vcpu_tb_exec(unsigned int vcpu_index, void *userdata) {
     uint64_t pc = (uint64_t)userdata;
-    bbl_trace[bbl_idx++ % BBL_TRACE_SIZE] = pc;
-    instruction_count++;
-    
-    if (instruction_count - last_novel_instruction_count > NO_NEW_COVERAGE_THRESHOLD) {
-        probe_exit_with_result("no_new_coverage", pc, 0);
+    if (bbl_idx > 0) {
+        int last_idx = (bbl_idx - 1) % BBL_TRACE_SIZE;
+        if (bbl_trace_pc[last_idx] == pc) {
+            bbl_trace_count[last_idx]++;
+        } else {
+            int new_idx = bbl_idx % BBL_TRACE_SIZE;
+            bbl_trace_pc[new_idx] = pc;
+            bbl_trace_count[new_idx] = 1;
+            bbl_idx++;
+        }
+    } else {
+        bbl_trace_pc[0] = pc;
+        bbl_trace_count[0] = 1;
+        bbl_idx++;
+    }
+    int is_ignored = 0;
+    for (int i = 0; i < num_ignores; i++) {
+        if (pc == ignore_addrs[i]) {
+            is_ignored = 1;
+            break;
+        }
+    }
+
+    if (is_ignored) {
+        ignored_execution_count++;
+        // Freeze the coverage timeout window while in ignored functions
+        last_novel_instruction_count = instruction_count;
+        
+        if (ignored_execution_count > MAX_IGNORED_BBLS) {
+            probe_exit_with_result("idle_starvation", pc, 0);
+        }
+    } else {
+        ignored_execution_count = 0;
+        instruction_count++;
+        
+        if (instruction_count - last_novel_instruction_count > NO_NEW_COVERAGE_THRESHOLD) {
+            probe_exit_with_result("no_new_coverage", pc, 0);
+        }
     }
 }
 
@@ -198,7 +242,7 @@ static char* read_entire_file(const char* filename) {
     return data;
 }
 
-void probe_init(const char *faults_json_path, const char *milestones_json_path, const char *out_dir) {
+void probe_init(const char *faults_json_path, const char *milestones_json_path, const char *out_dir, const char *ignores_json_path) {
     if (out_dir) {
         strncpy(probe_out_dir, out_dir, sizeof(probe_out_dir) - 1);
     }
@@ -301,7 +345,27 @@ void probe_init(const char *faults_json_path, const char *milestones_json_path, 
             free(m_data);
         }
     }
-    printf("[Probe] Initialized. %d bounds, %d panics, %d faults, %d milestones.\n", num_bounds, num_panics, num_faults, num_milestones);
+    if (ignores_json_path) {
+        char *i_data = read_entire_file(ignores_json_path);
+        if (i_data) {
+            cJSON *i_root = cJSON_Parse(i_data);
+            if (i_root && cJSON_IsObject(i_root)) {
+                cJSON *i_arr = cJSON_GetObjectItemCaseSensitive(i_root, "ignores");
+                if (i_arr && cJSON_IsArray(i_arr)) {
+                    cJSON *entry;
+                    cJSON_ArrayForEach(entry, i_arr) {
+                        if (cJSON_IsNumber(entry) && num_ignores < MAX_IGNORES) {
+                            ignore_addrs[num_ignores] = ((uint64_t)entry->valuedouble) & ~1ULL;
+                            num_ignores++;
+                        }
+                    }
+                }
+            }
+            cJSON_Delete(i_root);
+            free(i_data);
+        }
+    }
+    printf("[Probe] Initialized. %d bounds, %d panics, %d faults, %d milestones, %d ignores.\n", num_bounds, num_panics, num_faults, num_milestones, num_ignores);
 }
 
 static void probe_check_sp(uint64_t pc) {

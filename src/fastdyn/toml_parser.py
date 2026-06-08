@@ -56,6 +56,8 @@ def parser(out_dir, machine_name, toml_config, svd_path):
     q.finline            = toml_parser.machine_info.get("finline", None)
     if isinstance(q.finline, str) and q.finline.strip().lower() == "none":
         q.finline = None
+    machine0.milestones        = toml_parser.machine_info.get("milestones", [])
+    machine0.ignore_functions  = toml_parser.machine_info.get("ignore_functions", [])
     q.print_command       = toml_parser.machine_info.get("print_command", False)
     q.reset_memory_files  = toml_parser.machine_info.get("reset_memory_files", False)
 
@@ -214,6 +216,8 @@ def parser(out_dir, machine_name, toml_config, svd_path):
         if device_info.get('irq') is not None:
             for irq in device_info.get('irq'):
                 device_handler.add_irq(irq)
+
+
 
     return fastdyn_handle
 

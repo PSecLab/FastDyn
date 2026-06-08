@@ -174,12 +174,37 @@ def probe_run(config, map_file, work_dir, svd, persist_work_dir):
                             # Strip thumb bit
                             addr &= ~1
                             milestone_addrs.append(addr)
-                
+
                 if milestone_addrs:
                     milestones_json = os.path.join(work_dir, "probe_milestones.json")
                     with open(milestones_json, "w") as f:
                         json.dump({"milestones": milestone_addrs}, f)
                     machine.qemu_target_opts.probe_milestones = milestones_json
+
+            # Resolve ignore functions
+                print(f"machine.ignore_functions = {machine.ignore_functions}")
+            if machine.ignore_functions:
+                ignore_addrs = []
+                symbols_path = os.path.join(cache_dir, "symbols.json")
+                if os.path.exists(symbols_path):
+                    with open(symbols_path, "r") as f:
+                        syms = json.load(f)
+                    sym_dict = {sym.get("name", ""): sym.get("address") for sym in syms}
+                    for i_f in machine.ignore_functions:
+                        if i_f in sym_dict:
+                            addr_val = sym_dict[i_f]
+                            if isinstance(addr_val, str):
+                                addr = int(addr_val, 16) if addr_val.startswith("0x") else int(addr_val)
+                            else:
+                                addr = int(addr_val)
+                            addr &= ~1
+                            ignore_addrs.append(addr)
+
+                if ignore_addrs:
+                    ignores_json = os.path.join(work_dir, "probe_ignores.json")
+                    with open(ignores_json, "w") as f:
+                        json.dump({"ignores": ignore_addrs}, f)
+                    machine.qemu_target_opts.probe_ignores = ignores_json
 
             fastdyn_handle.run(machine_name=machine_name, target="qemu", out_path=work_dir)
 
@@ -206,9 +231,26 @@ def probe_run(config, map_file, work_dir, svd, persist_work_dir):
         for p in svd_map.get("peripherals", []):
             base = int(p["base_address"], 16)
             end = int(p["end_address"], 16)
-            if base <= addr <= end:
+            if base <= addr < end:
                 peri_found = p
                 break
+
+        if not peri_found:
+            # Fallback for common ARM Cortex-M core peripherals missing from SVD
+            core_peripherals = [
+                {"name": "DWT", "base_address": "0xe0001000", "end_address": "0xe0002000"},
+                {"name": "ITM", "base_address": "0xe0000000", "end_address": "0xe0001000"},
+                {"name": "TPIU", "base_address": "0xe0040000", "end_address": "0xe0041000"},
+                {"name": "CoreDebug", "base_address": "0xe000edf0", "end_address": "0xe000ee00"},
+                {"name": "SysTick", "base_address": "0xe000e010", "end_address": "0xe000e020"},
+                {"name": "NVIC", "base_address": "0xe000e100", "end_address": "0xe000e500"},
+            ]
+            for p in core_peripherals:
+                base = int(p["base_address"], 16)
+                end = int(p["end_address"], 16)
+                if base <= addr < end:
+                    peri_found = p
+                    break
 
         if not peri_found:
             log.error(f"Address {addr_str} not found in any peripheral!")
@@ -249,12 +291,17 @@ void {p_name}_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) 
         with open(config, "a") as f:
             f.write(f"\n[Device.{p_name}]\n")
             f.write(f"    ranges = [[\"{p_base}\", \"{p_end}\"]]\n")
+            f.write(f"    irq = [[1, 150]]\n")
             f.write(f"    description = \"{peri_found['name']}\"\n")
             f.write(f"    read_priority = \"elder\"\n")
             f.write(f"    [[Device.{p_name}.handlers]]\n")
             f.write(f"        model   = \"elder\"\n")
             f.write(f"        enabled = true\n")
             f.write(f"        scroll = \"boardrunner/boardrunner_sdk/build/{p_name}.so\"\n")
+            f.write(f"    [[Device.{p_name}.connections]]\n")
+            f.write(f"        type = \"gazebo\" # or \"pty\", \"i2c_slave\", \"spi_slave\"\n")
+            f.write(f"        device_or_topic = \"\"\n")
+            f.write(f"        enabled = false\n")
 
         log.info(f"Appended {p_name} to config {config}")
 
@@ -590,71 +637,35 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
         show_default=True,
         type=click.Path(resolve_path=True,writable=True),
         help='Path to the work directory.')
+@click.option('--latest-run-dir',
+        default=None,
+        metavar='PATH',
+        type=click.Path(resolve_path=True, exists=True, file_okay=False, dir_okay=True),
+        help='Path to the latest probe-run artifact directory. Falls back to work-dir for compatibility.')
 @click.option('--out-prompt', default="prompt.txt", help="Output file for the generated prompt.")
-def trace_analyze(config, work_dir, out_prompt):
-    import json
-    import os
+@click.option('--force',
+        is_flag=True,
+        default=False,
+        help='Recompute trace analysis for the selected run.')
+@click.option('--reset-work-dir',
+        is_flag=True,
+        default=False,
+        help='Delete and recreate work-dir before writing trace-analyze outputs. Requires --latest-run-dir.')
+def trace_analyze(config, work_dir, latest_run_dir, out_prompt, force, reset_work_dir):
+    from fastdyn.trace_analyzer.models import TraceAnalyzeRequest
+    from fastdyn.trace_analyzer.trace_analyze import run_trace_analysis
     from pathlib import Path
 
-    work_dir_path = Path(work_dir)
-    probe_result_path = work_dir_path / "probe_result.json"
-
-    if not probe_result_path.exists():
-        log.error(f"Could not find {probe_result_path}. Did you run probe-run?")
-        sys.exit(1)
-
-    with open(probe_result_path, "r") as f:
-        probe_res = json.load(f)
-
-    exit_reason = probe_res.get("exit_reason", "Unknown")
-    pc = probe_res.get("pc", "0x0")
-    bbl_trace = probe_res.get("bbl_trace", [])
-    extra_info = probe_res.get("extra_info", "")
-
-    svd_path = "third_party/common/cmsis-svd-data"
-    fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
-    machine = fastdyn_handle.machines["machine0"]
-    analysis_cfg = build_static_analyze_config(machine=machine, cpu=machine.cpus[0], config_path=config, force=False)
-    _, _, cache_dir = validate_static_analyze_cache(analysis_cfg)
-
-    symbols_path = Path(cache_dir) / "symbols.json"
-    symbols = []
-    if symbols_path.exists():
-        with open(symbols_path, "r") as f:
-            symbols = json.load(f)
-
-    def resolve_pc(addr):
-        addr_int = int(addr, 16)
-        closest_sym = None
-        closest_dist = 0xFFFFFFFF
-        for sym in symbols:
-            sym_addr = sym.get("address")
-            if sym_addr is not None:
-                if isinstance(sym_addr, str):
-                    sym_addr = int(sym_addr, 16) if sym_addr.startswith("0x") else int(sym_addr)
-                if sym_addr <= addr_int:
-                    dist = addr_int - sym_addr
-                    if dist < closest_dist:
-                        closest_dist = dist
-                        closest_sym = sym.get("name")
-        return closest_sym if closest_sym else addr
-
-    prompt = f"The firmware execution stopped due to: {exit_reason}\n"
-    prompt += f"Final PC: {pc} ({resolve_pc(pc)})\n"
-    if extra_info:
-        prompt += f"Extra context (e.g. MMIO Address or SP): {extra_info}\n"
-
-    prompt += "\nRecent Execution Trace (Basic Blocks):\n"
-    for b in bbl_trace[-50:]:  # last 50 blocks
-        prompt += f"  - {b} ({resolve_pc(b)})\n"
-
-    prompt += "\nPlease analyze the failure and suggest a fix or a device model."
-
-    out_path = work_dir_path / out_prompt
-    with open(out_path, "w") as f:
-        f.write(prompt)
-
-    log.info(f"Generated LLM prompt at {out_path}")
+    request = TraceAnalyzeRequest(
+        config_path=Path(config),
+        work_dir=Path(work_dir),
+        latest_run_dir=Path(latest_run_dir) if latest_run_dir else None,
+        out_prompt=out_prompt,
+        force=force,
+        reset_work_dir=reset_work_dir,
+    )
+    result = run_trace_analysis(request)
+    log.info(f"Trace analysis completed. Prompt written to: {result.prompt_path}")
 
 @cli.command(
     'verifier',
@@ -1159,10 +1170,10 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
 )
 @click.option(
     '-o', '--output',
-    required=True,
+    required=False,
     multiple=True,
     type=click.Path(resolve_path=True),
-    help='Path to the model .c file(s). Can be specified multiple times.',
+    help='Path to the model .c file(s). Can be specified multiple times. If omitted, attempts to auto-detect from work_dir/analysis.json.',
     metavar='PATH'
 )
 @click.option(
@@ -1238,6 +1249,7 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
     # -- Determine prompt type ------------------------------------------------
     initial_prompt_path = os.path.join(work_dir, "initial_prompt.txt")
     revised_prompt_path = os.path.join(work_dir, "revised_prompt.txt")
+    prompt_txt_path = os.path.join(work_dir, "prompt.txt")
 
     if os.path.isfile(revised_prompt_path):
         prompt_path = revised_prompt_path
@@ -1247,12 +1259,32 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         prompt_path = initial_prompt_path
         prompt_type = "initial"
         log.info("Found initial_prompt.txt -- using full code extraction mode")
+    elif os.path.isfile(prompt_txt_path):
+        prompt_path = prompt_txt_path
+        prompt_type = "revised"
+        log.info("Found prompt.txt -- using SEARCH/REPLACE patch mode")
     else:
         log.error(
             "No prompt file found in %s. "
-            "Expected initial_prompt.txt or revised_prompt.txt.", work_dir
+            "Expected initial_prompt.txt, revised_prompt.txt, or prompt.txt.", work_dir
         )
         sys.exit(1)
+
+    # -- Auto-detect output if omitted ----------------------------------------
+    if not output:
+        analysis_json = os.path.join(work_dir, "analysis.json")
+        if os.path.isfile(analysis_json):
+            import json
+            with open(analysis_json, "r") as f:
+                analysis_data = json.load(f)
+                target_model_file = analysis_data.get("target_model_file")
+                if target_model_file:
+                    output = (target_model_file,)
+                    log.info("Auto-detected target model output: %s", target_model_file)
+        
+        if not output:
+            log.error("Error: --output PATH is required, but was omitted and could not be auto-detected from analysis.json.")
+            sys.exit(1)
 
     # -- Read prompt ----------------------------------------------------------
     with open(prompt_path, "r", encoding="utf-8") as f:
@@ -1307,6 +1339,7 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
 
     def _write_metrics(metrics, attempt_num, call_type, extra=None):
         """Append a metrics JSON line if --evaluate is enabled."""
+        import json
         if not evaluate or metrics is None:
             return
         entry = metrics.to_dict()
@@ -1317,7 +1350,7 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         if extra:
             entry.update(extra)
         with open(metrics_path, "a", encoding="utf-8") as mf:
-            mf.write(_json.dumps(entry) + "\n")
+            mf.write(json.dumps(entry) + "\n")
 
     # -- Send prompt and process response -------------------------------------
     attempt = 0
@@ -1358,6 +1391,10 @@ def llm(work_dir, output, model, env_file, temperature, reasoning_effort, statel
         previous_response = response_text
 
         # -- Process based on prompt type -------------------------------------
+        if "VETO:" in response_text:
+            log.warning("\n================= VETO =================\nThe LLM has VETOED this request with the following message:\n%s\n========================================", response_text.strip())
+            sys.exit(0)
+
         success = False
         error_context = ""
 
