@@ -1,6 +1,8 @@
 #ifndef CORE_H
 #define CORE_H
 
+#include <qemu/qemu-plugin.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /**
@@ -9,6 +11,7 @@
  * @return uint64_t The current PC.
  */
 uint64_t core_get_pc(void);
+uint64_t core_get_sp(void);
 uint64_t core_get_icount(void);
 
 /**
@@ -39,7 +42,11 @@ int core_write_ram(uintptr_t address, size_t size, const void* buffer);
 // Wrapper for qemu's irq registration, allows multiple hooks
 void core_register_irq_hook(void (*cb)(int), void (*cb_end)(int));
 
+typedef void (*core_tb_trans_hook_t)(qemu_plugin_id_t id, struct qemu_plugin_tb *tb);
+
+// Allow users to inspect/instrument translated basic blocks.
+void core_register_tb_trans_hook(core_tb_trans_hook_t cb);
+
 // Allow users to register a hook for when fastdyn exits
 void core_register_exit_hook(void (*cb)(void));
 #endif /* CORE_H */
-

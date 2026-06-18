@@ -11,12 +11,15 @@ Options:
   --venv PATH           Virtual environment path (default: fastdyn-env)
   --python PYTHON       Python executable used to create the venv (default: python3)
   --build-qemu          Clone/build the patched QEMU fork and FastDyn QEMU plugin
+  --build-gazebo        Build legacy Gazebo/Courbet deps and FastDyn with LIBGZ/LIBHW
   --qemu-root PATH      Patched QEMU checkout/workspace root (default: ../qemu)
   --qemu-repo URL       Patched QEMU repository (default: https://github.com/Arslan8/qemu.git)
   --qemu-ref REF        Patched QEMU ref/branch (default: fastdyn)
+  --libhw-root PATH     libhw checkout/workspace root (default: ../libhw)
   --optifuzz-root PATH  Banquo checkout root for OptiFuzz (default: ../banquo)
   --optifuzz-repo URL   Banquo repository (default: https://github.com/michaelprooney/banquo.git)
   --optifuzz-ref REF    Banquo ref/branch (default: banquo-parser-impl)
+  --with-rumoca         Initialize/build pinned Rumoca for FMU generation and lockstep viewing
   --skip-optifuzz       Do not create/update the Banquo dependency checkout for OptiFuzz
   --skip-rumoca         Do not initialize/build pinned Rumoca for FMU generation and lockstep viewing
   --skip-qemu-workspace Do not create the default QEMU RAM backing files
@@ -235,6 +238,129 @@ Build it after patched QEMU is ready with:
 EOF
 }
 
+fastdyn_setup_build_jobs() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+  else
+    echo 1
+  fi
+}
+
+fastdyn_setup_cmake_build() {
+  local source_dir="$1"
+  local build_dir="$2"
+  shift 2
+
+  if ! command -v cmake >/dev/null 2>&1; then
+    echo "cmake was not found. Install cmake to build the legacy Gazebo dependencies." >&2
+    return 1
+  fi
+  if [[ ! -f "$source_dir/CMakeLists.txt" ]]; then
+    echo "missing CMake project: $source_dir" >&2
+    return 1
+  fi
+
+  cmake -S "$source_dir" -B "$build_dir" "$@" || return
+  cmake --build "$build_dir" -j"$(fastdyn_setup_build_jobs)" || return
+}
+
+fastdyn_setup_gazebo_pkg_config() {
+  local module
+
+  if ! command -v pkg-config >/dev/null 2>&1; then
+    echo "pkg-config was not found. Install pkg-config and Gazebo Harmonic development packages." >&2
+    return 1
+  fi
+
+  for module in gz-transport13 gz-msgs10 protobuf; do
+    if ! pkg-config --exists "$module"; then
+      cat >&2 <<EOF
+Missing Gazebo dependency: $module
+Install Gazebo Harmonic first:
+  bash virtuals/physics/flight_controllers/courbet/utils/install_gazebo_harmonic.sh
+EOF
+      return 1
+    fi
+  done
+}
+
+fastdyn_setup_libhw_build() {
+  local libhw_root="$1"
+  local libhw_so="$libhw_root/out/libhw.so"
+
+  if [[ ! -f "$libhw_root/Makefile" ]]; then
+    cat >&2 <<EOF
+libhw checkout is missing or incomplete: $libhw_root
+Use --libhw-root to point at an existing checkout, or clone/build libhw there.
+EOF
+    return 1
+  fi
+
+  make -C "$libhw_root" || return
+
+  if [[ ! -f "$libhw_so" ]]; then
+    echo "libhw build did not produce $libhw_so" >&2
+    return 1
+  fi
+}
+
+fastdyn_setup_gazebo_deps_build() {
+  local repo_root="$1"
+
+  fastdyn_setup_gazebo_pkg_config || return
+  fastdyn_setup_cmake_build \
+    "$repo_root/third_party/courbet_deps/ardupilot_gazebo" \
+    "$repo_root/third_party/courbet_deps/ardupilot_gazebo/build" \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo || return
+  fastdyn_setup_cmake_build \
+    "$repo_root/virtuals/physics/flight_controllers/courbet/gazebo" \
+    "$repo_root/virtuals/physics/flight_controllers/courbet/gazebo/build" || return
+  fastdyn_setup_cmake_build \
+    "$repo_root/virtuals/physics/physics_engines/gazebo" \
+    "$repo_root/virtuals/physics/physics_engines/gazebo/build" || return
+
+  local wrapper="$repo_root/virtuals/physics/physics_engines/gazebo/build/lib/libgz_wrapper.so"
+  local services="$repo_root/virtuals/physics/flight_controllers/courbet/gazebo/build/services"
+  if [[ ! -f "$wrapper" ]]; then
+    echo "Gazebo wrapper build did not produce $wrapper" >&2
+    return 1
+  fi
+  if [[ ! -x "$services" ]]; then
+    echo "Courbet Gazebo services build did not produce $services" >&2
+    return 1
+  fi
+}
+
+fastdyn_setup_gazebo_plugin_build() {
+  local repo_root="$1"
+  local qemu_root="$2"
+  local libhw_root="$3"
+  local qemu_bin="$qemu_root/build/qemu-system-arm"
+
+  if [[ ! -x "$qemu_bin" ]]; then
+    cat >&2 <<EOF
+cannot build FastDyn legacy Gazebo plugin because patched QEMU is missing:
+  $qemu_bin
+
+Build it first with:
+  source "$repo_root/setup.sh" --build-qemu --build-gazebo --skip-optifuzz
+EOF
+    return 1
+  fi
+
+  fastdyn_setup_gazebo_deps_build "$repo_root" || return
+  fastdyn_setup_libhw_build "$libhw_root" || return
+  fastdyn_setup_cjson "$repo_root" || return
+  make -C "$repo_root" \
+    qemu_path="$qemu_root" \
+    libhw_path="$libhw_root" \
+    LIBHW=true \
+    LIBGZ=true \
+    FLIGHT_CONTROLLERS=true \
+    DEV=true \
+    DEBUG_PRINT=true || return
+}
+
 fastdyn_setup_optifuzz_deps() {
   local banquo_root="$1"
   local banquo_repo="$2"
@@ -280,13 +406,15 @@ fastdyn_setup_main() {
   local qemu_root="$repo_root/../qemu"
   local qemu_repo="${FASTDYN_QEMU_REPO:-https://github.com/Arslan8/qemu.git}"
   local qemu_ref="${FASTDYN_QEMU_REF:-fastdyn}"
+  local libhw_root="$repo_root/../libhw"
   local optifuzz_root="$repo_root/../banquo"
   local optifuzz_repo="${FASTDYN_OPTIFUZZ_BANQUO_REPO:-https://github.com/michaelprooney/banquo.git}"
   local optifuzz_ref="${FASTDYN_OPTIFUZZ_BANQUO_REF:-banquo-parser-impl}"
   local update_submodules="true"
-  local build_rumoca="true"
+  local build_rumoca="false"
   local setup_optifuzz="true"
   local build_qemu="false"
+  local build_gazebo="false"
   local setup_qemu_workspace="true"
   local upgrade_pip="true"
 
@@ -316,6 +444,10 @@ fastdyn_setup_main() {
         build_qemu="true"
         shift
         ;;
+      --build-gazebo)
+        build_gazebo="true"
+        shift
+        ;;
       --qemu-root)
         qemu_root="${2:?missing value for --qemu-root}"
         shift 2
@@ -326,6 +458,10 @@ fastdyn_setup_main() {
         ;;
       --qemu-ref)
         qemu_ref="${2:?missing value for --qemu-ref}"
+        shift 2
+        ;;
+      --libhw-root)
+        libhw_root="${2:?missing value for --libhw-root}"
         shift 2
         ;;
       --optifuzz-root)
@@ -370,6 +506,9 @@ fastdyn_setup_main() {
   if [[ "$qemu_root" != /* ]]; then
     qemu_root="$repo_root/$qemu_root"
   fi
+  if [[ "$libhw_root" != /* ]]; then
+    libhw_root="$repo_root/$libhw_root"
+  fi
   if [[ "$optifuzz_root" != /* ]]; then
     optifuzz_root="$repo_root/$optifuzz_root"
   fi
@@ -401,6 +540,11 @@ fastdyn_setup_main() {
       third_party/courbet_deps/SITL_Models
       third_party/courbet_deps/mavlink_headers
     )
+    if [[ "$build_gazebo" == "true" ]]; then
+      submodules+=(
+        third_party/courbet_deps/ardupilot_gazebo
+      )
+    fi
     if [[ "$build_rumoca" == "true" ]]; then
       submodules+=(
         third_party/common/rumoca
@@ -412,7 +556,12 @@ fastdyn_setup_main() {
 
   if [[ "$build_qemu" == "true" ]]; then
     fastdyn_setup_qemu_build "$repo_root" "$qemu_root" "$qemu_repo" "$qemu_ref" || return
-    fastdyn_setup_plugin_build "$repo_root" "$qemu_root" || return
+    if [[ "$build_gazebo" != "true" ]]; then
+      fastdyn_setup_plugin_build "$repo_root" "$qemu_root" || return
+    fi
+  fi
+  if [[ "$build_gazebo" == "true" ]]; then
+    fastdyn_setup_gazebo_plugin_build "$repo_root" "$qemu_root" "$libhw_root" || return
   fi
   if [[ "$setup_qemu_workspace" == "true" ]]; then
     fastdyn_setup_qemu_workspace "$qemu_root" || return
@@ -439,6 +588,11 @@ fastdyn_setup_main() {
   if [[ "$setup_qemu_workspace" == "true" ]]; then
     fastdyn_setup_qemu_hint "$repo_root" "$qemu_root" "$qemu_repo" "$qemu_ref"
     fastdyn_setup_plugin_hint "$repo_root" "$qemu_root"
+  fi
+  if [[ "$build_gazebo" == "true" ]]; then
+    echo "Legacy Gazebo wrapper is ready: $repo_root/virtuals/physics/physics_engines/gazebo/build/lib/libgz_wrapper.so"
+    echo "Courbet Gazebo services are ready: $repo_root/virtuals/physics/flight_controllers/courbet/gazebo/build/services"
+    echo "libhw is ready: $libhw_root/out/libhw.so"
   fi
   if [[ "$build_rumoca" == "true" ]]; then
     echo "Run the Courbet ArduCopter FMI v3 mission with MAVCesium: fastdyn run -c configs/copter462.toml"

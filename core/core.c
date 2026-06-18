@@ -34,7 +34,7 @@ int isdigit(int c);
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "core.h"
+#include <core.h>
 #include "common.h"
 #include <utils.h>
 #include <device.h>
@@ -175,6 +175,8 @@ bool address_in_any_list(uintptr_t addr, int reg) {
 }
 rule_t rules[MAX_RULES];
 size_t rules_count = 0;
+
+bool find_rule_by_address(unsigned long long addr, rule_t **out_rule);
 
 // Global storage
 UpdateEntry update_entries[MAX_ENTRIES];
@@ -394,6 +396,12 @@ uint64_t core_get_pc(void) {
 	return ret_val;
 }
 
+uint64_t core_get_sp(void) {
+	uint64_t ret_val;
+	ret_val = qemu_get_register(ARM_V7M_SP);
+	return ret_val;
+}
+
 uint64_t core_get_icount(void) {
     return atomic_load_explicit(&g_icount, memory_order_relaxed);
 }
@@ -467,6 +475,30 @@ void core_register_irq_hook(void (*cb)(int), void (*cb_end)(int))
                                       core_irq_exit_dispatch);
         registered = 1;
     }
+}
+
+#define MAX_TB_TRANS_HOOKS 32
+
+static core_tb_trans_hook_t g_tb_trans_hooks[MAX_TB_TRANS_HOOKS];
+static size_t g_tb_trans_hook_count = 0;
+
+static void core_tb_trans_dispatch(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
+{
+    for (size_t i = 0; i < g_tb_trans_hook_count; i++) {
+        if (g_tb_trans_hooks[i]) {
+            g_tb_trans_hooks[i](id, tb);
+        }
+    }
+}
+
+void core_register_tb_trans_hook(core_tb_trans_hook_t cb)
+{
+    if (!cb || g_tb_trans_hook_count >= MAX_TB_TRANS_HOOKS) {
+        return;
+    }
+
+    g_tb_trans_hooks[g_tb_trans_hook_count] = cb;
+    g_tb_trans_hook_count++;
 }
 
 
@@ -685,6 +717,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     size_t n = qemu_plugin_tb_n_insns(tb);
     size_t i;
 	UpdateEntry *matches[MAX_MATCHES];
+
+    core_tb_trans_dispatch(id, tb);
 
     if (twintrace_mode != TT_OFF) {
         qemu_plugin_register_vcpu_tb_exec_cb(

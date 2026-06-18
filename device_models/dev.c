@@ -3,6 +3,7 @@
 #include <utils.h>
 #include <device.h>
 #include <core.h>
+#include <probe.h>
 #include "models.c"
 #include "cJSON.h"
 #include <stdio.h>
@@ -80,6 +81,7 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
         utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled (Unknown Region): \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
                         sec, usec, address, size, size * 2, value, pc);
 #endif
+        probe_check_unhandled_access(pc, address, 1);
         return 1; // Continue internal operation
     }
 
@@ -116,13 +118,17 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
                         sec, usec, address, size, size * 2, value, pc);
 #endif
         dev_debug("IO Access not handled");
+        probe_check_unhandled_access(pc, address, 1);
     }
 
 // Filter out QEMU internals ('g') only and we dont filter ('v)
 //It is not always injecting double interrupts every ms
-    if (handler && (handler[0] == 'g')) {
+    if (handler && ((handler[0] == 'g') ||
+                    (handled && strcmp(handler, "nvic-default") == 0))) {
+           probe_check_write(pc, address, value);
            return 0;
     }
+    probe_check_write(pc, address, value);
     // Continue internal operation
     return 1;
 }
@@ -145,6 +151,7 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
             "[%5ld.%06ld] IO Read Access NOT Handled (Unknown Region): \t address=0x%08" PRIx64 ", size=%u bytes, pc=0x%08" PRIx64 "\n",
             sec, usec, (uint64_t)address, size, (uint64_t)pc);
 #endif
+        probe_check_unhandled_access(pc, address, 0);
         return 1;
     }
 
@@ -198,12 +205,16 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
             sec, usec, (uint64_t)address, size, (uint64_t)pc);
 #endif
         dev_debug("IO Access not handled");
+        probe_check_unhandled_access(pc, address, 0);
     }
 
-    if (handler && (handler[0] == 'g')) {
+    if (handler && ((handler[0] == 'g') ||
+                    (dev_to_use != NULL && strcmp(handler, "nvic-default") == 0))) {
+        probe_check_read(pc, address, value);
         return 0;
     }
 
+    probe_check_read(pc, address, value);
     // Continue internal operation
     return 1;
 }
@@ -297,7 +308,8 @@ void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev) {
 
     hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
     unsigned idx_start = dev_addr_to_slot(start, region_base);
-    unsigned idx_end   = dev_addr_to_slot(end, region_base);
+    hwaddr last_addr = (end > start) ? end - 1 : end;
+    unsigned idx_end = dev_addr_to_slot(last_addr, region_base);
 
     unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
     if (idx_end >= max_slots) idx_end = max_slots - 1;
@@ -772,6 +784,10 @@ int dev_init(int argc, char ** argv) {
 		for (int i = 0; i < current_config->section_count; i++) {
 				DeviceModel * current = find_device_model(entries[i].model);
 				if (!current) {
+                        fprintf(stderr, "Could not find model: '%s'. Available models:\n", entries[i].model);
+                        for (int j = 0; j < num_devices; j++) {
+                            fprintf(stderr, " - %s\n", all_devices[j]->name);
+                        }
 						utils_die("Device Model not found.");
 				}
 				current->init(entries[i].args);

@@ -23,7 +23,7 @@ static int device_count = 0;
 
 static uint64_t elder_read(void *opaque, hwaddr address, unsigned size, uint64_t pc) {
 	for (int i = 0; i < device_count; i++) {
-		Range ranges[10];
+		Range ranges[MAX_DEVICES];
 		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
 		for (int j=0; j<devices[i].config->range_count; j++) {
 			if (address >= ranges[j].start && address < ranges[j].end) {
@@ -32,14 +32,18 @@ static uint64_t elder_read(void *opaque, hwaddr address, unsigned size, uint64_t
 			}
 		}
     }
-	utils_die("Unable to map any address to any address of elder read function");
+	char err_buf[128];
+	snprintf(err_buf, sizeof(err_buf),
+             "Unable to map any address to any address of elder read function (address: 0x%lx, pc: 0x%lx)",
+             address, pc);
+	utils_die(err_buf);
 	return 0; // never reached, but silences compiler
 
 }
 
 static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned size, uint64_t pc) {
 	for (int i = 0; i < device_count; i++) {
-		Range ranges[10];
+		Range ranges[MAX_DEVICES];
 		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
 		for (int j=0; j<devices[i].config->range_count; j++) {
 			if (address >= ranges[j].start && address < ranges[j].end) {
@@ -51,6 +55,24 @@ static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned s
     }
 }
 
+static int elder_serve(int number) {
+	for (int i = 0; i < device_count; i++) {
+		if (devices[i].model.serve) {
+			devices[i].model.serve(number);
+		}
+	}
+    return 0;
+}
+
+static int elder_interrupt(int number) {
+	for (int i = 0; i < device_count; i++) {
+		if (devices[i].model.interrupt) {
+			devices[i].model.interrupt(number);
+		}
+	}
+    return 0;
+}
+
 static void* elder_init(ConfigSection* model_info);
 // The public definition of the elder device model
 DeviceModel elder_model_def = {
@@ -58,11 +80,13 @@ DeviceModel elder_model_def = {
     .read = elder_read,
     .write = elder_write,
     .init = elder_init,
+    .serve = elder_serve,
+    .interrupt = elder_interrupt,
 };
 
 static void* elder_init(ConfigSection* model_info) {
     //Find the overall ranges for all the devices registered as elder
-    Range ranges[10];
+    Range ranges[MAX_DEVICES];
 	device_count = model_info->device_count;
     utils_parse_ranges(model_info->overall_range_count,model_info->overall_ranges, ranges);
 
@@ -94,13 +118,22 @@ static void* elder_init(ConfigSection* model_info) {
 	    devices[i].model.init = (DeviceInit)dlsym(devices[i].handle, symbol);
 	    if (!devices[i].model.init) utils_die("Missing init");
 
-		/* Call init and store the returned state pointer as opaque.
-		 * Models must return a pointer to their state struct (e.g. return &g_state).
-		 * The framework passes this pointer to every subsequent read/write call,
-		 * allowing models to use (MyState *)opaque safely instead of a bare global.
-		 * Old models that return void/NULL will have opaque=NULL and must still
-		 * access state via a file-scope global — both patterns compile correctly. */
+        // Optional callbacks for IRQs
+	    snprintf(symbol, sizeof(symbol), "%s_serve", devices[i].config->name);
+	    devices[i].model.serve = (DeviceIRQFunc)dlsym(devices[i].handle, symbol);
+
+	    snprintf(symbol, sizeof(symbol), "%s_interrupt", devices[i].config->name);
+	    devices[i].model.interrupt = (DeviceIRQFunc)dlsym(devices[i].handle, symbol);
+
+		/* Call init and store the returned state pointer as opaque. */
 		devices[i].model.opaque = devices[i].model.init(model_info);
+
+        // Register IRQs for this device based on config
+        if (devices[i].config->irq_count > 0 && devices[i].config->irqs) {
+            for (int j = 0; j < devices[i].config->irq_count; j++) {
+                dev_register_interrupt_device_model((int)devices[i].config->irqs[j], &elder_model_def);
+            }
+        }
 	}
 	return NULL;  // elder itself has no state to expose as opaque
 }
