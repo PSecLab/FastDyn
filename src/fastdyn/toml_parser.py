@@ -95,8 +95,20 @@ def _format_icount_option(value):
     return ",".join(parts) if parts else "auto"
 
 
+def load_toml_config(config_path):
+    try:
+        with open(config_path, "rb") as f:
+            return tomli.load(f)
+    except FileNotFoundError:
+        fastdyn_log.error(f"The file '{config_path}' was not found.")
+        raise
+    except tomli.TOMLDecodeError as e:
+        fastdyn_log.error(f"Error: Failed to parse TOML file '{config_path}': {e}")
+        raise
+
+
 #parse a single toml per machine, use as many instances as you want in future to parse multiple machines
-def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None):
+def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu=True):
     #parse the toml configuration
     fastdyn_log.info(f"Parsing Config file: {toml_config}")
 
@@ -109,14 +121,17 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None):
     machine0 = fastdyn_handle.create_machine(machine_name=machine_name,
                                     platform=toml_parser.machine_info.get("platform")
                                     )
-    try:
-        fmu = fmu_build.resolve(Path(toml_config), fmu_name)
-        machine0.fmu_name = fmu.name
-        machine0.fmu_path = str(fmu.fmu_path if fmu.package else fmu.output)
-        machine0.fmu_parameters = fmu.parameters or {}
-        machine0.fmu_value_references = fmu_build.value_references(fmu)
-    except fmu_build.NoFmuConfig:
-        pass
+    machine0.add_rehosting_info(toml_parser.rehosting_info)
+
+    if load_fmu:
+        try:
+            fmu = fmu_build.resolve(Path(toml_config), fmu_name)
+            machine0.fmu_name = fmu.name
+            machine0.fmu_path = str(fmu.fmu_path if fmu.package else fmu.output)
+            machine0.fmu_parameters = fmu.parameters or {}
+            machine0.fmu_value_references = fmu_build.value_references(fmu)
+        except fmu_build.NoFmuConfig:
+            pass
 
     # additional machine params if set by the user related to qemu target
     q = machine0.qemu_target_opts
@@ -316,17 +331,10 @@ class TomlParser:
         self.parsed_config  = self.toml_parser(config_path)
         self.fastdyn_handle = fastdyn_handle
         self.machine_info   = self.parsed_config.get("Machine")
+        self.rehosting_info = self.parsed_config.get("Rehosting", {}) or {}
         self.cpus_info      = self.parsed_config.get("CPU")
         self.devices_info   = self.parsed_config.get("Device")
         self.memory_info    = self.parsed_config.get("Memory")
 
     def toml_parser(self, config_path):
-        try:
-            with open(config_path, "rb") as f:
-                parsed_config = tomli.load(f)
-        except FileNotFoundError:
-            fastdyn_log.error(f"The file '{config_path}' was not found.")
-        except tomli.TOMLDecodeError as e:
-            fastdyn_log.error(f"Error: Failed to parse TOML file '{config_path}': {e}")
-
-        return parsed_config
+        return load_toml_config(config_path)

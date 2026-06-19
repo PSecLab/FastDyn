@@ -6,13 +6,18 @@ Doxyfile.bak
 *.log
 *.egg-info
 *tmp
+
+#Fastdyn work directories
 *fastdyn_work*
+*fastdyn_static_analysis*
+*fastdyn_recent_run*
+
 fastdyn-env
 build
-target/
 *.bin
 *bbl.txt
 .cflags
+.venv
 # API key and build configuration (contains local paths)
 .fastdyn.env
 
@@ -27,7 +32,11 @@ boardrunner/boardrunner_sdk/build_api_tests_standalone/
 # LLM outputs
 fastdyn_llm_history
 
-# Rumoca lockstep trace logs
-rumoca_trace*.csv
+# Mavlink Logs
 *.tlog
 *.tlog.raw
+*.ulog
+*.parm
+
+# Local run output
+*.out
