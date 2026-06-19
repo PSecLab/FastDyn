@@ -140,6 +140,7 @@ class Machine:
         self.irq_map = {}
         self.svd_file: Optional[str] = None
         self.svd_key: Optional[str] = None
+        self.svd_device = None
         self.static_analysis_cache_dir: Optional[str] = None
         self.static_analysis_macros: dict[str, Any] = {}
         self.firmware_source_roots: list[str] = []
@@ -243,6 +244,7 @@ class Machine:
         self.svd_file = svd_file
         self.svd_key = svd_key
         svd_device = parse_helper.get_svd_device(svd_file)
+        self.svd_device = svd_device
 
         fastdyn_log.info("Creating IRQ Map using the CMSIS SVD")
         self.irq_map = parse_helper.create_svd_irq_map(svd_device)

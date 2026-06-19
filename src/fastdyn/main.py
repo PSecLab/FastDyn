@@ -1883,6 +1883,82 @@ def static_analyze(config, binary, svd, force, format):
     run_static_analyze(analysis_cfg)
 
 
+@cli.command(
+    'trace-analyze',
+    help='Run trace analysis on execution and static artifacts.',
+)
+@click.option(
+    '-c', '--config', required=True,
+    type=click.Path(resolve_path=True, exists=True),
+    help='Path to the FastDyn TOML config file.',
+    metavar='PATH',
+)
+@click.option(
+    '-o', '--work-dir', default='./fastdyn_work',
+    type=click.Path(resolve_path=True, writable=True),
+    help='Path to the work directory where outputs are saved.',
+)
+@click.option(
+    '--latest-run-dir',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    help='Path to the directory containing probe_result.json.',
+)
+@click.option(
+    '-s', '--svd',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None, metavar='PATH',
+    help='Optional path to an SVD file or directory.',
+)
+@click.option(
+    '--io-log',
+    type=click.Path(resolve_path=True, exists=True),
+    default=None,
+    help='Optional explicit path override for io.log.',
+)
+@click.option(
+    '--out-prompt',
+    default='prompt.txt',
+    help='Filename for the output prompt.',
+)
+@click.option(
+    '--force',
+    is_flag=True, default=False,
+    help='Recompute trace analysis even if directory exists.',
+)
+@click.option(
+    '--routing-json',
+    type=click.Path(resolve_path=True, exists=False),
+    default=None,
+    help='Explicit path to routing JSON. Defaults to <work-dir>/routing.json',
+)
+@click.option(
+    '--force-routing',
+    is_flag=True, default=False,
+    help='Use routing even if handled: true.',
+)
+def trace_analyze(config, work_dir, latest_run_dir, svd, io_log, out_prompt, force, routing_json, force_routing):
+    from fastdyn.trace_analyzer.models import TraceAnalyzeRequest
+    from fastdyn.trace_analyzer.trace_analyze import run_trace_analysis
+    from pathlib import Path
+    
+    req = TraceAnalyzeRequest(
+        config_path=Path(config),
+        work_dir=Path(work_dir),
+        latest_run_dir=Path(latest_run_dir) if latest_run_dir else None,
+        out_prompt=out_prompt,
+        force=force,
+        routing_json=Path(routing_json) if routing_json else None,
+        force_routing=force_routing,
+        svd_path=Path(svd) if svd else None,
+        io_log=Path(io_log) if io_log else None,
+    )
+    
+    try:
+        result = run_trace_analysis(req)
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
 
+    log.info(f"Trace analysis completed. Prompt written to: {result.prompt_path}")
 if __name__ == "__main__":
     cli()

@@ -3,13 +3,21 @@
 # ==============================================================================
 [Rehosting]
 [Rehosting.directories]
+#Fastdyn will generate the static artifacts here.
 static_analysis_cache_dir = "./fastdyn_static_analysis"
+# Give the path of ardupilot source code (make sure to run `git submodule update --init` once you clone it.)
 firmware_source_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/source_code_ardupilot/ardupilot"]
 firmware_build_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/ardupilot"]
 modeling_dir = "boardrunner/boardrunner_sdk/model"
 
 # [Rehosting.milestones]
 # targets = ["HAL_ChibiOS::run"]
+
+#This will extract the macros (used in prompt generation) either from the firmware or the build path based on the availability.
+[Rehosting.static_analysis.macros]
+enabled = true
+strategy = "auto"
+
 # ==============================================================================
 #                              Memory Configuration
 # ==============================================================================
