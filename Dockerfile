@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y \
     libgstreamer-plugins-base1.0-dev \
     nlohmann-json3-dev \
     libfdt-dev \
+    libusb-1.0-0-dev \
+    libstlink-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
