@@ -43,6 +43,7 @@ class Fastdyn:
             compile_device_routing(machine.devices, machine.parsed_device, models=machine.models) #return value will be written to machine.parsed_device
 
         if target.lower() == "qemu":
+            python_endpoints = _python_endpoints_for_machine(machine)
             #write device config to the json file
             with timing.phase(f"{machine_name}.qemu_setup"):
                 qemu_cmd, gdb_cmd, launch_gdb, binary = qemu_target.setup_qemu(
@@ -51,7 +52,13 @@ class Fastdyn:
                 )
 
             with timing.phase(f"{machine_name}.qemu_execution"):
-                qemu_target.start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary)
+                qemu_target.start_execution(
+                    qemu_cmd,
+                    launch_gdb,
+                    gdb_cmd,
+                    binary,
+                    python_endpoints=python_endpoints,
+                )
 
 
     def shutdown(self, machine_name=None):
@@ -60,6 +67,36 @@ class Fastdyn:
             port = getattr(machine.qemu_target_opts, "monitor_port", None)
             if port is not None:
                 qemu_target.kill_qemu_process(port=port)
+
+
+def _python_endpoints_for_machine(machine):
+    endpoints = []
+    modeling_dir = Path(getattr(machine, "modeling_dir", "boardrunner/boardrunner_sdk/model")).expanduser()
+    if not modeling_dir.is_absolute():
+        modeling_dir = Path.cwd() / modeling_dir
+
+    for dev_name, dev in machine.devices.items():
+        for conn in getattr(dev, "connections", []) or []:
+            if not isinstance(conn, dict):
+                continue
+            if str(conn.get("type", "")).lower().strip() != "endpoint":
+                continue
+            if conn.get("enabled", True) is False:
+                continue
+
+            name = str(conn.get("name", "")).strip()
+            if not name.endswith(".py"):
+                continue
+
+            endpoint_path = Path(name).expanduser()
+            if not endpoint_path.is_absolute():
+                endpoint_path = modeling_dir / endpoint_path
+            if endpoint_path.exists():
+                endpoints.append((str(endpoint_path), dev_name))
+            else:
+                log.warning("Python endpoint configured but not found: %s", endpoint_path)
+
+    return endpoints
 
 class QemuTargetOpts:
     def __init__(self):
@@ -77,7 +114,13 @@ class QemuTargetOpts:
         self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
         self.icount: Optional[str] = None
         self.timer_irq_period_ns: Optional[int] = None
-        self.print_command = False
+        self.print_command: bool = False
+        self.reset_memory_files: bool = False
+        self.probe_run: bool = False
+        self.probe_faults: Optional[str] = None
+        self.probe_milestones: Optional[str] = None
+        self.probe_ignores: Optional[str] = None
+        self.probe_out_dir: Optional[str] = None
 
 class Machine:
     def __init__(self, machine_name, platform_name):
@@ -101,6 +144,8 @@ class Machine:
         self.static_analysis_macros: dict[str, Any] = {}
         self.firmware_source_roots: list[str] = []
         self.modeling_dir: str = "boardrunner/boardrunner_sdk/model"
+        self.milestones: list[str] = []
+        self.ignore_functions: list[str] = []
 
         self.parsed_device = {}            #internal to the machine for qemu understanding
 
@@ -329,6 +374,8 @@ class Device:
         self.supported_ranges = []
         self.handlers = []
         self.irq_range = []
+        self.description: str = ""
+        self.connections: list = []
         #here just add ranges and validate them before running qemu (transformation step)
 
     def add_ranges(self, start, end=None, size=None):
@@ -494,6 +541,10 @@ class Device:
         # keep deterministic order
         self.irq_range.sort()
         return True
+
+    def add_connection(self, conn_data: dict) -> None:
+        if conn_data and isinstance(conn_data, dict):
+            self.connections.append(conn_data)
 
     def add_slave(self, slave_data: dict):
             """
@@ -671,14 +722,12 @@ def compile_device_routing(
         bucket["backend"] = _model_backend(model)
 
     # -----------------------------
-    # Pass 2: slaves (kept compatible; your Device currently has none)
+    # Pass 2: slaves and bus-attached connections.
+    # Endpoint connections are host-side helpers and are not forwarded to QEMU.
     # -----------------------------
     for dev_name, dev in devices.items():
         slaves = getattr(dev, "slaves", None)
-        if not slaves:
-            continue
-
-        for slave in slaves:
+        for slave in slaves or []:
             for model in getattr(slave, "model", []) or []:
                 if include_models is not None and model not in include_models:
                     continue
@@ -703,6 +752,54 @@ def compile_device_routing(
                     s_cfg["is_scroll_path"] = False
 
                 slaves_out[getattr(slave, "device")] = s_cfg
+
+        for conn in getattr(dev, "connections", []) or []:
+            if not isinstance(conn, dict):
+                continue
+            if conn.get("enabled", True) is False:
+                continue
+            if str(conn.get("type", "")).lower().strip() != "slave":
+                continue
+
+            conn_models = conn.get("model")
+            if conn_models is None:
+                conn_models = [
+                    model for model, bucket in routing.items()
+                    if dev_name in bucket
+                ]
+            elif isinstance(conn_models, str):
+                conn_models = [conn_models]
+
+            for model in conn_models:
+                if include_models is not None and model not in include_models:
+                    continue
+                if model not in routing or dev_name not in routing[model]:
+                    continue
+
+                routing[model][dev_name].setdefault("slaves", {})
+                slaves_out = routing[model][dev_name]["slaves"]
+
+                meta_keys = {"type", "model", "enabled", "device_or_topic"}
+                s_cfg: Dict[str, Any] = {
+                    k: v for k, v in conn.items() if k not in meta_keys
+                }
+
+                device_scroll = conn.get("device_scroll")
+                if device_scroll:
+                    if check_scroll_paths and os.path.exists(device_scroll):
+                        s_cfg["scroll_path"] = device_scroll
+                        s_cfg["is_scroll_path"] = True
+                    else:
+                        s_cfg["is_scroll_path"] = False
+                else:
+                    s_cfg["is_scroll_path"] = False
+
+                slave_key = (
+                    conn.get("name")
+                    or conn.get("device_or_topic")
+                    or f"{dev_name}_conn_{len(slaves_out)}"
+                )
+                slaves_out[slave_key] = s_cfg
 
     # write to output dict (your current pattern)
     parsed_device.clear()

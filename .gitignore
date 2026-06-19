@@ -40,3 +40,6 @@ fastdyn_llm_history
 
 # Local run output
 *.out
+
+# useful gate for the automatic ardurover rehosting to avoid pushing models
+/boardrunner/boardrunner_sdk/model/

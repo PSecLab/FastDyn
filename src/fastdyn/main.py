@@ -5,6 +5,7 @@ import logging
 import click
 import os, shutil
 import subprocess
+import json
 import signal
 import sys
 from pathlib import Path
@@ -26,6 +27,7 @@ from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
 import fastdyn.targets.qemu_target as qemu_target
 from fastdyn.llm.handlers import llm_history_next
+from fastdyn.llm.compiler import CompilationError, compile_model
 log = logging.getLogger(__name__)
 fastdyn_log.setLogConfig()
 
@@ -180,6 +182,287 @@ def run(config, map_file, work_dir, svd, persist_work_dir, fmu, no_build_fmu, no
                         process_manager.raise_for_terminator_failure()
     except runtime_config.RuntimeConfigError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _resolve_probe_addresses(cache_dir, symbols_list):
+    """
+    Parses symbols.json once, returns addresses for the requested symbols.
+    Strips thumb bit (&= ~1).
+    """
+    symbols_path = os.path.join(cache_dir, "symbols.json")
+    if not os.path.exists(symbols_path) or not symbols_list:
+        return []
+
+    with open(symbols_path, "r") as f:
+        syms = json.load(f)
+
+    sym_dict = {sym.get("name", ""): sym.get("address") for sym in syms}
+    addrs = []
+    for sym_name in symbols_list:
+        if sym_name in sym_dict:
+            addr_val = sym_dict[sym_name]
+            if isinstance(addr_val, str):
+                addr = int(addr_val, 16) if addr_val.startswith("0x") else int(addr_val)
+            else:
+                addr = int(addr_val)
+            addr &= ~1
+            addrs.append(addr)
+    return addrs
+
+
+def _compile_model(sdk_dir):
+    try:
+        return compile_model(
+            sdk_dir,
+            fastdyn_include_dir=str(_repo_root() / "include"),
+            qemu_include_dir=str(_qemu_include_dir()),
+        )
+    except CompilationError as e:
+        return False, str(e)
+
+
+def _repo_root():
+    return Path(__file__).resolve().parents[2]
+
+
+def _qemu_include_dir():
+    qemu_root = _repo_root().parent / "qemu"
+    return qemu_root / "include"
+
+
+def _abs_repo_path(path):
+    path = Path(path).expanduser()
+    if path.is_absolute():
+        return path
+    return _repo_root() / path
+
+
+def _device_config_exists(config_path, device_name):
+    marker = f"[Device.{device_name}]"
+    try:
+        with open(config_path, "r") as f:
+            return any(line.strip() == marker for line in f)
+    except OSError:
+        return False
+
+
+def _iter_enabled_elder_scrolls(machine):
+    for dev in machine.devices.values():
+        for handler in getattr(dev, "handlers", []) or []:
+            if getattr(handler, "model", None) != "elder":
+                continue
+            if getattr(handler, "enabled", True) is False:
+                continue
+            scroll = getattr(handler, "scroll", None)
+            if scroll:
+                yield scroll
+
+
+def _compile_missing_boardrunner_models(machine):
+    missing = [
+        scroll for scroll in _iter_enabled_elder_scrolls(machine)
+        if not _abs_repo_path(scroll).exists()
+    ]
+    if not missing:
+        return True
+
+    sdk_dir = os.path.dirname(os.path.abspath(machine.modeling_dir))
+    success, out = _compile_model(sdk_dir)
+    if not success:
+        log.error(f"Compilation failed:\n{out}")
+        return False
+
+    still_missing = [
+        scroll for scroll in missing
+        if not _abs_repo_path(scroll).exists()
+    ]
+    if still_missing:
+        log.error(
+            "Compilation completed but these model libraries are still missing: %s",
+            ", ".join(still_missing),
+        )
+        return False
+
+    return True
+
+
+def _generate_peripheral_model(peri_found, config_path, modeling_dir):
+    p_name = peri_found["name"].lower()
+    p_base = peri_found["base_address"]
+    p_end = peri_found["end_address"]
+
+    sdk_dir = os.path.dirname(os.path.abspath(modeling_dir))
+
+    template_code = f"""#include <stdint.h>
+#include <device.h>
+
+void* {p_name}_init(ConfigSection* model_info) {{
+    return NULL;
+}}
+
+uint64_t {p_name}_read(void *opaque, uint64_t addr, unsigned size) {{
+    return 0;
+}}
+
+void {p_name}_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {{
+    return;
+}}
+"""
+    os.makedirs(modeling_dir, exist_ok=True)
+    model_file = os.path.join(modeling_dir, f"{p_name}.c")
+    if os.path.exists(model_file):
+        log.warning(f"Model file {model_file} already exists!")
+    else:
+        with open(model_file, "w") as f:
+            f.write(template_code)
+
+        log.info(f"Generated {model_file} for peripheral {p_name}")
+
+    if _device_config_exists(config_path, p_name):
+        log.info(f"Config already contains [Device.{p_name}], not appending a duplicate.")
+    else:
+        with open(config_path, "a") as f:
+            f.write(f"\n[Device.{p_name}]\n")
+            f.write(f"    ranges = [[\"{p_base}\", \"{p_end}\"]]\n")
+            f.write(f"    irq = [[1, 150]]\n")
+            f.write(f"    description = \"{peri_found['name']}\"\n")
+            f.write(f"    read_priority = \"elder\"\n")
+            f.write(f"    [[Device.{p_name}.handlers]]\n")
+            f.write(f"        model   = \"elder\"\n")
+            f.write(f"        enabled = true\n")
+            f.write(f"        scroll = \"boardrunner/boardrunner_sdk/build/{p_name}.so\"\n")
+            f.write(f"    [[Device.{p_name}.connections]]\n")
+            f.write(f"        type    = \"endpoint\"\n")
+            f.write(f"        name    = \"gazebo\"\n")
+            f.write(f"        enabled = false\n")
+
+        log.info(f"Appended {p_name} to config {config_path}")
+
+    success, out = _compile_model(sdk_dir)
+    if not success:
+        log.error(f"Compilation failed:\n{out}")
+        return False
+
+    log.info("Compilation successful, restarting QEMU...")
+    return True
+
+
+@cli.command('probe-run', help='Runs the firmware on QEMU in FastDyn probe mode using the passed config file.')
+@click.option('-c','--config',required=True, type=click.Path(resolve_path=True,exists=True),
+              help='The Path to the config file.', metavar='PATH')
+@click.option('-o','--work-dir',default="./fastdyn_work",metavar='PATH',
+              show_default=True, type=click.Path(resolve_path=True,writable=True),
+              help='Path to the work directory.')
+@click.option('-s', '--svd', type=click.Path(resolve_path=True, exists=True),
+              default=None, metavar='PATH', help='Optional path to an SVD file or directory.')
+@click.option('-p', '--persist-work-dir', is_flag=True, default=False,
+              help='Optional Flag to persist the existing work directory.')
+def probe_run(config, work_dir, svd, persist_work_dir):
+    work_dir = _prepare_work_dir(work_dir, persist_work_dir)
+    svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
+
+    # Ensure libhw.so can be found by QEMU
+    hw_out_dir = "/scratch/Fastdyn/ardurover_rehosting_fastdyn/libhw/out"
+    if hw_out_dir not in os.environ.get("LD_LIBRARY_PATH", ""):
+        os.environ["LD_LIBRARY_PATH"] = hw_out_dir + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")
+
+    while True:
+        fastdyn_handle = toml_parser.parser(work_dir, machine_name="machine0", toml_config=config, svd_path=svd_path)
+
+        for idx, machine in enumerate(fastdyn_handle.machines.values()):
+            machine_name = machine.name or f"machine{idx}"
+            if not machine.cpus:
+                raise click.ClickException(f"{machine_name} has no CPU configured.")
+
+            from fastdyn.binary.static_analyze import build_static_analyze_config, validate_static_analyze_cache
+            analysis_cfg = build_static_analyze_config(
+                machine=machine,
+                cpu=machine.cpus[0],
+                config_path=config,
+                force=False,
+            )
+            valid, reason, cache_dir = validate_static_analyze_cache(analysis_cfg)
+            if not valid:
+                raise click.ClickException(f"probe-run requires a valid static cache. Reason: {reason}")
+
+            machine.qemu_target_opts.probe_run = True
+            machine.qemu_target_opts.probe_faults = os.path.join(cache_dir, "probe_faults.json")
+            machine.qemu_target_opts.probe_out_dir = os.path.abspath(work_dir)
+
+            # Resolve milestones
+            if machine.milestones:
+                milestone_addrs = _resolve_probe_addresses(cache_dir, machine.milestones)
+                if milestone_addrs:
+                    milestones_json = os.path.join(work_dir, "probe_milestones.json")
+                    with open(milestones_json, "w") as f:
+                        json.dump({"milestones": milestone_addrs}, f)
+                    machine.qemu_target_opts.probe_milestones = milestones_json
+
+            # Resolve ignore functions
+            if machine.ignore_functions:
+                ignore_addrs = _resolve_probe_addresses(cache_dir, machine.ignore_functions)
+                if ignore_addrs:
+                    ignores_json = os.path.join(work_dir, "probe_ignores.json")
+                    with open(ignores_json, "w") as f:
+                        json.dump({"ignores": ignore_addrs}, f)
+                    machine.qemu_target_opts.probe_ignores = ignores_json
+
+            if not _compile_missing_boardrunner_models(machine):
+                break
+
+            fastdyn_handle.run(machine_name=machine_name, target="qemu", out_path=work_dir)
+
+        result_path = os.path.join(work_dir, "probe_result.json")
+        if not os.path.exists(result_path):
+            break
+
+        with open(result_path, "r") as f:
+            result = json.load(f)
+
+        reason = result.get("exit_reason", "")
+        if not reason.startswith("unhandled_mmio"):
+            log.info(f"Exited probe-run loop due to: {reason}")
+            break
+
+        addr_str = result.get("extra_info", "0")
+        addr = int(addr_str, 16) if addr_str.startswith("0x") else int(addr_str)
+
+        svd_map_path = os.path.join(cache_dir, "svd_map.json")
+        with open(svd_map_path, "r") as f:
+            svd_map = json.load(f)
+
+        peri_found = None
+        for p in svd_map.get("peripherals", []):
+            base = int(p["base_address"], 16)
+            end = int(p["end_address"], 16)
+            if base <= addr < end:
+                peri_found = p
+                break
+
+        if not peri_found:
+            # Fallback for common ARM Cortex-M core peripherals missing from SVD
+            core_peripherals = [
+                {"name": "DWT", "base_address": "0xe0001000", "end_address": "0xe0002000"},
+                {"name": "ITM", "base_address": "0xe0000000", "end_address": "0xe0001000"},
+                {"name": "TPIU", "base_address": "0xe0040000", "end_address": "0xe0041000"},
+                {"name": "CoreDebug", "base_address": "0xe000edf0", "end_address": "0xe000ee00"},
+                {"name": "SysTick", "base_address": "0xe000e010", "end_address": "0xe000e020"},
+                {"name": "NVIC", "base_address": "0xe000e100", "end_address": "0xe000e500"},
+            ]
+            for p in core_peripherals:
+                base = int(p["base_address"], 16)
+                end = int(p["end_address"], 16)
+                if base <= addr < end:
+                    peri_found = p
+                    break
+
+        if not peri_found:
+            log.error(f"Address {addr_str} not found in any peripheral!")
+            break
+
+        success = _generate_peripheral_model(peri_found, config, machine.modeling_dir)
+        if not success:
+            break
 
 
 @cli.command('loop', help='Like run, but restarts automatically. On a clean exit the work directory is wiped; on a crash it is preserved (--persist-work-dir) so state can be inspected.')

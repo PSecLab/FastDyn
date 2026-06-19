@@ -166,6 +166,10 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
     )
     q.finline            = toml_parser.machine_info.get("finline", None)
     q.print_command       = toml_parser.machine_info.get("print_command", False)
+    q.reset_memory_files  = toml_parser.machine_info.get("reset_memory_files", False)
+
+    machine0.ignore_functions = toml_parser.machine_info.get("ignore_functions", [])
+    machine0.milestones = toml_parser.machine_info.get("milestones", [])
 
     #add cmsis svd if Platform name provided by the user
     if toml_parser.machine_info.get("platform") is not None:
@@ -275,6 +279,7 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
 
         #create a device
         device_handler = machine0.add_device(device)
+        device_handler.description = device_info.get('description', '')
 
         #add the handlers info
         for handler in device_info.get('handlers'):
@@ -311,6 +316,10 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
                 start=range[0],
                 end=range[1]
             )
+
+        #add connections (host endpoints or bus-attached slaves)
+        for conn_entry in device_info.get('connections', []):
+            device_handler.add_connection(conn_entry)
 
         #add slaves in case of I2C and SPI
         slaves_list = device_info.get('slaves', [])

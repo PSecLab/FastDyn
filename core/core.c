@@ -756,8 +756,9 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 #endif
                     fuzz_bbl_observe((uint32_t)qemu_plugin_insn_vaddr(insn), (uint32_t)n);
                     
-                    qemu_plugin_u64 entry_tmp;
+                    qemu_plugin_u64 entry_tmp = {0};
                     entry_tmp.offset = (size_t)&core_cc_ret.list->log_buf;
+                    entry_tmp.data = NULL;
 
                     //LOG PC
                     qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOG_REG, entry_tmp, core_cc_ret.entry->reg);
@@ -765,11 +766,12 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         }
 		LookupResult ret = lookup_addr(qemu_plugin_insn_vaddr(insn));
 		if (ret.list) {
-			qemu_plugin_u64 entry_tmp;
+			qemu_plugin_u64 entry_tmp = {0};
 			if (!ret.list->log_buf.buffer) {
 					ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
 			}
 			entry_tmp.offset = (size_t)&ret.list->log_buf;
+			entry_tmp.data = NULL;
 			qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOG_REG, entry_tmp, ret.entry->reg);
 		}
 

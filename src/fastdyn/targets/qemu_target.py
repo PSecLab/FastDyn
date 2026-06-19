@@ -172,6 +172,39 @@ def _build_qemu_env(qemu_cmd):
 
     return env
 
+def _reset_file_memory_backends(machine):
+    """
+    Clear persistent file-backed RAM images before launching QEMU.
+
+    QEMU's memory-backend-file maps the given file as RAM. If that file is
+    reused, stale bytes from a previous firmware run can survive into the next
+    boot. Truncating keeps the configured path but lets QEMU grow a fresh image.
+    """
+    if not getattr(machine.qemu_target_opts, "reset_memory_files", False):
+        return
+
+    for memory in (machine.memories or {}).values():
+        if not _memory_backend_is_file(memory):
+            continue
+
+        memory_file = getattr(memory, "memory_file", "")
+        if not memory_file:
+            continue
+
+        memory_dir = os.path.dirname(memory_file)
+        if memory_dir:
+            os.makedirs(memory_dir, exist_ok=True)
+
+        try:
+            with open(memory_file, "wb"):
+                pass
+            size_bytes = _parse_memory_size(memory.memory_size)
+            os.truncate(memory_file, size_bytes)
+        except OSError as exc:
+            raise RuntimeError(f"Unable to reset memory backend file {memory_file!r}: {exc}") from exc
+
+        fastdyn_log.info(f"Reset file-backed memory image: {memory_file}")
+
 def build_qemu_cmd(machine, dev_config_path, out_path):
     """
     Builds the full qemu command from machine + qemu_target_opts.
@@ -444,6 +477,17 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
             raise ValueError(f"FMU value reference name cannot contain ',' or '=': {name!r}")
         plugin_kv.append(f"fmu_vr_{name}={int(value)}")
 
+    if opts.probe_run:
+        plugin_kv.append(f"probe_run={_bool01(opts.probe_run)}")
+    if opts.probe_faults:
+        plugin_kv.append(f"probe_faults={opts.probe_faults}")
+    if opts.probe_milestones:
+        plugin_kv.append(f"probe_milestones={opts.probe_milestones}")
+    if opts.probe_ignores:
+        plugin_kv.append(f"probe_ignores={opts.probe_ignores}")
+    if opts.probe_out_dir:
+        plugin_kv.append(f"probe_out_dir={opts.probe_out_dir}")
+
     timer_irq_period_ns = os.environ.get(
         "FASTDYN_TIMER_IRQ_PERIOD_NS",
         getattr(opts, "timer_irq_period_ns", None),
@@ -502,6 +546,7 @@ def setup_qemu(machine, work_dir=None):
     Prepares output dir, writes device config, returns QEMU and GDB commands.
     """
     with timing.phase("qemu.setup"):
+        _reset_file_memory_backends(machine)
         with timing.phase("qemu.write_device_config"):
             dev_config_path = helper.write_dev_config_json(output_dir=work_dir, data=machine.parsed_device)
 
@@ -510,7 +555,7 @@ def setup_qemu(machine, work_dir=None):
     return qemu_cmd, gdb_cmd, launch_gdb, binary
 
 
-def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
+def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary, python_endpoints=None):
     """
     Starts QEMU. If enabled, optionally launches a GDB terminal.
     """
@@ -523,6 +568,14 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
 
     with timing.phase("qemu.build_env"):
         qemu_env = _build_qemu_env(qemu_cmd)
+
+    endpoint_procs = []
+    for ep_path, dev_name in python_endpoints or []:
+        pty_path = f"/tmp/{dev_name}_pty"
+        log.info("Launching Python endpoint: %s on %s", ep_path, pty_path)
+        with timing.phase("qemu.endpoint.popen", endpoint=ep_path):
+            endpoint_procs.append(subprocess.Popen(["python3", ep_path, pty_path]))
+
     effective_cmd = profiling.wrap_perf_command(
         qemu_cmd,
         name="qemu",
@@ -542,7 +595,8 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
 
     try:
         with timing.phase("qemu.wait"):
-            qemu_proc.wait()
+            ret = qemu_proc.wait()
+            log.info(f"QEMU exited with code {ret}")
     except KeyboardInterrupt:
         try:
             qemu_proc.terminate()
@@ -550,6 +604,12 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary):
             pass
         if port is not None:
             kill_qemu_process(port)
+    finally:
+        for ep_proc in endpoint_procs:
+            try:
+                ep_proc.terminate()
+            except Exception:
+                pass
 
 
 def kill_qemu_process(port):

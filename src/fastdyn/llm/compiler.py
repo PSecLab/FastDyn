@@ -86,7 +86,23 @@ def load_build_config(sdk_dir: str) -> dict:
     return config
 
 
-def compile_model(sdk_dir: str) -> tuple:
+def _cmake_cache_value(cache_path: Path, key: str) -> str | None:
+    if not cache_path.is_file():
+        return None
+    prefix = key + ":"
+    with open(cache_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith(prefix) and "=" in line:
+                return line.split("=", 1)[1].strip()
+    return None
+
+
+def compile_model(
+    sdk_dir: str,
+    *,
+    fastdyn_include_dir: str | None = None,
+    qemu_include_dir: str | None = None,
+) -> tuple:
     """Compile all device models in the boardrunner SDK.
 
     If the build/ directory does not exist under sdk_dir, runs the
@@ -110,10 +126,11 @@ def compile_model(sdk_dir: str) -> tuple:
             "Boardrunner SDK directory not found: %s" % sdk_dir
         )
 
-    # Load build configuration
-    config = load_build_config(str(sdk_path))
-    fastdyn_include = config["FASTDYN_INCLUDE_DIR"]
-    qemu_include = config["QEMU_INCLUDE_DIR"]
+    config = {}
+    if fastdyn_include_dir is None or qemu_include_dir is None:
+        config = load_build_config(str(sdk_path))
+    fastdyn_include = fastdyn_include_dir or config["FASTDYN_INCLUDE_DIR"]
+    qemu_include = qemu_include_dir or config["QEMU_INCLUDE_DIR"]
 
     # Validate paths exist
     if not Path(fastdyn_include).is_dir():
@@ -127,9 +144,15 @@ def compile_model(sdk_dir: str) -> tuple:
 
     build_dir = sdk_path / "build"
 
-    # Configure step (only if build dir does not exist)
-    if not build_dir.is_dir():
-        fastdyn_log.info("Build directory not found. Running CMake configure...")
+    cache_path = build_dir / "CMakeCache.txt"
+    needs_configure = (
+        not build_dir.is_dir()
+        or _cmake_cache_value(cache_path, "FASTDYN_INCLUDE_DIR") != str(Path(fastdyn_include).resolve())
+        or _cmake_cache_value(cache_path, "QEMU_INCLUDE_DIR") != str(Path(qemu_include).resolve())
+    )
+
+    if needs_configure:
+        fastdyn_log.info("Running BoardRunner CMake configure...")
         configure_cmd = [
             "cmake",
             "-S", str(sdk_path),

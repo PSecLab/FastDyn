@@ -6,7 +6,7 @@
 static_analysis_cache_dir = "./fastdyn_static_analysis"
 firmware_source_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/source_code_ardupilot/ardupilot"]
 firmware_build_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/ardupilot"]
-modeling_dir = "/scratch/Fastdyn/ardurover_rehosting_fastdyn/FastDyn/boardrunner/boardrunner_sdk/model"
+modeling_dir = "boardrunner/boardrunner_sdk/model"
 
 # [Rehosting.milestones]
 # targets = ["HAL_ChibiOS::run"]
@@ -66,7 +66,7 @@ machine = "cortexm"
 cpu = "cortex-m4"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../qemu/ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "virtuals/physics/flight_controllers/courbet/bin/ardurover_v462"
+binary = "/scratch/Fastdyn/ardurover_rehosting_fastdyn/FastDyn/virtuals/physics/flight_controllers/courbet/bin/ardurover_v462"
 
 init_nsvtor = "0x08004000"
 twintrace = "None" #options are record, replay or None
@@ -105,3 +105,201 @@ logger_content = """
 
 [Device.Models.unhandled]
     # This model explicitly marks memory as unhandled.
+
+# --- Peripheral Definitions ---
+
+[Device.scb]
+    ranges = [["0xe000ed00", "0xe000ed41"]]
+    irq = [[1, 150]]
+    description = "SCB"
+    read_priority = "elder"
+    [[Device.scb.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/scb.so"
+    [[Device.scb.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.fpu]
+    ranges = [["0xe000ef34", "0xe000ef41"]]
+    irq = [[1, 150]]
+    description = "FPU"
+    read_priority = "elder"
+    [[Device.fpu.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/fpu.so"
+    [[Device.fpu.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.fpu_cpacr]
+    ranges = [["0xe000ed88", "0xe000ed8d"]]
+    irq = [[1, 150]]
+    description = "FPU_CPACR"
+    read_priority = "elder"
+    [[Device.fpu_cpacr.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/fpu_cpacr.so"
+    [[Device.fpu_cpacr.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.rcc]
+    ranges = [["0x40023800", "0x40023c00"]]
+    irq = [[1, 150]]
+    description = "RCC"
+    read_priority = "elder"
+    [[Device.rcc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/rcc.so"
+    [[Device.rcc.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpioa]
+    ranges = [["0x40020000", "0x40020400"]]
+    irq = [[1, 150]]
+    description = "GPIOA"
+    read_priority = "elder"
+    [[Device.gpioa.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioa.so"
+    [[Device.gpioa.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpiob]
+    ranges = [["0x40020400", "0x40020800"]]
+    irq = [[1, 150]]
+    description = "GPIOB"
+    read_priority = "elder"
+    [[Device.gpiob.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiob.so"
+    [[Device.gpiob.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpioc]
+    ranges = [["0x40020800", "0x40020c00"]]
+    irq = [[1, 150]]
+    description = "GPIOC"
+    read_priority = "elder"
+    [[Device.gpioc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioc.so"
+    [[Device.gpioc.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpiod]
+    ranges = [["0x40020c00", "0x40021000"]]
+    irq = [[1, 150]]
+    description = "GPIOD"
+    read_priority = "elder"
+    [[Device.gpiod.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiod.so"
+    [[Device.gpiod.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpioe]
+    ranges = [["0x40021000", "0x40021400"]]
+    irq = [[1, 150]]
+    description = "GPIOE"
+    read_priority = "elder"
+    [[Device.gpioe.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioe.so"
+    [[Device.gpioe.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpiof]
+    ranges = [["0x40021400", "0x40021800"]]
+    irq = [[1, 150]]
+    description = "GPIOF"
+    read_priority = "elder"
+    [[Device.gpiof.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiof.so"
+    [[Device.gpiof.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpiog]
+    ranges = [["0x40021800", "0x40021c00"]]
+    irq = [[1, 150]]
+    description = "GPIOG"
+    read_priority = "elder"
+    [[Device.gpiog.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiog.so"
+    [[Device.gpiog.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpioh]
+    ranges = [["0x40021c00", "0x40022000"]]
+    irq = [[1, 150]]
+    description = "GPIOH"
+    read_priority = "elder"
+    [[Device.gpioh.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioh.so"
+    [[Device.gpioh.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.gpioi]
+    ranges = [["0x40022000", "0x40022400"]]
+    irq = [[1, 150]]
+    description = "GPIOI"
+    read_priority = "elder"
+    [[Device.gpioi.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioi.so"
+    [[Device.gpioi.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.pwr]
+    ranges = [["0x40007000", "0x40007400"]]
+    irq = [[1, 150]]
+    description = "PWR"
+    read_priority = "elder"
+    [[Device.pwr.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/pwr.so"
+    [[Device.pwr.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
