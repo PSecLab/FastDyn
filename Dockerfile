@@ -32,12 +32,16 @@ RUN apt-get update && apt-get install -y \
     libusb-1.0-0-dev \
     libstlink-dev \
     unzip \
-    openjdk-17-jdk \
+    openjdk-21-jdk \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install Java 21 for Ghidra 12.0.4
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # Install Gazebo Harmonic
 RUN curl https://packages.osrfoundation.org/gazebo.gpg --output /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg && \
