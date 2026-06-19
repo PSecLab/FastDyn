@@ -2,7 +2,26 @@
 
 This guide covers the legacy ArduRover/Courbet Gazebo setup. The maintained default FastDyn path uses the FMU/Rumoca backend; use this flow when you specifically need the older Gazebo backend with `LIBGZ=true` and `LIBHW=true`.
 
-## Build Instructions
+## Docker Build
+
+The easiest way to use the legacy ArduRover/Courbet backend is via Docker. A `Dockerfile` is provided that automatically handles all QEMU, Gazebo Harmonic, Rust, and `libhw` dependencies.
+
+To build the image, run this from your **parent workspace directory** (the folder containing `FastDyn/`, `qemu/`, etc.):
+
+```bash
+cd ..
+docker build -f FastDyn/Dockerfile -t fastdyn-env .
+```
+
+Then run the container interactively:
+
+```bash
+docker run -it fastdyn-env
+```
+
+You will drop into a shell inside `/workspace/FastDyn` with the environment ready. **Note: All phases below (Static Analysis, Probe Run, Trace Analyze, etc.) should be run inside this container!**
+
+## Local Build Instructions
 
 ### Prerequisites
 The trace analysis pipeline requires `universal-ctags` or `exuberant-ctags` for fallback source extraction. Please install it using your package manager (e.g., `sudo apt-get install universal-ctags`).
@@ -13,7 +32,7 @@ bash virtuals/physics/flight_controllers/courbet/utils/install_gazebo_harmonic.s
 ```
 `LIBHW=true` also requires a buildable `libhw` checkout and `libstlink-dev`.
 
-### Build
+### Local Build
 To initialize submodules, build Gazebo dependencies, and build FastDyn, run from the FastDyn root:
 ```bash
 source ./setup.sh --build-qemu --build-gazebo --skip-optifuzz
@@ -22,7 +41,7 @@ source ./setup.sh --build-qemu --build-gazebo --skip-optifuzz
 
 Then, to build FastDyn correctly for this legacy backend, run:
 ```bash
-make PROBE=true DEV=true LIBHW=true LIBGZ=true FLIGHT_CONTROLLERS=true DEBUG_PRINT=true
+make PROBE=true DEV=true LIBHW=true LIBGZ=true FLIGHT_CONTROLLERS=true DEBUG_PRINT=true LIBFUZZ=true
 ```
 
 ## 1. Static Analysis Phase

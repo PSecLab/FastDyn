@@ -1,6 +1,27 @@
 # FastDyn Plugins
+
 ## Automatic Rehosting of Ardupilot Ardurover v4.6.2
+
 Please access the detailed rehosting steps in the `docs/Ardurover_Rehosting.md`
+
+## Docker Build
+
+A fully containerized setup is available via Docker. The Dockerfile automatically configures the system dependencies, Rust, Gazebo Harmonic, QEMU, `libhw`, and the FastDyn plugin.
+
+To build the FastDyn environment using Docker, run this from the parent workspace directory (the directory containing `FastDyn/`, `qemu/`, `libhw/`, etc.):
+
+```bash
+cd ..  # Ensure you are in the workspace parent directory
+docker build -f FastDyn/Dockerfile -t fastdyn-env .
+```
+
+After the build completes, launch the container interactively:
+
+```bash
+docker run -it fastdyn-env
+```
+
+You will drop into a bash shell inside `/workspace/FastDyn` with all dependencies built and the virtual environment already activated. All subsequent commands (fuzzing, trace analysis, etc.) should be run inside this container.
 
 ## Quick Start: ArduCopter FMUv3 + MAVCesium
 
@@ -52,7 +73,7 @@ time, uploads the ArduCopter mission, flies it, and exits after final landing.
   FMUv3, vehicle selection, dry-runs, swarm execution, and legacy Docker/Gazebo.
 - `tests/integration/README.md`: local integration smoke and mission tests.
 
-## Build
+## Local Build
 
 FastDyn depends on two sibling repositories that you must build first:
 
@@ -107,19 +128,19 @@ export LD_LIBRARY_PATH=$PWD/build:$PWD/device_models/postmartem/verifier${LD_LIB
 
 Most features are off by default. Override at `make` time:
 
-| Flag                   | Default | Enables                              |
-| ---------------------- | ------- | ------------------------------------ |
-| `LIBHW`                | `true`  | Hardware passthrough via libhw       |
-| `LIBFUZZ`              | `true`  | LibAFL fuzzing harness               |
-| `DEV`                  | `true`  | Built-in device models               |
-| `DEBUG_PRINT`          | `true`  | Verbose plugin logging               |
-| `LIBGZ`                | `false` | Gazebo / SITL physics integration    |
-| `LIBPY`                | `false` | Halucinator-mode Python callbacks    |
-| `SUNDIALS`             | `false` | SUNDIALS solver for FMU physics      |
-| `PHY`                  | `false` | Physics engine; auto-enabled by `LIBGZ`, `FMU`, or `FLIGHT_CONTROLLERS` |
-| `FMU`                  | `false` | FMU (Functional Mockup Unit) support |
-| `FLIGHT_CONTROLLERS`   | `false` | ArduPilot / PX4 SITL adapters        |
-| `BOARD_RUNNER`         | `true`  | BoardRunner SDK build                |
+| Flag                 | Default | Enables                                                                 |
+| -------------------- | ------- | ----------------------------------------------------------------------- |
+| `LIBHW`              | `true`  | Hardware passthrough via libhw                                          |
+| `LIBFUZZ`            | `true`  | LibAFL fuzzing harness                                                  |
+| `DEV`                | `true`  | Built-in device models                                                  |
+| `DEBUG_PRINT`        | `true`  | Verbose plugin logging                                                  |
+| `LIBGZ`              | `false` | Gazebo / SITL physics integration                                       |
+| `LIBPY`              | `false` | Halucinator-mode Python callbacks                                       |
+| `SUNDIALS`           | `false` | SUNDIALS solver for FMU physics                                         |
+| `PHY`                | `false` | Physics engine; auto-enabled by `LIBGZ`, `FMU`, or `FLIGHT_CONTROLLERS` |
+| `FMU`                | `false` | FMU (Functional Mockup Unit) support                                    |
+| `FLIGHT_CONTROLLERS` | `false` | ArduPilot / PX4 SITL adapters                                           |
+| `BOARD_RUNNER`       | `true`  | BoardRunner SDK build                                                   |
 
 Example:
 
@@ -377,8 +398,10 @@ FastDyn has two complementary fuzzing workflows:
   ```bash
   FASTDYN_OPTIFUZZ_SMOKE=1 FASTDYN_OPTIFUZZ_DRY_RUN=1 cargo run --bin baby_fuzzer
   ```
+
   Set `FASTDYN_OPTIFUZZ_COVERAGE=1` when using a FastDyn plugin built with the
   LibAFL coverage writer; the default high-fidelity plugin leaves this off.
+
 - `fastdyn swarm` is also available directly as a high-fidelity campaign runner
   for many full ArduCopter/FMUv3 simulations. It keeps the actual QEMU firmware,
   board tick, FMU plant, MAVProxy, MAVCesium, and mission script path intact

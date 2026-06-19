@@ -6,8 +6,8 @@
 #Fastdyn will generate the static artifacts here.
 static_analysis_cache_dir = "./fastdyn_static_analysis"
 # Give the path of ardupilot source code (make sure to run `git submodule update --init` once you clone it.)
-firmware_source_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/source_code_ardupilot/ardupilot"]
-firmware_build_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/ardupilot"]
+firmware_source_roots = ["../source_code_ardupilot/ardupilot"]
+firmware_build_roots = ["../firmware_build_ardupilot/ardupilot"]
 modeling_dir = "boardrunner/boardrunner_sdk/model"
 
 # [Rehosting.milestones]
@@ -60,7 +60,7 @@ log_file = "qemu.log"
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-coverage=true
+coverage=false
 finline='None'
 print_command = true          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
 reset_memory_files = true     # clear file-backed RAM before QEMU starts to avoid stale SRAM across runs
@@ -74,7 +74,7 @@ machine = "cortexm"
 cpu = "cortex-m4"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../qemu/ws/monitor.elf" # The VMM-like monitor that runs with the target
-binary = "/scratch/Fastdyn/ardurover_rehosting_fastdyn/FastDyn/virtuals/physics/flight_controllers/courbet/bin/ardurover_v462"
+binary = "virtuals/physics/flight_controllers/courbet/bin/ardurover_v462"
 
 init_nsvtor = "0x08004000"
 twintrace = "None" #options are record, replay or None
