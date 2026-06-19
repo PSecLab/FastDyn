@@ -31,6 +31,8 @@ RUN apt-get update && apt-get install -y \
     libfdt-dev \
     libusb-1.0-0-dev \
     libstlink-dev \
+    unzip \
+    openjdk-17-jdk \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
@@ -57,6 +59,11 @@ RUN mkdir -p source_code_ardupilot && \
     mkdir -p firmware_build_ardupilot && \
     cp -r source_code_ardupilot/ardupilot firmware_build_ardupilot/ardupilot
 
+# Download and install Ghidra next to FastDyn
+RUN wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.0.4_build/ghidra_12.0.4_PUBLIC_20260303.zip && \
+    unzip ghidra_12.0.4_PUBLIC_20260303.zip && \
+    rm ghidra_12.0.4_PUBLIC_20260303.zip
+
 WORKDIR /workspace/FastDyn
 
 # Remove the copied fastdyn-env so it can be cleanly recreated inside the container
@@ -75,7 +82,8 @@ RUN /bin/bash -c "source fastdyn-env/bin/activate && make PROBE=true DEV=true LI
 # Automatically activate the virtual environment for interactive shells
 # Also add libhw to the library path so the fastdyn plugin can find it
 ENV PATH="/workspace/FastDyn/fastdyn-env/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/workspace/libhw/out:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/workspace/libhw/out"
+ENV GHIDRA_INSTALL_DIR="/workspace/ghidra_12.0.4_PUBLIC"
 
 # Set default command to bash
 CMD ["/bin/bash"]
