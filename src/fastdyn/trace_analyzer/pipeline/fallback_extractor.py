@@ -143,35 +143,52 @@ def run_compile_db_fallback(
 
     compile_db = load_compile_database(db_paths)
 
-    # Search for the class file in the DB
     target_entry = None
     target_path = None
+    anchor_line = None
+
+    # First pass: try ctags on all matching files
     for entry in compile_db:
         fpath = entry.get("file", "")
         fname = Path(fpath).name
         if fname.startswith(class_name) and fname.endswith((".cpp", ".c", ".cc", ".cxx")):
-            target_entry = entry
-            target_path = Path(fpath)
-            if not target_path.is_absolute():
-                target_path = Path(entry.get("directory", "")) / target_path
-            break
+            p = Path(fpath)
+            if not p.is_absolute():
+                p = Path(entry.get("directory", "")) / p
+            if p.exists():
+                line = find_source_line_ctags(p, method_name)
+                if line is not None:
+                    target_entry = entry
+                    target_path = p
+                    anchor_line = line
+                    break
+
+    # Second pass: fallback regex if ctags missed it
+    if not target_path:
+        for entry in compile_db:
+            fpath = entry.get("file", "")
+            fname = Path(fpath).name
+            if fname.startswith(class_name) and fname.endswith((".cpp", ".c", ".cc", ".cxx")):
+                p = Path(fpath)
+                if not p.is_absolute():
+                    p = Path(entry.get("directory", "")) / p
+                if p.exists():
+                    try:
+                        content = p.read_text(errors="replace").splitlines()
+                        pattern = re.compile(rf"\b{method_name}\s*\(")
+                        for i, line in enumerate(content):
+                            if pattern.search(line):
+                                target_entry = entry
+                                target_path = p
+                                anchor_line = i + 1
+                                break
+                    except OSError:
+                        pass
+                if target_path:
+                    break
             
     if not target_entry or not target_path or not target_path.exists():
         return None, None
-
-    # Find starting line using ctags
-    anchor_line = find_source_line_ctags(target_path, method_name)
-    if anchor_line is None:
-        # Fallback regex if ctags misses it
-        try:
-            content = target_path.read_text(errors="replace").splitlines()
-            pattern = re.compile(rf"\b{method_name}\s*\(")
-            for i, line in enumerate(content):
-                if pattern.search(line):
-                    anchor_line = i + 1
-                    break
-        except OSError:
-            pass
 
     if anchor_line is None:
         anchor_line = 1

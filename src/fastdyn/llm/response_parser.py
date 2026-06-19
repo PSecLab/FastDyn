@@ -43,6 +43,19 @@ def extract_routing_json(response: str) -> dict:
     """
     import json
 
+    # Try to extract raw JSON directly following VETO:
+    if response.lstrip().startswith("VETO:"):
+        raw_json = response.lstrip()[5:].strip()
+        raw_json = re.sub(r'^```json\s*', '', raw_json, flags=re.IGNORECASE)
+        raw_json = re.sub(r'^```\s*', '', raw_json)
+        raw_json = re.sub(r'```\s*$', '', raw_json)
+        try:
+            routing = json.loads(raw_json)
+            if isinstance(routing, dict):
+                return routing
+        except json.JSONDecodeError:
+            pass
+
     # Find all ```json ... ``` blocks; the routing schema is always the last one.
     pattern = re.compile(r'```json\s*\n(.*?)```', re.DOTALL | re.IGNORECASE)
     matches = pattern.findall(response)

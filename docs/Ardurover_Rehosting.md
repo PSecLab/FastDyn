@@ -20,6 +20,11 @@ source ./setup.sh --build-qemu --build-gazebo --skip-optifuzz
 ```
 *(Omit `--build-qemu` if the patched QEMU is already built).*
 
+Then, to build FastDyn correctly for this legacy backend, run:
+```bash
+make PROBE=true DEV=true LIBHW=true LIBGZ=true FLIGHT_CONTROLLERS=true DEBUG_PRINT=true
+```
+
 ## 1. Static Analysis Phase
 
 Before running certain analyses or traces, execute the static analysis frontend to extract binary metadata, SVD structures, source maps, and callgraphs.

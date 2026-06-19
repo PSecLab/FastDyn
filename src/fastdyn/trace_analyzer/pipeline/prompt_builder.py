@@ -366,7 +366,7 @@ def _build_known_peripheral_prompt(
     )
     parts.append(
         "To VETO, do NOT write any C code. Instead, **start your response with the exact word `VETO:`** "
-        "followed immediately by the JSON routing block (schema at the end of this prompt) to pause the pipeline and request the missing models."
+        "followed immediately by the JSON routing block wrapped in ```json ... ``` (schema at the end of this prompt) to pause the pipeline and request the missing models."
     )
     parts.append(
         "If the pipeline's guess is 100% correct and you have all the files you need to fix the issue in the context, "
@@ -512,7 +512,7 @@ def _build_implementation_prompt(
     )
     parts.append(
         "To VETO, do NOT write any C code. Instead, **start your response with the exact word `VETO:`** "
-        "followed immediately by the JSON routing block (schema at the end of this prompt)."
+        "followed immediately by the JSON routing block wrapped in ```json ... ``` (schema at the end of this prompt)."
     )
     parts.append(
         "**CRITICAL PIPELINE RULE:** If you VETO, your new JSON block completely resets the pipeline state. "
