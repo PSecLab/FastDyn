@@ -45,6 +45,9 @@ setup: clean fetch
 	@if [ "$(BOARD_RUNNER)" = "true" ]; then \
 		$(MAKE) build_boardrunner; \
 	fi
+	@if [ "$(LIBFUZZ)" = "true" ]; then \
+		cd virtuals/fuzzer/fastdyn_fuzz_lib && cargo build --release; \
+	fi
 
 # Copy libhw.so into the build directory
 build_boardrunner:
