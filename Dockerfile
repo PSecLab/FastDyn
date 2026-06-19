@@ -73,7 +73,9 @@ RUN /bin/bash -c "source ./setup.sh --build-qemu --build-gazebo --skip-optifuzz"
 RUN /bin/bash -c "source fastdyn-env/bin/activate && make PROBE=true DEV=true LIBHW=true LIBGZ=true FLIGHT_CONTROLLERS=true DEBUG_PRINT=true LIBFUZZ=true"
 
 # Automatically activate the virtual environment for interactive shells
+# Also add libhw to the library path so the fastdyn plugin can find it
 ENV PATH="/workspace/FastDyn/fastdyn-env/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/workspace/libhw/out:${LD_LIBRARY_PATH}"
 
 # Set default command to bash
 CMD ["/bin/bash"]
