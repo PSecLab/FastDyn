@@ -700,6 +700,7 @@ AddressList core_cc_list;
 LoggerEntry core_cc_entry;
 LookupResult core_cc_ret;
 char gpio_memory[0x400];
+static uint16_t tracer_consumed_index = 0;
 
 static void tb_exec_cb(unsigned int cpu_index, void *udata)
 {
@@ -758,7 +759,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
                     
                     qemu_plugin_u64 entry_tmp = {0};
                     entry_tmp.offset = (size_t)&core_cc_ret.list->log_buf;
-                    entry_tmp.data = NULL;
+                    entry_tmp.data = (void *)&tracer_consumed_index;
 
                     //LOG PC
                     qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(insn, QEMU_PLUGIN_INLINE_LOG_REG, entry_tmp, core_cc_ret.entry->reg);
@@ -869,8 +870,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 #include <immintrin.h>
 
 static pthread_t thread;
-static _Atomic int tracer_ready = 0;
-static _Atomic uint16_t tracer_consumed_index = 0;
+static int tracer_ready = 0;
 
 static void* tracer(void* arg) {
 	core_cc_list.count =1;
@@ -880,8 +880,7 @@ static void* tracer(void* arg) {
 	core_cc_ret.list->log_buf.buffer = malloc(UINT16_MAX + 1);
 	uint16_t tracer_index =0;
 
-	atomic_store_explicit(&tracer_consumed_index, 0, memory_order_relaxed);
-	atomic_store_explicit(&tracer_ready, 1, memory_order_release);
+	tracer_ready = 1;
 
 	//Maybe make read atomic
 	while(true) {
@@ -890,7 +889,7 @@ static void* tracer(void* arg) {
             fuzz_add_observed_value(value);
 
 			tracer_index +=4;//32bit PC
-			atomic_store_explicit(&tracer_consumed_index, tracer_index, memory_order_release);
+            tracer_consumed_index = tracer_index;
 		}
 	}
 
@@ -900,12 +899,12 @@ static void* tracer(void* arg) {
 void core_wait_for_trace_drain(void) {
     if (!coverage) return;
 
-    while (!atomic_load_explicit(&tracer_ready, memory_order_acquire)) {
+    while (!tracer_ready) {
         _mm_pause();
     }
 
     uint16_t target = __atomic_load_n(&core_cc_list.log_buf.index, __ATOMIC_ACQUIRE);
-    while (atomic_load_explicit(&tracer_consumed_index, memory_order_acquire) != target) {
+    while (tracer_consumed_index != target) {
         _mm_pause();
     }
 }
@@ -1170,7 +1169,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                 utils_die("Python VM Init Failed");
         }
     #endif
-
 
     return 0;
 }

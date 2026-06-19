@@ -603,6 +603,8 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 [[package]]
 name = "libafl"
 version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81e13655171e69ad9094dd1be1948950a36d228f01a7cb9f6d8477090d98c6e4"
 dependencies = [
  "ahash",
  "arbitrary-int 2.0.0",
@@ -641,6 +643,8 @@ dependencies = [
 [[package]]
 name = "libafl_bolts"
 version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52cbae44f69156f035ae2196b135ad27ea95020767e6787bfe45e8c2438c67b9"
 dependencies = [
  "ahash",
  "backtrace",
@@ -677,6 +681,8 @@ dependencies = [
 [[package]]
 name = "libafl_derive"
 version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61adf76899bffdcd15ae7fea42b978e7df7cf9213aacdd8cdcda89e4bb3bc32d"
 dependencies = [
  "proc-macro2",
  "quote",

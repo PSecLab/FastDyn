@@ -3,11 +3,12 @@
 
 #include <config.h>
 
-#define FASTDYN_TRACE_CAP 16384 * 4   /* PCs per run (64 KB per buffer) */
+#define FASTDYN_TRACE_INITIAL_CAP (65536)   /* Initial PCs per run. */
 
 typedef struct {
     uint32_t count;
-    uint32_t entries[FASTDYN_TRACE_CAP];
+    uint32_t capacity;
+    uint32_t *entries;
 } fastdyn_trace_run_t;
 
 
@@ -24,8 +25,9 @@ void fuzz_trace_record_pc(uint32_t pc);
  */
 void fuzz_trace_commit_run(void);
 
-/* Enable recording into g_trace_current (idempotent). */
+/* Enable and disable recording into g_trace_current (idempotent). */
 void fuzz_trace_enable(void);
+void fuzz_trace_disable(void);
 
 /* Clear only the current in-progress trace window. */
 void fuzz_trace_begin_window(void);

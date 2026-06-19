@@ -1,3 +1,5 @@
+subdir('stub')
+
 if get_option('enable_fmu')
   subdir('fmu')
 endif

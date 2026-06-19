@@ -12,7 +12,10 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <signal.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <immintrin.h>
 
 #include "virtuals.h"
@@ -27,7 +30,7 @@ static int coverage = 0;
 
 static char g_fuzzing_buf[1024];
 
-static uint32_t g_prev_pc;
+uint32_t fuzz_prev_pc = 0;
 
 #define CVG_PATH "fastdyn_work/cvg.bin"
 #define SNAPSHOT_RAW_PATH "fastdyn_work/snapshot.bin"
@@ -49,9 +52,23 @@ static const char *writable_ranges_path(void) {
 
     return "fastdyn_work/bin-writable-ranges";
 }
+
+static const char *coverage_output_path() {
+    const char *work_dir = getenv("FASTDYN_WORK_DIR");
+    if (work_dir && work_dir[0]) {
+        static char buffer[4096];
+        snprintf(buffer, sizeof(buffer), "%s/cvg.bin", work_dir);
+        return buffer;
+    }
+
+    return "./fastdyn_work/cvg.bin";
+}
+
 static size_t wlist_count = 0;
 static uint32_t *wlist = NULL;
-static uint32_t g_stack_top = 0;
+static pid_t g_agentic_fuzz_pid = -1;
+
+static int fuzz_irq_depth = 0;
 
 static uint8_t *snap_membuff = NULL;
 static uint32_t g_snapshot_regs[SNAPSHOT_REG_COUNT];
@@ -74,9 +91,14 @@ extern uint8_t CVG[MAP_SIZE];
 extern AddressList core_cc_list; // in future, update so that we aren't using an extern global for this, maybe add core.c helper to consume inputs
 
 typedef void (*fuzz_callback_t)();
+static fuzz_callback_t g_fuzz_snap_callback = NULL;
 static fuzz_callback_t g_fuzz_sync_callback = NULL;
 static fuzz_callback_t g_fuzz_exit_callback = NULL;
 static fuzz_callback_t g_fuzz_restore_callback = NULL;
+
+void fuzz_register_snap_callback(fuzz_callback_t cb) {
+    g_fuzz_snap_callback = cb;
+}
 
 void fuzz_register_callback(fuzz_callback_t cb) {
     g_fuzz_sync_callback = cb;
@@ -92,18 +114,198 @@ void fuzz_register_restore(fuzz_callback_t cb) {
 
 // method could be better, but since we do this in a hook the firmware isn't executing and is safe
 static void fuzz_irq_entry(int irq) {
-    core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFF;
+    core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFD;
     core_cc_list.log_buf.index = (uint16_t)(core_cc_list.log_buf.index + 4);
 }
 static void fuzz_irq_exit(int irq) {
-    core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFD;
+    core_cc_list.log_buf.buffer[(uint16_t)core_cc_list.log_buf.index / 4] = 0xFFFFFFFB;
     core_cc_list.log_buf.index = (uint16_t)(core_cc_list.log_buf.index + 4);
 }
 
 // wait for tracer in core to catch up with inline pc logger
 static void fuzz_sync_coverage(void) {
     core_wait_for_trace_drain();
-    g_prev_pc = 0;
+    fuzz_prev_pc = 0;
+}
+
+// ----------------------- agentic_fuzz monitor process -------------------------
+
+static const char *fuzz_get_arg_exact(const char *key, int argc, char **argv)
+{
+    size_t len = strlen(key);
+
+    for (int i = 0; i < argc; i++) {
+        if (strncmp(argv[i], key, len) == 0 && argv[i][len] == '=') {
+            return argv[i] + len + 1;
+        }
+    }
+
+    return NULL;
+}
+
+static bool fuzz_arg_bool(const char *value, bool default_value)
+{
+    if (value == NULL || value[0] == '\0') {
+        return default_value;
+    }
+
+    if (strcasecmp(value, "1") == 0 ||
+        strcasecmp(value, "true") == 0 ||
+        strcasecmp(value, "yes") == 0 ||
+        strcasecmp(value, "on") == 0) {
+        return true;
+    }
+
+    if (strcasecmp(value, "0") == 0 ||
+        strcasecmp(value, "false") == 0 ||
+        strcasecmp(value, "no") == 0 ||
+        strcasecmp(value, "off") == 0 ||
+        strcasecmp(value, "none") == 0) {
+        return false;
+    }
+
+    return default_value;
+}
+
+static void agentic_fuzz_signal_child(int signal_number)
+{
+    if (g_agentic_fuzz_pid <= 0) {
+        return;
+    }
+
+    if (kill(-g_agentic_fuzz_pid, signal_number) != 0 && errno == ESRCH) {
+        kill(g_agentic_fuzz_pid, signal_number);
+    }
+}
+
+static void agentic_fuzz_stop_monitor(void)
+{
+    if (g_agentic_fuzz_pid <= 0) {
+        return;
+    }
+
+    int status = 0;
+    pid_t waited = waitpid(g_agentic_fuzz_pid, &status, WNOHANG);
+    if (waited == g_agentic_fuzz_pid || (waited < 0 && errno == ECHILD)) {
+        g_agentic_fuzz_pid = -1;
+        return;
+    }
+
+    agentic_fuzz_signal_child(SIGTERM);
+
+    for (int i = 0; i < 50; i++) {
+        waited = waitpid(g_agentic_fuzz_pid, &status, WNOHANG);
+        if (waited == g_agentic_fuzz_pid || (waited < 0 && errno == ECHILD)) {
+            g_agentic_fuzz_pid = -1;
+            return;
+        }
+        usleep(50000);
+    }
+
+    agentic_fuzz_signal_child(SIGKILL);
+    while (waitpid(g_agentic_fuzz_pid, &status, 0) < 0 && errno == EINTR) {
+        continue;
+    }
+    g_agentic_fuzz_pid = -1;
+}
+
+static void agentic_fuzz_start_monitor(int argc, char **argv)
+{
+    const char *enabled = fuzz_get_arg_exact("agentic_fuzz", argc, argv);
+    if (!fuzz_arg_bool(enabled, false) || g_agentic_fuzz_pid > 0) {
+        return;
+    }
+
+    const char *python = fuzz_get_arg_exact("agentic_fuzz_python", argc, argv);
+    const char *script = fuzz_get_arg_exact("agentic_fuzz_script", argc, argv);
+    const char *cwd = fuzz_get_arg_exact("agentic_fuzz_cwd", argc, argv);
+    const char *binary = fuzz_get_arg_exact("agentic_fuzz_binary", argc, argv);
+    const char *work_dir = fuzz_get_arg_exact("agentic_fuzz_work_dir", argc, argv);
+    const char *in_dir = fuzz_get_arg_exact("agentic_fuzz_in_dir", argc, argv);
+    const char *out_dir = fuzz_get_arg_exact("agentic_fuzz_out_dir", argc, argv);
+    const char *coverage_path = fuzz_get_arg_exact("agentic_fuzz_coverage", argc, argv);
+    const char *regions = fuzz_get_arg_exact("agentic_fuzz_regions", argc, argv);
+    const char *snapshot = fuzz_get_arg_exact("agentic_fuzz_snapshot", argc, argv);
+    const char *log_path = fuzz_get_arg_exact("agentic_fuzz_log", argc, argv);
+    const char *model = fuzz_get_arg_exact("agentic_fuzz_model", argc, argv);
+    const char *taint_arg = fuzz_get_arg_exact("agentic_fuzz_taint", argc, argv);
+    bool taint = fuzz_arg_bool(taint_arg, true);
+
+    if (python == NULL || python[0] == '\0') python = "python3";
+    if (script == NULL || script[0] == '\0') script = "virtuals/fuzzer/agentic/monitor.py";
+    if (work_dir == NULL || work_dir[0] == '\0') work_dir = "fastdyn_work";
+    if (in_dir == NULL || in_dir[0] == '\0') in_dir = "fastdyn_work/corpus";
+    if (out_dir == NULL || out_dir[0] == '\0') out_dir = "fastdyn_work/corpus-agentic";
+    if (coverage_path == NULL || coverage_path[0] == '\0') coverage_path = "fastdyn_work/bbl.txt";
+    if (regions == NULL || regions[0] == '\0') regions = "fastdyn_work/bin-writable-ranges";
+    if (snapshot == NULL || snapshot[0] == '\0') snapshot = "fastdyn_work/snapshot.bin";
+    if (log_path == NULL || log_path[0] == '\0') log_path = "fastdyn_work/agentic_fuzz-monitor.log";
+
+    if (binary == NULL || binary[0] == '\0') {
+        fprintf(stderr, "[agentic_fuzz] agentic_fuzz=true but agentic_fuzz_binary is missing\n");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("[agentic_fuzz] fork");
+        return;
+    }
+
+    if (pid == 0) {
+        int log_fd = open(log_path, O_CREAT | O_WRONLY | O_APPEND, 0666);
+        if (log_fd >= 0) {
+            dup2(log_fd, STDOUT_FILENO);
+            dup2(log_fd, STDERR_FILENO);
+            if (log_fd > STDERR_FILENO) {
+                close(log_fd);
+            }
+        }
+
+        setsid();
+
+        if (cwd != NULL && cwd[0] != '\0' && chdir(cwd) != 0) {
+            perror("[agentic_fuzz] chdir");
+            _exit(127);
+        }
+
+        setenv("PYTHONUNBUFFERED", "1", 1);
+
+        char *child_argv[21];
+        int idx = 0;
+        child_argv[idx++] = (char *)python;
+        child_argv[idx++] = "-u";
+        child_argv[idx++] = (char *)script;
+        child_argv[idx++] = (char *)binary;
+        child_argv[idx++] = "run";
+        child_argv[idx++] = "--work-dir";
+        child_argv[idx++] = (char *)work_dir;
+        child_argv[idx++] = "--in-dir";
+        child_argv[idx++] = (char *)in_dir;
+        child_argv[idx++] = "--out-dir";
+        child_argv[idx++] = (char *)out_dir;
+        child_argv[idx++] = "--coverage";
+        child_argv[idx++] = (char *)coverage_path;
+        child_argv[idx++] = "--regions";
+        child_argv[idx++] = (char *)regions;
+        child_argv[idx++] = "--snapshot";
+        child_argv[idx++] = (char *)snapshot;
+        if (model != NULL && model[0] != '\0') {
+            child_argv[idx++] = "--model";
+            child_argv[idx++] = (char *)model;
+        }
+        if (taint) {
+            child_argv[idx++] = "--taint";
+        }
+        child_argv[idx] = NULL;
+
+        execvp(python, child_argv);
+        perror("[agentic_fuzz] execvp");
+        _exit(127);
+    }
+
+    g_agentic_fuzz_pid = pid;
+    //printf("[agentic_fuzz] started monitor pid %d, logging to %s\n", (int)pid, log_path);
 }
 
 // ----------------------- data getting & setting -----------------------------
@@ -215,16 +417,8 @@ static uint32_t *fuzz_get_writable_ranges(const char *filename, size_t *out_coun
             array = tmp;
         }
 
-        printf("Adding %x size %x\n", a, b);
-
         array[count++] = a;
         array[count++] = b;
-    }
-
-    // Doesn't include stack information
-    if (array[count-1] != 0) {
-        printf("No stack information\n");
-        return 0;
     }
 
     fclose(f);
@@ -244,33 +438,21 @@ static size_t fuzz_snapshot_size(void)
     return total_mem;
 }
 
-static bool fuzz_snapshot_sp_valid(uint32_t sp)
-{
-    return g_stack_top != 0 && sp != 0 && sp <= g_stack_top;
-}
-
-static void fuzz_set_snapshot_sp(uint32_t sp)
-{
-    wlist[wlist_count - 2] = sp;
-    wlist[wlist_count - 1] = g_stack_top - sp;
-}
-
 // take the initial snapshot, supports saving/loading snapshots to/from disk
 int fuzz_snap_memory() {
     uint32_t file_regs[SNAPSHOT_REG_COUNT];
-    uint32_t sp = qemu_get_register(13);
     size_t total_mem;
-    FILE *f = fopen(SNAPSHOT_RAW_PATH, "rb");
+    FILE *f;
     g_snapshot_loaded_from_file = false;
+
+    f = fopen(SNAPSHOT_RAW_PATH, "rb");
 
     // read an existing snapshot file if present, useful for skipping initialization, checks that sp is valid
     if (f) {
-        if (fread(file_regs, sizeof(file_regs[0]), SNAPSHOT_REG_COUNT, f) == SNAPSHOT_REG_COUNT &&
-            fuzz_snapshot_sp_valid(file_regs[13])) {
-            fuzz_set_snapshot_sp(file_regs[13]);
+        if (fread(file_regs, sizeof(file_regs[0]), SNAPSHOT_REG_COUNT, f) == SNAPSHOT_REG_COUNT) {
             total_mem = fuzz_snapshot_size();
-
             snap_membuff = malloc(total_mem);
+
             if (!snap_membuff) {
                 fclose(f);
                 printf("Failed to malloc buffer\n");
@@ -293,7 +475,6 @@ int fuzz_snap_memory() {
         printf("Ignoring invalid snapshot dump at %s\n", SNAPSHOT_RAW_PATH);
     }
 
-    fuzz_set_snapshot_sp(sp);
     total_mem = fuzz_snapshot_size();
 
     snap_membuff = malloc(total_mem);
@@ -348,7 +529,7 @@ static bool fuzz_ensure_snapshot(void)
     return true;
 }
 
-static bool fuzz_restore_snapshot(void)
+bool fuzz_restore_snapshot(void)
 {
     if (!fuzz_ensure_snapshot() || !snap_membuff) {
         return false;
@@ -368,9 +549,6 @@ static bool fuzz_restore_snapshot(void)
     if (g_fuzz_restore_callback) {
         g_fuzz_restore_callback();
     }
-
-    fuzz_trace_commit_run();
-    fuzz_trace_compare();
 
     return true;
 }
@@ -417,8 +595,6 @@ static void virt_assert(unsigned int cpu_index, void *udata)
         }
 
         fuzz_sync_coverage();
-        fuzz_trace_commit_run();
-        fuzz_trace_compare();
         fuzz_backend_report_assert(true);
 
         // wait for fuzzer to observe the crash
@@ -427,8 +603,39 @@ static void virt_assert(unsigned int cpu_index, void *udata)
 }
 
 static inline void observed_clear() {
-    g_prev_pc = 0;
+    fuzz_prev_pc = 0;
     memset(CVG, 0, sizeof(CVG));
+}
+
+static inline bool fuzz_snap_init_timeout(int seconds) {
+    static bool started = false;
+    static struct timespec start_time;
+    struct timespec now;
+
+    if (seconds <= 0) {
+        return true;
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        perror("clock_gettime");
+        return true;
+    }
+
+    if (!started) {
+        start_time = now;
+        started = true;
+        return false;
+    }
+
+    time_t elapsed_sec = now.tv_sec - start_time.tv_sec;
+    long elapsed_nsec = now.tv_nsec - start_time.tv_nsec;
+
+    if (elapsed_nsec < 0) {
+        elapsed_sec--;
+        elapsed_nsec += 1000000000L;
+    }
+
+    return elapsed_sec > seconds || (elapsed_sec == seconds && elapsed_nsec >= 0);
 }
 
 static void fuzz_sync_point(unsigned int cpu_index, void *udata);
@@ -436,7 +643,9 @@ static void fuzz_snap_point(unsigned int cpu_index, void *udata)
 {
     static bool initialized = false;
 
-    if (!initialized) {
+    // optionally wait x seconds after first hook to get to post initialization in some firmwares
+    if (!initialized && fuzz_snap_init_timeout(0)) {
+        fuzz_irq_depth = 0; // fix any drift after jumping
         if (!fuzz_ensure_snapshot()) {
             utils_die("[sync] Failed to take initial snapshot");
         }
@@ -445,13 +654,15 @@ static void fuzz_snap_point(unsigned int cpu_index, void *udata)
             utils_die("[sync] Failed to restore loaded snapshot");
         }
 
-        fuzz_trace_reset();
-
         observed_clear();
 
         initialized = true;
 
         fuzz_sync_point(cpu_index, udata);
+    }
+
+    if (g_fuzz_snap_callback) {
+        g_fuzz_snap_callback();
     }
 }
 
@@ -468,6 +679,8 @@ static void fuzz_sync_point(unsigned int cpu_index, void *udata)
 
     fuzz_sync_coverage();
 
+    fuzz_dump_bbl();
+
     if (g_fuzz_sync_callback) {
         g_fuzz_sync_callback();
     }
@@ -475,7 +688,6 @@ static void fuzz_sync_point(unsigned int cpu_index, void *udata)
     // not every response is input producing
     while (true) {
         if (oldState == FUZZ_MSG_READY) {
-            perror("[fuzz_sync] Message is ready but we are at input completion, improve sync point\n");
             fuzz_set_message_state(oldState); // reactivate the message
             return;
         }
@@ -524,22 +736,21 @@ int fuzz_read_memory(unsigned long long addr, uint8_t *mem_buf, int len) {
 }
 
 void fuzz_add_observed_value(uint32_t val) {
-    static int irq_depth = 0;
     
-    if (val == 0xFFFFFFFF) {
-        irq_depth++;
-    } else if (val == 0xFFFFFFFD) {
-        irq_depth--;
+    if (val == 0xFFFFFFFD) {
+        fuzz_irq_depth++;
+    } else if (val == 0xFFFFFFFB) {
+        fuzz_irq_depth--;
     } else {
-        if (irq_depth == 0) {
+        if (fuzz_irq_depth == 0) {
             // we don't want stale value from before trace
-            if (g_prev_pc != 0) {
-                uint32_t idx = (g_prev_pc ^ val) % MAP_SIZE;
+            if (fuzz_prev_pc != 0) {
+                uint32_t idx = (fuzz_prev_pc ^ val) % MAP_SIZE;
                 CVG[idx] = CVG[idx] + 1;
             }
 
             if (g_trace_enabled) fuzz_trace_record_pc(val);
-            g_prev_pc = val;
+            fuzz_prev_pc = val;
         }
         fuzz_bbl_add(val);
     }
@@ -589,6 +800,7 @@ static void fuzz_destroy(void) {
     }
     fuzz_dump_bbl();
     fuzz_serialize_coverage(coverage_output_path());
+    agentic_fuzz_stop_monitor();
 }
 
 // miscelanious virtual you can use to test if the firmware reaches something without enabling gdb and tracing
@@ -604,16 +816,19 @@ int fuzz_init(int argc, char **argv) {
         coverage = 1;
         fuzz_bbl_init();
         core_register_exit_hook(fuzz_destroy);
+        agentic_fuzz_start_monitor(argc, argv);
+    } else {
+        printf("Coverage is required to fuzz\n");
+        return 0;
     }
 
     core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
 
-    wlist = fuzz_get_writable_ranges(WLIST_PATH, &wlist_count);
+    wlist = fuzz_get_writable_ranges(writable_ranges_path(), &wlist_count);
 
     if (wlist == NULL || (wlist_count & 1)) {
         utils_die("[sync] Couldn't parse writable memory definitions");
     }
-    g_stack_top = wlist[wlist_count - 2];
 
     fuzz_deactivate_message();
 
@@ -621,13 +836,8 @@ int fuzz_init(int argc, char **argv) {
     virtual_register("fuzz_snap_point", fuzz_snap_point);
     virtual_register("fuzz_sync_point", fuzz_sync_point);
 
-    // ---------- mqtt fuzzing virtuals ------------
-    // virtual_register("fuzz_mqtt_in", fuzz_mqtt_in);
-
-    // ---------- lwip fuzzing virtuals ------------
-    // virtual_register("fuzz_eth_in", fuzz_eth_in);
-    // virtual_register("fuzz_eth_out", fuzz_eth_out);
-    // virtual_register("fuzz_pbuf_free", fuzz_pbuf_free);
+    // This is where the stateless injection harness should go
+    fuzz_register_snap_callback(fuzz_packetreceived_inject);
 
     if (!fuzz_backend_init()) {
         utils_die("[sync] Failed backend initialization");

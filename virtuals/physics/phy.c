@@ -3,13 +3,22 @@
 #include <stdio.h>
 #include <string.h>
 #include <utils.h>
+#include "physics_engines/stub/stub.h"
+#if ENABLE_LIBGZ
 #include "physics_engines/gazebo/gazebo.h"
+#endif
+#if ENABLE_FMU
 #include "physics_engines/fmu/fmu.h"
+#endif
+#if ENABLE_FLIGHT_CONTROLLERS
 #include "flight_controllers/fc.h"
+#endif
 
 static phy_backend_t *active_backend = NULL;
 
 static phy_backend_entry_t backends[] = {
+    // default if none specified
+    { "stub", &stub_backend },
 #if ENABLE_FMU
     { "fmu", &fmu_backend},
 #endif
@@ -140,9 +149,14 @@ int phy_init(int argc, char **argv) {
     int result = active_backend ? 1 : phy_select_backend("gazebo");
     if (result == 0) {
         fprintf(stderr, "Failed to select Gazebo backend\n");
-        return 0;
     }
 #endif
+
+    // If no backends, use stub
+    if (active_backend == NULL && !phy_select_backend("stub")) {
+        fprintf(stderr, "Failed to select physics backend stub\n");
+        return 0;
+    }
 
     if (!active_backend || !active_backend->init) {
         return 0;

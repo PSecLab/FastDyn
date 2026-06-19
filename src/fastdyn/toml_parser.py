@@ -170,6 +170,13 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
 
     machine0.ignore_functions = toml_parser.machine_info.get("ignore_functions", [])
     machine0.milestones = toml_parser.machine_info.get("milestones", [])
+    q.agentic_fuzz         = toml_parser.machine_info.get("agentic_fuzz", False)
+    q.agentic_fuzz_python  = toml_parser.machine_info.get("agentic_fuzz_python", None)
+    q.agentic_fuzz_script  = toml_parser.machine_info.get("agentic_fuzz_script", None)
+    q.agentic_fuzz_in_dir  = toml_parser.machine_info.get("agentic_fuzz_in_dir", None)
+    q.agentic_fuzz_out_dir = toml_parser.machine_info.get("agentic_fuzz_out_dir", None)
+    q.agentic_fuzz_model   = toml_parser.machine_info.get("agentic_fuzz_model", None)
+    q.agentic_fuzz_taint   = toml_parser.machine_info.get("agentic_fuzz_taint", True)
 
     #add cmsis svd if Platform name provided by the user
     if toml_parser.machine_info.get("platform") is not None:

@@ -1,130 +1,213 @@
 #!/usr/bin/env python3
 import os
 import sys
-import re
-import subprocess
+from dataclasses import dataclass
+
+from elftools.elf.constants import P_FLAGS
+from elftools.elf.elffile import ELFFile
+
+try:
+    from .. import fastdyn_log as fastdyn_log_conf
+except ImportError:
+    from fastdyn import fastdyn_log as fastdyn_log_conf
+
+fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 # -------------------------------------------------------------------------------
-# This script takes a binary, and outputs a list of its writable ranges of memory
+# This script takes a binary, and outputs a list of its writable ranges of memory.
 # -------------------------------------------------------------------------------
 
-# Run readelf
 
-def get_readelf_output(elf_path):
-    result = subprocess.run(
-        ["readelf", "-S", elf_path],
-        capture_output=True,
-        text=True,
-        check=True
+@dataclass(frozen=True)
+class SectionMapping:
+    name: str
+    address: int
+    size: int
+    section_type: str
+
+
+@dataclass(frozen=True)
+class WritableSegment:
+    index: int
+    segment_type: str
+    address: int
+    file_size: int
+    memory_size: int
+    flags: int
+    sections: list[SectionMapping]
+
+
+def _format_flags(flags):
+    flag_order = (
+        (P_FLAGS.PF_R, "R"),
+        (P_FLAGS.PF_W, "W"),
+        (P_FLAGS.PF_X, "X"),
     )
-    return result.stdout.splitlines()
+    value = "".join(name for mask, name in flag_order if flags & mask)
+    return value or "-"
 
-def _parse_first_word_le(stdout):
-    for line in stdout.splitlines():
-        m = re.search(r'^\s*[0-9a-fA-F]+\s+([0-9a-fA-F]{8})', line)
-        if m:
-            return int.from_bytes(bytes.fromhex(m.group(1)), "little")
-    return None
 
-def get_initial_stack_pointer(elf_path):
-    # Vector-table section name varies across toolchains:
-    #   STM32 HAL / CMSIS startup files: ".isr_vector"
-    #   Zephyr (any board):              "rom_start"
-    #   Some bare-metal LDs:             ".vectors"
-    # Some SDKs (e.g. MAX78000) place the vectors at the top of .text without a
-    # dedicated section — fall back to reading the first word of .text in that case.
-    candidate_sections = [".isr_vector", "rom_start", ".vectors", ".text"]
-    for section in candidate_sections:
-        try:
-            r = subprocess.run(
-                ["arm-none-eabi-objdump", "-s", "-j", section, elf_path],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError:
-            continue
-        if "Contents of section" not in r.stdout:
-            continue
-        sp = _parse_first_word_le(r.stdout)
-        if sp is not None:
-            return sp
-    return None
+def _format_range(start, size):
+    return f"0x{start:08X}-0x{start + size:08X}"
 
-# Parses through sections, if writable, adds address range and name to list
 
-def parse_sections(lines):
+def _sections_for_segment(elf, segment):
     sections = []
 
-    section_re = re.compile(
-        r"\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-fA-F]+)\s+\S+\s+([0-9a-fA-F]+)\s+\S+\s+(\S+)"
-    )
-
-    for line in lines:
-        m = section_re.search(line)
-        if not m:
+    for section in elf.iter_sections():
+        if not segment.section_in_segment(section):
             continue
 
-        name = m.group(1)
-        addr = int(m.group(2), 16)
-        size = int(m.group(3), 16)
-        flags = m.group(4)
-
-        if size == 0:
-            continue
-
-        if "W" in flags:
-            sections.append((addr, addr + size, name))
+        name = section.name or "<unnamed>"
+        sections.append(
+            SectionMapping(
+                name=name,
+                address=section["sh_addr"],
+                size=section["sh_size"],
+                section_type=section["sh_type"],
+            )
+        )
 
     return sections
 
-# Merges consecutive writable ranges
 
-def merge_ranges(ranges):
-    if not ranges:
+def collect_writable_segments(elf_path):
+    writable = []
+
+    with open(elf_path, "rb") as f:
+        elf = ELFFile(f)
+
+        for index, segment in enumerate(elf.iter_segments()):
+            if not segment["p_flags"] & P_FLAGS.PF_W:
+                continue
+            if segment["p_memsz"] == 0:
+                continue
+
+            writable.append(
+                WritableSegment(
+                    index=index,
+                    segment_type=segment["p_type"],
+                    address=segment["p_vaddr"],
+                    file_size=segment["p_filesz"],
+                    memory_size=segment["p_memsz"],
+                    flags=segment["p_flags"],
+                    sections=_sections_for_segment(elf, segment),
+                )
+            )
+
+    return writable
+
+
+def print_writable_segments(segments):
+    if not segments:
+        fastdyn_log.info("[binary_wrange.py] No writable segments found.")
+        return
+
+    fastdyn_log.info("[binary_wrange.py] Writable segments:")
+    for selection_id, segment in enumerate(segments):
+        fastdyn_log.info(
+            f"  [{selection_id}] segment {segment.index}: "
+            f"{segment.segment_type} {_format_flags(segment.flags)} "
+            f"{_format_range(segment.address, segment.memory_size)} "
+            f"memsz=0x{segment.memory_size:x} filesz=0x{segment.file_size:x}"
+        )
+
+        if segment.sections:
+            fastdyn_log.info("      sections:")
+            for section in segment.sections:
+                fastdyn_log.info(
+                    f"        - {section.name} "
+                    f"{_format_range(section.address, section.size)} "
+                    f"size=0x{section.size:x} type={section.section_type}"
+                )
+        else:
+            fastdyn_log.info("      sections: <none>")
+
+
+def _parse_selection(selection, count):
+    selection = selection.strip().lower()
+    if selection in ("", "a", "all", "*"):
+        return list(range(count))
+    if selection in ("n", "none"):
         return []
 
-    ranges.sort(key=lambda x: x[0])
-    merged = []
-    cur_start, cur_end = ranges[0][0], ranges[0][1]
-    cur_names = [ranges[0][2]]
-
-    for start, end, name in ranges[1:]:
-        if start == cur_end:
-            cur_end = end
-            cur_names.append(name)
+    selected = set()
+    tokens = selection.replace(",", " ").split()
+    for token in tokens:
+        if "-" in token:
+            start_text, end_text = token.split("-", 1)
+            start = int(start_text, 10)
+            end = int(end_text, 10)
+            if start > end:
+                start, end = end, start
+            indexes = range(start, end + 1)
         else:
-            merged.append((cur_start, cur_end, cur_names))
-            cur_start, cur_end = start, end
-            cur_names = [name]
+            indexes = (int(token, 10),)
 
-    merged.append((cur_start, cur_end, cur_names))
-    return merged
+        for index in indexes:
+            if index < 0 or index >= count:
+                raise ValueError(
+                    f"selection {index} is outside the valid range 0-{count - 1}"
+                )
+            selected.add(index)
 
-# Write tab delimited list of address + size of all writable ranges
+    return sorted(selected)
 
+
+def prompt_for_segments(segments):
+    print_writable_segments(segments)
+
+    if not segments:
+        return []
+
+    prompt = (
+        "Select writable segments to include in the snapshot "
+        "(e.g. 0,2-3; blank/all for all; none for none): "
+    )
+
+    while True:
+        try:
+            selection = input(prompt)
+        except EOFError:
+            fastdyn_log.info(
+                "[binary_wrange.py] No input provided; including all segments."
+            )
+            return list(range(len(segments)))
+
+        try:
+            return _parse_selection(selection, len(segments))
+        except ValueError as e:
+            fastdyn_log.info(f"[binary_wrange.py] Invalid selection: {e}")
+
+
+def write_selected_segments(out_file, segments, selected_indexes):
+    with open(out_file, "w") as f:
+        for index in selected_indexes:
+            segment = segments[index]
+            f.write(f"0x{segment.address:08X}\t0x{segment.memory_size:x}\n")
+
+
+# Write a tab delimited list of address + size values for selected writable ranges.
 def run(out_file, bin_path):
     if os.path.exists(out_file):
-        print(f"[binary_wrange.py] Skipping existing output file: {out_file}")
+        fastdyn_log.info(
+            f"[binary_wrange.py] Skipping existing output file: {out_file}"
+        )
         return
 
     try:
-        with open(out_file, 'w') as f:
-            lines = get_readelf_output(bin_path)
-            sections = parse_sections(lines)
-            merged = merge_ranges(sections)
-            for start, end, names in merged:
-                size = end - start
-                f.write(f"0x{start:08X}\t{size:#x}\n")
-            stack = get_initial_stack_pointer(bin_path)
-            if stack is not None:
-                f.write(f"0x{stack:08X}\t0x0")
+        segments = collect_writable_segments(bin_path)
+        selected_indexes = prompt_for_segments(segments)
+        write_selected_segments(out_file, segments, selected_indexes)
     except Exception as e:
-        fastdyn_log.error("[binary_wrange.py] Couldn't open ", out_file, e)
+        fastdyn_log.info(f"[binary_wrange.py] Couldn't write {out_file}: {e}")
+
 
 if __name__ == "__main__":
+    fastdyn_log_conf.setLogConfig()
+
     if len(sys.argv) != 2:
         print("Usage: python binary_wrange.py <firmware.elf>")
         sys.exit(1)
-    
+
     run("fastdyn_work/bin-writable-ranges", sys.argv[1])

@@ -19,6 +19,15 @@ static GHashTable *bbl_set;
 static GHashTable *bbl_size;  /* pc -> instruction count, populated at TB translation time */
 static int fd = -1;
 
+typedef struct {
+    guint bbl_pc;
+    guint timestamp;
+} bbl_entry_t;
+
+#define BBL_QUEUE_MAX 1024
+static bbl_entry_t bbl_queue[BBL_QUEUE_MAX];
+static int bbl_queue_len = 0;
+
 static const char *resolve_bbl_dump_path(void) {
     const char *path = getenv("FASTDYN_BBL_FILE");
     if (path && path[0]) {
@@ -40,11 +49,35 @@ void fuzz_bbl_observe(uint32_t pc, uint32_t size) {
     g_hash_table_insert(bbl_size, GUINT_TO_POINTER(bbl_pc), GUINT_TO_POINTER((guint)size));
 }
 
+void fuzz_dump_bbl() {
+    if (fd >= 0) {
+        static char buf[BBL_QUEUE_MAX * 64];
+        int idx = 0;
+
+        for (int i = 0; i < bbl_queue_len; i++) {
+            guint insn_count = GPOINTER_TO_UINT(g_hash_table_lookup(bbl_size, GUINT_TO_POINTER(bbl_queue[i].bbl_pc)));
+            idx += snprintf(buf + idx, sizeof(buf) - idx, "%08x\t%u\t%u\n", bbl_queue[i].bbl_pc, insn_count, bbl_queue[i].timestamp);
+        }
+
+        int written = 0;
+        while (written < idx) {
+            ssize_t n = write(fd, buf, idx);
+            if (n <= 0) {
+                utils_die("Failed to write coverage\n");
+            }
+            written += n;
+        }
+
+        bbl_queue_len = 0;
+    } else {
+        utils_die("Tried outputting coverage without initialized file\n");
+    }
+}
+
 void fuzz_bbl_add(uint32_t pc) {
     guint bbl_pc = pc & (~1ULL);
     if (!g_hash_table_lookup(bbl_set, GUINT_TO_POINTER(bbl_pc))) {
         guint timestamp = (guint)(g_get_monotonic_time() / 1000);
-        guint insn_count = GPOINTER_TO_UINT(g_hash_table_lookup(bbl_size, GUINT_TO_POINTER(bbl_pc)));
 
         g_hash_table_insert(
             bbl_set,
@@ -52,44 +85,11 @@ void fuzz_bbl_add(uint32_t pc) {
             GUINT_TO_POINTER(timestamp)
         );
 
-        if (fd >= 0) {
-            char buf[64];
-            int len = snprintf(buf, sizeof(buf), "%08x\t%u\t%u\n", bbl_pc, insn_count, timestamp);
-            write(fd, buf, len);
+        bbl_queue[bbl_queue_len++] = (bbl_entry_t){bbl_pc, timestamp};
+        if (bbl_queue_len >= BBL_QUEUE_MAX) {
+            fuzz_dump_bbl();
         }
     }
-}
-
-void fuzz_dump_bbl(void)
-{
-    if (!bbl_set) {
-        utils_die("bbl_set is not initialized");
-    }
-
-    // FILE *f = fopen(bbl_dump_path, "w");
-    // if (!f) {
-    //     utils_die("Failed to open dump file for writing");
-    // }
-
-    // GHashTableIter iter;
-    // gpointer key, value;
-    // int total = 0;
-
-    // g_hash_table_iter_init(&iter, bbl_set);
-
-    // while (g_hash_table_iter_next(&iter, &key, &value)) {
-    //     guint pc = GPOINTER_TO_UINT(key);
-    //     guint timestamp = GPOINTER_TO_UINT(value);
-
-    //     /* Write as: hex_pc<TAB>timestamp */
-    //     fprintf(f, "%08x\t%u\n", pc, timestamp);
-
-    //     total++;
-    // }
-
-    close(fd);
-
-    //printf("Dumped %d blocks\n", total);
 }
 
 void fuzz_bbl_init(void)
@@ -130,6 +130,4 @@ void fuzz_bbl_init(void)
     if (fd < 0) {
         utils_die("Failed to open dump file for writing");
     }
-
-    printf("Loaded %d blocks\n", total);
 }

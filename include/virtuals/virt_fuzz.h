@@ -8,6 +8,8 @@
 // Need this include for the ENABLE_LIBFUZZ definition
 #include <config.h>
 
+#define MAP_SIZE 65536 // should match AFL
+
 int fuzz_init(int argc, char **argv);
 
 // gets fuzzed data into buf of max size len, returns copied size

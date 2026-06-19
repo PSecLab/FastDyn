@@ -82,6 +82,7 @@ endif
 
 # USER FLAGS. USER CAN ADD CUSTOM LIBS
 ENABLE_LIBGZ = get_option('enable_libgz')
+ENABLE_FLIGHT_CONTROLLERS = get_option('enable_flight_controllers')
 
 #fuzzer support
 ENABLE_LIBFUZZ = get_option('enable_libfuzz')
@@ -175,7 +176,7 @@ srcs += files(
 )
 endif
 
-if ENABLE_LIBGZ or get_option('enable_flight_controllers')
+if ENABLE_LIBGZ or ENABLE_FLIGHT_CONTROLLERS
 srcs += files(
   'libs/ring_buffer.c',
 )
@@ -204,7 +205,7 @@ endif
   local_include = [local_include, device_models_inc]
 endif
 
-if ENABLE_LIBGZ or get_option('enable_flight_controllers')
+if ENABLE_LIBGZ or ENABLE_FLIGHT_CONTROLLERS
 mavlink_include = include_directories('third_party/courbet_deps/mavlink_headers/ardupilotmega')
 
 local_include = [local_include, mavlink_include]

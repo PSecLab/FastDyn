@@ -4,6 +4,8 @@ This is the directory for the current fuzzing implementation, which will be upda
 
 ## Overview
 
+To start, this is the guide for manually setting up the fuzzer to run. To use the current agentic approach for harness generation and mutation, see agentic/README.md
+
 fuzz.c is the core of the fuzzer, which is meant to act as a generic interface between the fuzzing backend and the model/firmware that is acting as the fuzzing harness. Currently, we support libAFL and a modified version of AFLNet as the backends for this fuzzer, which can be compiled in in the Makefile depending on the usecase. libAFL is good for producing a generic, single chunk per iteration, and is easier to get going on a new target. AFLNet is better for stateful protocols with a trace of messages, but requires a bit more work for a new protocol, which involves adding in support for that protocol into the modified AFLNet. We have currently added Ethernet and Modbus support in AFLNet which can be used as a reference along with the existing protocols
 
 To use the fuzzers, the path to the built fuzzing backend must be included in the relevant environment variables along with other FastDyn requirements, with the following as a reference at the time of writing:
@@ -57,6 +59,8 @@ AFLNET 		 ?= true
 
 ## Usage
 
+When using the stateful fuzzer, update the path to the seeds in fuzz_aflnet.c along with the targeted protocol in the launch
+
 ### fuzz.c interface
 
 fuzz.c is meant to provide a generic interface for fuzzing, whichever backend is compiled in will automatically be used in the background. Our current backends are implementet in fuzz_aflnet.c and fuzz_libafl.c, but should require no modifications.
@@ -67,13 +71,14 @@ The general interface consists of the following main functions to focus on which
 
 ```c
 // Register a callback of the type void callback(void);
+void fuzz_register_snap_callback(fuzz_callback_t cb); // called when the fuzzer gets to the snapshot handler, useful for stateless fuzzing that should be injected at the same point as the snapshot
 void fuzz_register_callback(fuzz_callback_t cb); // called when the fuzzer gets to the post input handling hook
 void fuzz_register_exit(fuzz_callback_t cb); // called when the fuzzer exits, happens on a crash or user interruption
 
 // called when the fuzzer is restoring a memory snapshot, is useful for model-level fuzzing so the model can reset some state
 // importantly, is called on the first restore_snapshot, so the first call should tell the model what to restore to
 void fuzz_register_restore(fuzz_callback_t cb); 
-
+post
 // Data getting/setting with fuzzing backend
 size_t fuzz_get_data(char* buf, size_t len); // - Gets the next buffer from the fuzzer, returns 0 if the previous input is still running
 void fuzz_set_data(char* buf, size_t len); // - Returns data to the fuzzer, useful for AFLNet which wants data back, for libAFL this does nothing

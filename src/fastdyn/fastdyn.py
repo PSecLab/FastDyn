@@ -121,6 +121,14 @@ class QemuTargetOpts:
         self.probe_milestones: Optional[str] = None
         self.probe_ignores: Optional[str] = None
         self.probe_out_dir: Optional[str] = None
+        self.print_command = False
+        self.agentic_fuzz: bool = False
+        self.agentic_fuzz_python: Optional[str] = None
+        self.agentic_fuzz_script: Optional[str] = None
+        self.agentic_fuzz_in_dir: Optional[str] = None
+        self.agentic_fuzz_out_dir: Optional[str] = None
+        self.agentic_fuzz_model: Optional[str] = None
+        self.agentic_fuzz_taint: bool = True
 
 class Machine:
     def __init__(self, machine_name, platform_name):

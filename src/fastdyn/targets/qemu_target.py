@@ -107,6 +107,48 @@ def _ensure_executable(executable, description):
         "Run `source ./setup.sh --build-qemu` or build the patched QEMU fork "
         "at the path configured by [Machine].qemu_path."
     )
+def _abs_path(path, base=None):
+    if path is None:
+        return None
+
+    path = os.path.expanduser(str(path))
+    if os.path.isabs(path):
+        return os.path.normpath(path)
+
+    if base is not None:
+        return os.path.abspath(os.path.join(base, path))
+
+    return os.path.abspath(path)
+
+
+def _resolve_path(path, bases):
+    if path is None:
+        return None
+
+    path = os.path.expanduser(str(path))
+    if os.path.isabs(path):
+        return os.path.normpath(path)
+
+    for base in bases:
+        if base is None:
+            continue
+        candidate = os.path.abspath(os.path.join(base, path))
+        if os.path.exists(candidate):
+            return candidate
+
+    first_base = next((base for base in bases if base is not None), None)
+    return _abs_path(path, first_base)
+
+
+def _fastdyn_source_root():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+
+
+def _agentic_fuzz_cwd_from_script(script_path):
+    script_dir = os.path.dirname(script_path)
+    if os.path.basename(script_dir) == "src":
+        return os.path.dirname(script_dir)
+    return script_dir
 
 
 def _extract_monitor_port(qemu_cmd):
@@ -441,6 +483,55 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
             "  make qemu_path=../qemu PHY=true FLIGHT_CONTROLLERS=true FMU=true"
         )
 
+    # ------------------------ Agentic Fuzzer ----------------
+    fastdyn_root = _fastdyn_source_root()
+    work_dir_abs = _abs_path(out_path or FASTDYN_DEFAULT_WORKDIR)
+    binary_abs = _resolve_path(cpu0.binary, [os.getcwd(), fastdyn_root])
+
+    agentic_fuzz_plugin = []
+    if opts.agentic_fuzz:
+        if not opts.coverage:
+            raise ValueError("agentic_fuzz=true requires coverage=true")
+
+        default_agentic_fuzz_root = os.path.join(
+            fastdyn_root,
+            "virtuals",
+            "fuzzer",
+            "agentic",
+        )
+        default_agentic_fuzz_script = os.path.join(default_agentic_fuzz_root, "monitor.py")
+        agentic_fuzz_script = _resolve_path(
+            opts.agentic_fuzz_script or default_agentic_fuzz_script,
+            [os.getcwd(), fastdyn_root, default_agentic_fuzz_root],
+        )
+        agentic_fuzz_cwd = work_dir_abs
+        agentic_fuzz_in_dir = _resolve_path(
+            opts.agentic_fuzz_in_dir or "corpus",
+            [work_dir_abs],
+        )
+        agentic_fuzz_out_dir = _resolve_path(
+            opts.agentic_fuzz_out_dir or "corpus-agentic",
+            [work_dir_abs],
+        )
+
+        agentic_fuzz_plugin = [
+            "agentic_fuzz=1",
+            f"agentic_fuzz_python={opts.agentic_fuzz_python or 'python3'}",
+            f"agentic_fuzz_script={agentic_fuzz_script}",
+            f"agentic_fuzz_cwd={agentic_fuzz_cwd}",
+            f"agentic_fuzz_binary={binary_abs}",
+            f"agentic_fuzz_work_dir={work_dir_abs}",
+            f"agentic_fuzz_in_dir={agentic_fuzz_in_dir}",
+            f"agentic_fuzz_out_dir={agentic_fuzz_out_dir}",
+            f"agentic_fuzz_coverage={os.path.join(work_dir_abs, 'bbl.txt')}",
+            f"agentic_fuzz_regions={os.path.join(work_dir_abs, 'bin-writable-ranges')}",
+            f"agentic_fuzz_snapshot={os.path.join(work_dir_abs, 'snapshot.bin')}",
+            f"agentic_fuzz_log={os.path.join(work_dir_abs, 'agentic_fuzz-monitor.log')}",
+            f"agentic_fuzz_taint={_bool01(opts.agentic_fuzz_taint)}",
+        ]
+        if opts.agentic_fuzz_model:
+            agentic_fuzz_plugin.append(f"agentic_fuzz_model={opts.agentic_fuzz_model}")
+
     # ------------------------ Introspection ------------------------
     introspection = cpu0.introspect
     if introspection:
@@ -502,6 +593,8 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
 
     if (introspection):
         plugin_kv.extend(introspect_plugin)
+
+    plugin_kv.extend(agentic_fuzz_plugin)
 
     if opts.finline is not None:
         plugin_kv.append(f"finline={opts.finline}")

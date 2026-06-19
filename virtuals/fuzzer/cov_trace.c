@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -17,13 +18,36 @@
 bool                g_trace_enabled    = false;
 static bool         g_trace_has_prev = false;
 
-/* ---- aflnet trace buffer functions ---- */
-fastdyn_trace_run_t g_trace_completed   = { .count = 0 };
-fastdyn_trace_run_t g_trace_current     = { .count = 0 };
-static fastdyn_trace_run_t g_trace_prev = { .count = 0 };
+fastdyn_trace_run_t g_trace_completed   = { .count = 0, .capacity = 0, .entries = NULL };
+fastdyn_trace_run_t g_trace_current     = { .count = 0, .capacity = 0, .entries = NULL };
+static fastdyn_trace_run_t g_trace_prev = { .count = 0, .capacity = 0, .entries = NULL };
+
+static void fuzz_trace_reserve(fastdyn_trace_run_t *run, uint32_t needed) {
+    if (run->capacity >= needed) {
+        return;
+    }
+
+    uint32_t capacity = run->capacity ? run->capacity : FASTDYN_TRACE_INITIAL_CAP;
+    while (capacity < needed) {
+        capacity *= 2;
+    }
+
+    uint32_t *entries = realloc(run->entries, capacity * sizeof(*entries));
+    if (!entries) {
+        fprintf(stderr, "[trace] Failed to allocate %u trace entries.\n", capacity);
+        abort();
+    }
+
+    run->entries = entries;
+    run->capacity = capacity;
+}
 
 void fuzz_trace_enable(void) {
     g_trace_enabled = true;
+}
+
+void fuzz_trace_disable(void) {
+    g_trace_enabled = false;
 }
 
 void fuzz_trace_begin_window(void) {
@@ -38,9 +62,8 @@ void fuzz_trace_reset(void) {
 }
 
 void fuzz_trace_record_pc(uint32_t pc) {
-    if (g_trace_current.count < FASTDYN_TRACE_CAP) {
-        g_trace_current.entries[g_trace_current.count++] = pc;
-    }
+    fuzz_trace_reserve(&g_trace_current, g_trace_current.count + 1);
+    g_trace_current.entries[g_trace_current.count++] = pc;
 }
 
 /*
@@ -50,9 +73,12 @@ void fuzz_trace_record_pc(uint32_t pc) {
  */
 void fuzz_trace_commit_run(void) {
     uint32_t n = g_trace_current.count;
+    fuzz_trace_reserve(&g_trace_completed, n);
     g_trace_completed.count = n;
-    memcpy(g_trace_completed.entries, g_trace_current.entries,
-           n * sizeof(uint32_t));
+    if (n > 0) {
+        memcpy(g_trace_completed.entries, g_trace_current.entries,
+               n * sizeof(uint32_t));
+    }
     g_trace_current.count = 0;
 }
 
@@ -63,8 +89,6 @@ void fuzz_trace_commit_run(void) {
  * No-op when trace is disabled.
  */
 void fuzz_trace_compare(void) {
-    if (!g_trace_enabled) return;
-
     uint32_t cur_count      = g_trace_completed.count;
     const uint32_t *cur_ent = g_trace_completed.entries;
 
@@ -74,8 +98,11 @@ void fuzz_trace_compare(void) {
     }
 
     if (!g_trace_has_prev) {
+        fuzz_trace_reserve(&g_trace_prev, cur_count);
         g_trace_prev.count = cur_count;
-        memcpy(g_trace_prev.entries, cur_ent, cur_count * sizeof(uint32_t));
+        if (cur_count > 0) {
+            memcpy(g_trace_prev.entries, cur_ent, cur_count * sizeof(uint32_t));
+        }
         g_trace_has_prev = true;
         printf("[trace] First run recorded (%u PCs).\n", cur_count);
 

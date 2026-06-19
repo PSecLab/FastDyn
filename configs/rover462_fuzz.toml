@@ -37,14 +37,15 @@ launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
 log_file = "qemu.log"
-log_options = "none"
-icount = { shift = 5, sleep = false, align = false }
-timer_irq_period_ns = 1000000
+log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
-coverage=false
+coverage=true
+agentic_fuzz=true
+agentic_fuzz_taint=true
+agentic_fuzz_model="ollama/qwen3:30b"
 finline='None'
-print_command = false          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
+print_command = true          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
 
 [CPU]
 [[CPU.cpu0]]
@@ -61,77 +62,39 @@ hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generat
 introspect = false
 existing_config_path = "virtuals/physics/flight_controllers/courbet/rover462/unlabeled_conf"
 
+[[CPU.cpu0.virtuals]]
+at = "0x8004280"
+instruction = "assert"
+args = ["*0"]
+
+[[CPU.cpu0.virtuals]]
+at = "0x808b038"
+instruction = "fuzz_snap_point"
+args = [""]
+
+[[CPU.cpu0.virtuals]]
+at = "0x808b0b8"
+instruction = "fuzz_sync_point"
+args = [""]
+
+[[CPU.cpu0.modifiers]]
+at = "0x808b0b8"
+patch = "r15 0x808b038"
+
+# [[CPU.cpu0.modifiers]]
+# at = "0x80144b4"
+# patch = "r15 0x808b038"
+
+[[CPU.cpu0.modifiers]]
+at = "0x8005454"
+patch = "r15 0x808b0b8"
+
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
 # --- Plugin Logger Configuration ---
 # level = DEBUG
 # output = stderr
 """
-
-# ==============================================================================
-#                                FMU Configuration
-# ==============================================================================
-
-[FMU]
-active = "rover"
-auto_build = true
-
-[FMU.models.rover]
-model = "FastDyn.Rover"
-model_file = "modelica/FastDyn/Rover.mo"
-source_roots = ["modelica", "third_party/common/modelica_models"]
-output = "out/fmi3/Rover"
-build = true
-release = false
-
-[FMU.models.rover.parameters]
-lat0 = 40.414929
-lon0 = -86.932387
-ground_alt_wgs84 = 149.0
-
-# ==============================================================================
-#                             Runtime Helpers
-# ==============================================================================
-
-[Rumoca]
-enabled = false
-
-[Run]
-cwd = "."
-
-[Run.profiling]
-timing = true
-timing_echo = true
-python = false
-perf = "off"
-perf_frequency_hz = 99
-fmu = true
-
-[Run.processes.mavproxy]
-enabled = true
-quiet = true
-cwd = "virtuals/physics/flight_controllers/courbet/mavlink"
-env = { PYTHONPATH = "." }
-command = [
-    "mavproxy.py",
-    "--daemon",
-    "--master=udpout:127.0.0.1:${FASTDYN_MAVLINK_FIRMWARE_PORT:-14551}",
-    "--out=udpout:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
-    "--load-module=fastdyn_cesium:{\"port\":${FASTDYN_MAVCESIUM_PORT:-5000}}",
-]
-ready_message = "MAVCesium web viewer: open http://127.0.0.1:${FASTDYN_MAVCESIUM_PORT:-5000}/mavcesium/"
-
-[Run.processes.health]
-enabled = true
-terminate_run_on_exit = true
-command = [
-    "python3",
-    "virtuals/physics/flight_controllers/courbet/mavlink/mav_health_check.py",
-    "--connect",
-    "udpin:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
-    "--monitor-sec",
-    "10",
-]
 
 # ==============================================================================
 #                              Device Configuration
