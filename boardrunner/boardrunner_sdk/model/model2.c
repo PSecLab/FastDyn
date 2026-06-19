@@ -389,7 +389,7 @@ void uart_init(ConfigSection* model_info)
     g_uart.osr    = 0;
 
     // Create/open PTY backend at fixed path /tmp/usart1_pty
-    g_uart.pty_fd = api_pty_fd_gen();
+    g_uart.pty_fd = api_pty_fd_gen("usart1");
     g_uart.inited = true;
 
     // Periodic poll to ingest host keystrokes even if firmware isn't hammering STATUS.

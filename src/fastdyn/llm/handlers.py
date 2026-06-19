@@ -157,3 +157,41 @@ def handle_compilation(sdk_dir):
 
     log.info("Model compiled successfully.")
     return True, "", False
+
+def handle_routing(routing_json, work_dir):
+    """Log routing recommendations without mutating files or config."""
+    existing = routing_json.get("request_existing_models", []) or []
+    create_new = routing_json.get("create_new_models", []) or []
+
+    if existing:
+        log.info("\n[ROUTING] Existing model context requested:")
+        for item in existing:
+            log.info(
+                "  - %s (intent=%s)",
+                item.get("name", "unknown"),
+                item.get("intent", "context_only"),
+            )
+
+    if create_new:
+        log.info("\n[ROUTING] New model/config materialization requested:")
+        for item in create_new:
+            attach = item.get("attach_to_peripheral")
+            attach_text = f", attach_to={attach}" if attach else ""
+            log.info(
+                "  - %s (category=%s%s)",
+                item.get("name", "unknown"),
+                item.get("category", "unknown"),
+                attach_text,
+            )
+
+        log.info(
+            "Run `fastdyn trace-analyze ... --apply-routing` to review and "
+            "materialize these recommendations interactively."
+        )
+    else:
+        log.info(
+            "Run `fastdyn trace-analyze` again to generate the routed "
+            "implementation prompt."
+        )
+
+    return True, ""

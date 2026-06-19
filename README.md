@@ -1,4 +1,6 @@
 # FastDyn Plugins
+## Automatic Rehosting of Ardupilot Ardurover v4.6.2
+Please access the detailed rehosting steps in the `docs/Ardurover_Rehosting.md`
 
 ## Quick Start: ArduCopter FMUv3 + MAVCesium
 

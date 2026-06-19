@@ -304,7 +304,7 @@ qemu_api_list = """
 - `uint64_t qemu_plugin_timer_new_ns(void (*cb)(void *), void *data)`: Accepts a callback function and user data to create a new, unscheduled timer object for a future one-shot event, returning a uint64_t handle that must be armed manually.
 - `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
 - `void dev_debug(char *str)`: Any debug messages must be logged using this function.
-- `int api_pty_fd_gen(void)`: Takes no input and returns an integer file descriptor for a host-side pseudo-terminal device. The actual PTY path is determined by the framework at runtime.
+- `int api_pty_fd_gen(const char* dev_name)`: Takes a string device name (e.g. \"usart6\") and returns an integer file descriptor for a host-side pseudo-terminal device. The actual PTY path is determined by the framework at runtime.
 - `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
 - `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
 - `I2CBus api_i2c_init_bus(ConfigSection* model_info)`: Initializes an I2C bus from a configuration section and returns the I2CBus struct by value.
@@ -316,16 +316,22 @@ qemu_api_list = """
 - `SPIBus api_spi_init_bus(ConfigSection* model_info)`: Takes a ConfigSection pointer, parses the SPI configuration, loads all specified slave device models, and returns a populated SPIBus structure.
 - `uint32_t api_spi_transfer(SPIBus *bus, uint32_t val)`: Performs a full-duplex transfer on the bus by sending val (MOSI) to the currently selected slave and returning the uint32_t value received from it (MISO).
 - `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
-- `void api_dma_register_stream(int stream_id, dma_request_handler_t handler, void *opaque)`: Registers a no-payload handler for `stream_id`.
-- `void api_dma_request(int stream_id)`: Triggers a no-payload DMA request on `stream_id`; the registered handler is invoked synchronously.
-- `void api_dma_register_stream_data(int stream_id, void (*handler)(void *opaque, const uint8_t *data, int len), void *opaque)`: Registers a payload-carrying handler for `stream_id`. The handler receives the bytes submitted via `api_dma_request_data`.
-- `int api_dma_request_data(int stream_id, const uint8_t *data, int len)`: Triggers a DMA request on `stream_id` with `len` payload bytes (max 8) passed to the registered handler. Returns 0 on success, negative on error.
+- `void api_dma_register_stream(int controller_id, int stream_id, dma_request_handler_t handler, void *opaque)`: Called by a DMA model to register a no-payload handler for a specific DMA controller (e.g. 1 for DMA1) and stream index.
+- `void api_dma_request(int controller_id, int stream_id)`: Called by a peripheral to trigger a no-payload DMA request; the registered handler is invoked asynchronously outside MMIO context.
+- `void api_dma_register_stream_data(int controller_id, int stream_id, void (*handler)(void *opaque, const uint8_t *data, int len), void *opaque)`: Called by a DMA model to register a payload-carrying handler. The handler receives the bytes submitted via `api_dma_request_data`.
+- `int api_dma_request_data(int controller_id, int stream_id, uint32_t target_addr, const uint8_t *data, int len)`: Called by a source peripheral to trigger a DMA request with `len` payload bytes (max 8). `target_addr` is the exact memory-mapped register address (e.g., SPI2_DR) to properly correlate memory logs. Returns 0 on success, negative on error.
 - `void api_signal_register(int signal_id, signal_handler_t handler, void *opaque)`: Called by a sink peripheral model (for example EXTI). Registers a callback for a logical signal line such as EXTI line 13.
 - `void api_signal_set(int signal_id, bool level)`: Called by a source peripheral model (for example GPIO). Publishes the logical level for a signal line. The API is level-based; edge detection belongs in the receiving model.
 - `int api_fifo_open(const char *path)`: Creates and opens a named pipe (FIFO) at the specified path using O_RDWR to prevent EOF when the external writer disconnects.
 - `int api_fifo_write(int fd, const void *data, int len)`: Writes a data buffer of a specified length to the FIFO file descriptor.
 - `int api_fifo_read_nonblock(int fd, uint8_t *out_byte)`: Reads a single byte from the FIFO in non-blocking mode. Returns 1 if a byte was read, 0 if the buffer is empty.
 - `void api_fifo_close(int fd, const char *path)`: Closes the file descriptor and removes (unlinks) the named pipe file from the filesystem.
+- `int api_file_open(const char *filename, int mode)`: Opens a host file for persistent storage (mode 0: read-only, mode 1: read/write/create). Returns fd.
+- `int api_file_pread(int fd, void *buf, int len, uint64_t offset)`: Reads `len` bytes from `fd` at `offset` into `buf`. Fills buffer with 0x00 on EOF. Returns number of bytes read.
+- `int api_file_pread_fill(int fd, void *buf, int len, uint64_t offset, uint8_t fill_val)`: Reads `len` bytes from `fd` at `offset` into `buf`. Fills remainder with `fill_val` on EOF (useful for 0xFF EEPROM initialization). Returns number of bytes read.
+- `int api_file_pwrite(int fd, const void *buf, int len, uint64_t offset)`: Writes `len` bytes from `buf` to `fd` at `offset`. Returns number of bytes written.
+- `uint64_t api_file_get_size(int fd)`: Returns the current size of the file in bytes.
+- `void api_file_close(int fd)`: Closes the host file descriptor.
 
 // --- I2C Bus struct definitions here ---
 typedef struct {
@@ -1971,7 +1977,7 @@ familiarity with {", ".join(peripherals)}.
     The following peripheral(s) have trace mismatches: {", ".join(f"`{p}`" for p in mismatch_list)}.
     Analyze the diffs below and correct whichever model file(s) are responsible.
     A mismatch in one peripheral may be caused by a bug in a *different* model \
-(e.g. `ADC1` calling `api_dma_request` with a wrong stream ID will manifest as \
+(e.g. `ADC1` calling `api_dma_request` with a wrong controller ID or stream ID will manifest as \
 a DMA model failure). Reason across all models before deciding where the fix belongs.
 
     ## Model Files Under Correction

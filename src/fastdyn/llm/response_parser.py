@@ -9,7 +9,7 @@ Handles two response formats:
 import re
 import logging
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, List
 
 from .. import fastdyn_log as fastdyn_log_conf
 
@@ -19,6 +19,171 @@ fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 class ParsingError(Exception):
     """Raised when an LLM response cannot be parsed into the expected format."""
+
+
+class RoutingParseError(Exception):
+    """Raised when the JSON routing block cannot be extracted or parsed from an LLM response."""
+
+
+def extract_routing_json(response: str) -> dict:
+    """Extract and parse the JSON routing block from an LLM response.
+
+    Looks for the last ```json ... ``` fenced block in the response, which is
+    where the pipeline's routing schema is expected to appear.
+
+    Args:
+        response: Raw text response from the LLM.
+
+    Returns:
+        Parsed routing dict with keys: veto_pipeline_guess, reasoning,
+        request_existing_models, create_new_models.
+
+    Raises:
+        RoutingParseError: If no valid JSON routing block is found.
+    """
+    import json
+
+    # Find all ```json ... ``` blocks; the routing schema is always the last one.
+    pattern = re.compile(r'```json\s*\n(.*?)```', re.DOTALL | re.IGNORECASE)
+    matches = pattern.findall(response)
+
+    if not matches:
+        raise RoutingParseError(
+            "No ```json ... ``` block found in the LLM response. "
+            "Expected the routing JSON schema at the end of the response."
+        )
+
+    raw_json = matches[-1].strip()
+    try:
+        routing = json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        raise RoutingParseError(
+            f"Found a ```json block but it is not valid JSON: {e}\n"
+            f"Raw block:\n{raw_json}"
+        )
+
+    if not isinstance(routing, dict):
+        raise RoutingParseError(
+            "Routing JSON must be an object with request_existing_models and "
+            f"create_new_models fields, got {type(routing).__name__}."
+        )
+
+    # Ensure required top-level keys are present with sensible defaults
+    routing["handled"] = bool(routing.get("handled", False))
+    routing["veto_pipeline_guess"] = bool(routing.get("veto_pipeline_guess", False))
+    routing["reasoning"] = str(routing.get("reasoning", "") or "")
+    routing["request_existing_models"] = _normalize_existing_models(
+        routing.get("request_existing_models", [])
+    )
+    routing["create_new_models"] = _normalize_create_new_models(
+        routing.get("create_new_models", [])
+    )
+
+    fastdyn_log.info(
+        "Extracted routing JSON from LLM response "
+        "(veto=%s, request_existing=%d, create_new=%d)",
+        routing["veto_pipeline_guess"],
+        len(routing["request_existing_models"]),
+        len(routing["create_new_models"]),
+    )
+    return routing
+
+
+def _coerce_list(value: Any, field_name: str) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [value]
+    raise RoutingParseError(f"{field_name} must be a list, got {type(value).__name__}.")
+
+
+def _normalize_reference_functions(value: Any) -> list[str]:
+    items = _coerce_list(value, "reference_functions_needed")
+    return [str(item) for item in items if item]
+
+
+def _normalize_existing_models(value: Any) -> list[dict[str, Any]]:
+    normalized_existing = []
+    for item in _coerce_list(value, "request_existing_models"):
+        if isinstance(item, str):
+            normalized_existing.append(
+                {
+                    "name": item,
+                    "intent": "context_only",
+                    "reference_functions_needed": [],
+                }
+            )
+            continue
+
+        if not isinstance(item, dict):
+            raise RoutingParseError(
+                "request_existing_models entries must be objects or strings, "
+                f"got {type(item).__name__}."
+            )
+
+        name = str(item.get("name", "") or "").strip()
+        if not name:
+            raise RoutingParseError("request_existing_models entry is missing name.")
+
+        intent = str(item.get("intent", "context_only") or "context_only").strip()
+        if intent not in {"context_only", "update"}:
+            raise RoutingParseError(
+                f"Unsupported request_existing_models intent: {intent}"
+            )
+
+        normalized_existing.append(
+            {
+                **item,
+                "name": name,
+                "intent": intent,
+                "reference_functions_needed": _normalize_reference_functions(
+                    item.get("reference_functions_needed", [])
+                ),
+            }
+        )
+    return normalized_existing
+
+
+def _normalize_create_new_models(value: Any) -> list[dict[str, Any]]:
+    allowed_categories = {"peripheral", "slave", "endpoint"}
+    normalized_new = []
+
+    for item in _coerce_list(value, "create_new_models"):
+        if not isinstance(item, dict):
+            raise RoutingParseError(
+                "create_new_models entries must be objects, "
+                f"got {type(item).__name__}."
+            )
+
+        name = str(item.get("name", "") or "").strip()
+        if not name:
+            raise RoutingParseError("create_new_models entry is missing name.")
+
+        category = str(item.get("category", "") or "").strip().lower()
+        if category not in allowed_categories:
+            raise RoutingParseError(
+                f"Unsupported create_new_models category for {name}: {category}"
+            )
+
+        normalized_new.append(
+            {
+                **item,
+                "name": name,
+                "category": category,
+                "bus_type": item.get("bus_type"),
+                "mmio_range": item.get("mmio_range"),
+                "attach_to_peripheral": item.get("attach_to_peripheral"),
+                "connection_id": item.get("connection_id"),
+                "details": str(item.get("details", "") or ""),
+                "reference_functions_needed": _normalize_reference_functions(
+                    item.get("reference_functions_needed", [])
+                ),
+            }
+        )
+
+    return normalized_new
 
 
 @dataclass

@@ -12,11 +12,38 @@ from .pipeline.io_log_minimize import build_io_trace_context
 from .pipeline.prompt_builder import build_prompt
 from .utils.symbols import resolve_pc
 from .pipeline.fallback_extractor import run_compile_db_fallback, demangle_cpp_symbol, extract_identity
+from .pipeline.routing_apply import (
+    apply_routing_materialization,
+    plan_routing_materialization,
+)
 
 try:
     import tomllib
 except ImportError:
     import tomli as tomllib
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _routing_item_name(item):
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        return str(item.get("name", "") or "")
+    return ""
+
+
+def _routing_item_refs(item):
+    if not isinstance(item, dict):
+        return []
+    return [str(ref) for ref in _as_list(item.get("reference_functions_needed", [])) if ref]
+
 
 def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
     # 1. Parse Routing JSON to determine prompt_kind
@@ -27,6 +54,7 @@ def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
     routing = {}
     prompt_kind = "diagnostic"
     warnings = []
+    routing_materialization = None
     
     if routing_path.exists():
         try:
@@ -37,23 +65,52 @@ def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
             if not is_handled or request.force_routing:
                 prompt_kind = "routed"
                 for ex in routing.get("request_existing_models", []):
-                    name = ex.get("name", "")
+                    name = _routing_item_name(ex)
                     if name:
-                        periph = name.split('.')[0].upper()
+                        periph = Path(name).stem.upper()
                         if periph not in target_peripherals_override:
                             target_peripherals_override.append(periph)
-                    if ex.get("intent") == "update":
-                        reference_functions_override.extend(ex.get("reference_functions_needed", []))
+                    if isinstance(ex, dict) and ex.get("intent") == "update":
+                        reference_functions_override.extend(_routing_item_refs(ex))
                 
                 for new_mod in routing.get("create_new_models", []):
-                    name = new_mod.get("name", "")
+                    name = _routing_item_name(new_mod)
                     if name:
-                        periph = name.split('.')[0].upper()
+                        periph = Path(name).stem.upper()
                         if periph not in target_peripherals_override:
                             target_peripherals_override.append(periph)
-                    reference_functions_override.extend(new_mod.get("reference_functions_needed", []))
+                    reference_functions_override.extend(_routing_item_refs(new_mod))
                 
                 routing_context = routing
+
+                materialization_plan = plan_routing_materialization(
+                    routing,
+                    request.config_path,
+                )
+                if materialization_plan.requires_changes:
+                    if not request.apply_routing:
+                        raise ValueError(
+                            materialization_plan.describe()
+                            + "\nRerun trace-analyze with --apply-routing to "
+                            "review and apply these changes interactively."
+                        )
+
+                    routing_materialization = apply_routing_materialization(
+                        routing,
+                        request.config_path,
+                    )
+                    remaining_plan = routing_materialization.get("remaining_plan", {})
+                    if remaining_plan.get("requires_changes"):
+                        remaining_actions = remaining_plan.get("actions", [])
+                        details = "\n".join(
+                            f"  - {item.get('description', item)}"
+                            for item in remaining_actions
+                        )
+                        raise ValueError(
+                            "Routing materialization is incomplete; routed prompt "
+                            "generation would be missing requested files/config:\n"
+                            f"{details}"
+                        )
         except (OSError, json.JSONDecodeError) as e:
             warnings.append(f"Failed to parse routing JSON {routing_path}: {e}")
 
@@ -252,18 +309,32 @@ def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
             *macro_context.warnings,
         ],
     }
+    if routing_materialization is not None:
+        analysis_data["routing_materialization"] = routing_materialization
     
     if modeling_dir:
         target_files = []
         routing_for_targets = routing_context or {}
         if "request_existing_models" in routing_for_targets:
             for em in routing_for_targets.get("request_existing_models", []):
-                p = modeling_dir / em.get("name", "")
+                name = _routing_item_name(em)
+                if not name:
+                    continue
+                p = modeling_dir / name
                 if p.exists() and str(p) not in target_files:
                     target_files.append(str(p))
             for nm in routing_for_targets.get("create_new_models", []):
-                p = modeling_dir / nm.get("name", "")
-                if str(p) not in target_files:
+                if not isinstance(nm, dict):
+                    continue
+                name = str(nm.get("name", "") or "").strip()
+                if not name:
+                    continue
+                category = str(nm.get("category", "") or "").strip().lower()
+                if category == "endpoint" and not name.endswith(".py"):
+                    continue
+                filename = name if (name.endswith(".c") or name.endswith(".py")) else f"{name}.c"
+                p = modeling_dir / filename
+                if p.exists() and str(p) not in target_files:
                     target_files.append(str(p))
                     
         if not target_files and io_trace.target_peripheral:

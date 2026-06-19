@@ -100,6 +100,12 @@ def build_io_trace_context(
             peripherals_to_analyze.add(p)
     elif primary_target_peripheral:
         peripherals_to_analyze.add(primary_target_peripheral)
+    else:
+        # Diagnostic mode: if no single target can be resolved, include every
+        # peripheral observed in the IO log so the prompt still has routing context.
+        for acc in all_accesses:
+            if acc.peripheral:
+                peripherals_to_analyze.add(acc.peripheral)
 
     ctx = IOTraceContext(
         io_log_path=io_log_path,

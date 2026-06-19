@@ -32,6 +32,30 @@ int api_file_pread(int fd, void *buf, int len, uint64_t offset) {
     return len;
 }
 
+int api_file_pread_fill(int fd, void *buf, int len, uint64_t offset, uint8_t fill_val) {
+    if (fd < 0 || !buf || len < 0) return -1;
+
+    uint8_t *p = (uint8_t *)buf;
+    int total = 0;
+
+    while (total < len) {
+        ssize_t n = pread(fd, p + total, (size_t)(len - total), (off_t)(offset + (uint64_t)total));
+        if (n == 0) {
+            // EOF: fill remainder so callers always get deterministic data
+            memset(p + total, fill_val, (size_t)(len - total));
+            return len;
+        }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            perror("API_FILE: pread failed");
+            memset(p + total, fill_val, (size_t)(len - total));
+            return -1;
+        }
+        total += (int)n;
+    }
+    return len;
+}
+
 int api_file_pwrite(int fd, const void *buf, int len, uint64_t offset) {
     if (fd < 0 || !buf || len < 0) return -1;
 

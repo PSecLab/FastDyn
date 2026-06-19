@@ -42,6 +42,7 @@ class TraceAnalyzeRequest(SerializableModel):
     reset_work_dir: bool = False
     routing_json: Path | None = None
     force_routing: bool = False
+    apply_routing: bool = False
     svd_path: Path | None = None
     io_log: Path | None = None
 

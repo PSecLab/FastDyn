@@ -97,6 +97,7 @@ def load_trace_analysis_context(
             reset_work_dir=request.reset_work_dir,
             routing_json=request.routing_json.expanduser().resolve() if request.routing_json else None,
             force_routing=request.force_routing,
+            apply_routing=request.apply_routing,
             svd_path=request.svd_path.expanduser().resolve() if request.svd_path else None,
             io_log=request.io_log.expanduser().resolve() if request.io_log else None,
         ),

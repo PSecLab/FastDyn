@@ -8,11 +8,17 @@
 //TODO: Currently, the path is hardcoded- update the apis
 
 //Returns the pseudo terminal handler
-int api_pty_fd_gen(void) {
-    const char *pty_path = "/tmp/usart1_pty";
+int api_pty_fd_gen(const char* dev_name) {
+    char pty_path[256];
+    if (dev_name && dev_name[0] != '\0') {
+        snprintf(pty_path, sizeof(pty_path), "/tmp/%s_pty", dev_name);
+    } else {
+        snprintf(pty_path, sizeof(pty_path), "/tmp/usart1_pty");
+    }
+
     int fd = open(pty_path, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) {
-        perror("Unable to open PTY");
+        // Suppress noise when polling for an endpoint that is not ready yet.
     }
     return fd;
 }

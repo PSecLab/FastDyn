@@ -235,23 +235,37 @@ class MMIOAccess:
     def __repr__(self):
         ts_sec = self.timestamp_ns / 1e9
         access_str = f"[{ts_sec:10.6f}] {self.access_type.upper():<5} "
-        if self.access_type == 'interrupt':
+        if self.access_type in ('interrupt', 'irq_served'):
             # self.vector stores the NVIC IRQ number (already adjusted from the
             # raw trace's ARM exception number by subtracting 16). Show both
             # forms explicitly so the LLM does not conflate them:
             #   NVIC IRQn  : what ST's CMSIS header names (e.g. USART3_IRQn = 39)
             #   Exception# : what qemu_plugin_raise_irq expects (NVIC IRQn + 16)
-            return (f"[{ts_sec:10.6f}] INTERRUPT on {self.peripheral}, "
+            event = "INTERRUPT" if self.access_type == 'interrupt' else "IRQ_SERVED"
+            return (f"[{ts_sec:10.6f}] {event} on {self.peripheral}, "
                     f"NVIC IRQn={self.vector} "
                     f"(ARM exception #{self.vector+16} = 0x{self.vector+16:X}, "
                     f"i.e. pass {self.vector+16} to qemu_plugin_raise_irq)")
         if self.peripheral and self.register:
             access_str += f"to {self.peripheral}->{self.register} (0x{self.address:08X}) value=0x{self.value:X}, pc=0x{self.pc:X}"
+        elif self.address is None:
+            access_str += f"event on {self.peripheral or 'unknown'}"
         else:
             access_str += f"to address 0x{self.address:08X} value=0x{self.value:X}, pc=0x{self.pc:X}"
         return access_str
 
 class MMIOAnalyzer:
+    CORE_PERIPHERAL_RANGES = (
+        ("ITM", 0xE0000000, 0xE0001000),
+        ("DWT", 0xE0001000, 0xE0002000),
+        ("SysTick", 0xE000E010, 0xE000E020),
+        ("NVIC", 0xE000E100, 0xE000E500),
+        ("SCB", 0xE000ED00, 0xE000ED90),
+        ("CoreDebug", 0xE000EDF0, 0xE000EE00),
+        ("FPU", 0xE000EF30, 0xE000EF50),
+        ("TPIU", 0xE0040000, 0xE0041000),
+    )
+
     def __init__(self, svd_device):
         try:
             self.device = svd_device
@@ -283,6 +297,11 @@ class MMIOAnalyzer:
                         for sub_r in r.registers:
                             if p.base_address + sub_r.address_offset == addr:
                                 return p.name, sub_r.name, sub_r.description
+                offset = addr - p.base_address
+                return p.name, "UNKNOWN_REG", f"Register not explicitly defined in SVD (offset 0x{offset:X})"
+        for name, start, end in self.CORE_PERIPHERAL_RANGES:
+            if start <= addr < end:
+                return name, "UNKNOWN_REG", "Core peripheral register not explicitly defined in SVD"
         return None, None, None
 
     def load_and_correlate_log(self, log_path: str) -> List[MMIOAccess]:
@@ -308,6 +327,8 @@ class MMIOAnalyzer:
             r'Interrupt Served:\s*Vector\s*=\s*(?P<vector>0x[0-9a-fA-F]+)'
         )
         enriched_accesses = []
+        unmapped_addresses = Counter()
+        unmapped_interrupts = Counter()
         try:
             with open(log_path, 'r') as f:
                 for line_num, line in enumerate(f, 1):
@@ -317,12 +338,13 @@ class MMIOAnalyzer:
                     if interrupt_match or served_match:
                         m = interrupt_match if interrupt_match else served_match
                         data = m.groupdict()
+                        icount = int(data['icount']) if data.get('icount') else None
                         vector = int(data['vector'], 16) - 16   #Map to the actual interrupt number
                         if vector < 0:
                             continue    #not an external interrupt, ignore!
                         p_name = self.interrupt_map.get(vector)
                         if p_name is None:
-                            fastdyn_log.warn(f"On log line {line_num}: Failed to map interrupt vector {vector} (0x{vector:X}) to any SVD peripheral.")
+                            unmapped_interrupts[vector] += 1
                             continue
                         access = MMIOAccess(
                             timestamp_ns=int(float(data['timestamp']) * 1e9),
@@ -338,8 +360,7 @@ class MMIOAnalyzer:
                     address = int(data['address'], 16)
                     p_name, r_name, d_name = self._find_register_for_address(address)
                     if p_name is None:
-                        fastdyn_log.warn(f"On log line {line_num}: Failed to map address 0x{address:08X} to any SVD peripheral.")
-                        # sys.exit(1)
+                        unmapped_addresses[address] += 1
                         continue
                     access = MMIOAccess(
                         timestamp_ns=int(float(data['timestamp']) * 1e9), access_type=data['type'].lower(),
@@ -350,12 +371,30 @@ class MMIOAnalyzer:
                     enriched_accesses.append(access)
         except FileNotFoundError:
             fastdyn_log.error(f"Log file not found at '{log_path}'"); sys.exit(1)
+        if unmapped_addresses:
+            total = sum(unmapped_addresses.values())
+            examples = ", ".join(
+                f"0x{address:08X} ({count})"
+                for address, count in unmapped_addresses.most_common(5)
+            )
+            fastdyn_log.warning(
+                f"Skipped {total} MMIO accesses across {len(unmapped_addresses)} unmapped address(es): {examples}"
+            )
+        if unmapped_interrupts:
+            total = sum(unmapped_interrupts.values())
+            examples = ", ".join(
+                f"{vector} (0x{vector:X}, {count})"
+                for vector, count in unmapped_interrupts.most_common(5)
+            )
+            fastdyn_log.warning(
+                f"Skipped {total} interrupt events across {len(unmapped_interrupts)} unmapped vector(s): {examples}"
+            )
         fastdyn_log.info(f"Log correlated successfully. Total valid accesses parsed: {len(enriched_accesses)}")
         return enriched_accesses
 
     def _get_op_key(self, acc: MMIOAccess) -> Tuple:
         """Creates a unique tuple representing an operation for frequency counting."""
-        if acc.access_type == 'interrupt':
+        if acc.access_type in ('interrupt', 'irq_served'):
             return (acc.peripheral, acc.access_type, acc.vector)
         else:
             return (acc.peripheral, acc.register, acc.access_type)

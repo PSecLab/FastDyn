@@ -1494,10 +1494,13 @@ def fuzz(config, hardware_log, peripheral, board, method, n, isr_window, work_di
 )
 @click.option(
     '-o', '--output',
-    required=True,
+    required=False,
     multiple=True,
     type=click.Path(resolve_path=True),
-    help='Path to the model .c file(s). Can be specified multiple times.',
+    help=(
+        'Path to the model .c file(s). Can be specified multiple times. '
+        'If omitted, attempts to auto-detect from work_dir/analysis.json.'
+    ),
     metavar='PATH'
 )
 @click.option(
@@ -1604,6 +1607,7 @@ def llm(ctx, work_dir, output, model, model_provider, env_file, temperature,
     # -- Determine prompt type ------------------------------------------------
     initial_prompt_path = os.path.join(work_dir, "initial_prompt.txt")
     revised_prompt_path = os.path.join(work_dir, "revised_prompt.txt")
+    prompt_txt_path = os.path.join(work_dir, "prompt.txt")
 
     if os.path.isfile(revised_prompt_path):
         prompt_path = revised_prompt_path
@@ -1613,12 +1617,56 @@ def llm(ctx, work_dir, output, model, model_provider, env_file, temperature,
         prompt_path = initial_prompt_path
         prompt_type = "initial"
         log.info("Found initial_prompt.txt -- using full code extraction mode")
+    elif os.path.isfile(prompt_txt_path):
+        prompt_path = prompt_txt_path
+        # Detect routing-only prompts. Routed implementation prompts still use
+        # SEARCH/REPLACE, even when they were generated from routing.json.
+        _analysis_json = os.path.join(work_dir, "analysis.json")
+        _is_diagnostic = False
+        if os.path.isfile(_analysis_json):
+            import json as _json
+            with open(_analysis_json, "r") as _af:
+                _ad = _json.load(_af)
+            _is_diagnostic = (
+                _ad.get("prompt_kind") == "diagnostic"
+                and _ad.get("target_peripheral") is None
+                and not _ad.get("routing_used", False)
+            )
+        if _is_diagnostic:
+            prompt_type = "diagnostic"
+            log.info("Found prompt.txt with no target_peripheral -- using DIAGNOSTIC routing mode (JSON output only)")
+        else:
+            prompt_type = "revised"
+            log.info("Found prompt.txt -- using SEARCH/REPLACE patch mode")
     else:
         log.error(
             "No prompt file found in %s. "
-            "Expected initial_prompt.txt or revised_prompt.txt.", work_dir
+            "Expected initial_prompt.txt, revised_prompt.txt, or prompt.txt.", work_dir
         )
         sys.exit(1)
+
+    # -- Auto-detect output if omitted ----------------------------------------
+    # In diagnostic mode (Mode B) there is no C file to write — the LLM emits
+    # JSON only, so --output is not required.
+    if prompt_type != "diagnostic":
+        if not output:
+            analysis_json = os.path.join(work_dir, "analysis.json")
+            if os.path.isfile(analysis_json):
+                import json
+                with open(analysis_json, "r") as f:
+                    analysis_data = json.load(f)
+                    target_model_file = analysis_data.get("target_model_file")
+                    if target_model_file:
+                        if isinstance(target_model_file, list):
+                            output = tuple(target_model_file)
+                            log.info("Auto-detected target model outputs: %s", ", ".join(target_model_file))
+                        else:
+                            output = (target_model_file,)
+                            log.info("Auto-detected target model output: %s", target_model_file)
+
+            if not output:
+                log.error("Error: --output PATH is required, but was omitted and could not be auto-detected from analysis.json.")
+                sys.exit(1)
 
     # -- Read prompt ----------------------------------------------------------
     with open(prompt_path, "r", encoding="utf-8") as f:
@@ -1758,7 +1806,55 @@ def llm(ctx, work_dir, output, model, model_provider, env_file, temperature,
             handle_compilation,
         )
 
-        if prompt_type == "initial":
+        if prompt_type == "diagnostic":
+            # Mode B: LLM is a pure router — parse the JSON routing block.
+            from fastdyn.llm.response_parser import extract_routing_json, RoutingParseError
+            try:
+                routing = extract_routing_json(response_text)
+                routing_path = os.path.join(work_dir, "routing.json")
+                import json
+                with open(routing_path, "w", encoding="utf-8") as f:
+                    json.dump(routing, f, indent=2)
+                log.info("Routing JSON written to %s", routing_path)
+                log.info("LLM routing decision: %s", routing.get("reasoning", "(no reasoning)"))
+
+                from fastdyn.llm.handlers import handle_routing
+                success, error_context = handle_routing(routing, work_dir)
+            except RoutingParseError as e:
+                error_context = f"Failed to parse routing JSON from LLM response: {e}"
+                log.error(error_context)
+
+        elif response_text.lstrip().startswith("VETO:"):
+            # Mode A VETO: parse the JSON routing block and surface it to the user.
+            from fastdyn.llm.response_parser import extract_routing_json, RoutingParseError
+            log.warning(
+                "\n================= VETO =================\n"
+                "The LLM has VETOED this request. Parsing routing JSON..."
+            )
+            try:
+                routing = extract_routing_json(response_text)
+                routing_path = os.path.join(work_dir, "routing.json")
+                import json
+                with open(routing_path, "w", encoding="utf-8") as f:
+                    json.dump(routing, f, indent=2)
+                log.warning(
+                    "Reasoning: %s\nRouting JSON written to %s\n"
+                    "========================================",
+                    routing.get("reasoning", "(no reasoning)"), routing_path
+                )
+
+                from fastdyn.llm.handlers import handle_routing
+                success, error_context = handle_routing(routing, work_dir)
+            except RoutingParseError as e:
+                log.warning("Could not parse routing JSON from VETO response: %s", e)
+                success, error_context = False, str(e)
+
+            # Exit either way because a VETO means the current generation path is dead
+            if not success:
+                sys.exit(1)
+            sys.exit(0)
+
+        elif prompt_type == "initial":
             success, error_context = handle_initial_prompt(
                 response_text, output[0], work_dir
             )
@@ -1766,6 +1862,11 @@ def llm(ctx, work_dir, output, model, model_provider, env_file, temperature,
             success, error_context = handle_revised_prompt(
                 response_text, output, work_dir
             )
+
+        if prompt_type == "diagnostic" and success:
+            _write_metrics(call_metrics, attempt, "routing", {"result": "success"})
+            log.info("LLM routing response processed successfully.")
+            break
 
         if not success:
             call_type = "followup" if is_retry else ("revision" if prompt_type == "revised" else "initial")
@@ -1937,7 +2038,12 @@ def static_analyze(config, binary, svd, force, format):
     is_flag=True, default=False,
     help='Use routing even if handled: true.',
 )
-def trace_analyze(config, work_dir, latest_run_dir, svd, io_log, out_prompt, force, routing_json, force_routing):
+@click.option(
+    '--apply-routing',
+    is_flag=True, default=False,
+    help='Interactively materialize routing.json file/config recommendations before prompt generation.',
+)
+def trace_analyze(config, work_dir, latest_run_dir, svd, io_log, out_prompt, force, routing_json, force_routing, apply_routing):
     from fastdyn.trace_analyzer.models import TraceAnalyzeRequest
     from fastdyn.trace_analyzer.trace_analyze import run_trace_analysis
     from pathlib import Path
@@ -1950,6 +2056,7 @@ def trace_analyze(config, work_dir, latest_run_dir, svd, io_log, out_prompt, for
         force=force,
         routing_json=Path(routing_json) if routing_json else None,
         force_routing=force_routing,
+        apply_routing=apply_routing,
         svd_path=Path(svd) if svd else None,
         io_log=Path(io_log) if io_log else None,
     )

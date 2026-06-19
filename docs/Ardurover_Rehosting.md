@@ -49,3 +49,25 @@ Run the command:
 fastdyn trace-analyze -c configs/automatic_ardurover462.toml -o fastdyn_work --latest-run-dir fastdyn_recent_run
 ```
 This will generate `fastdyn_work/prompt.txt` containing the hardware configuration, stateful analysis, tight loops, and full source context, ready to be passed to an LLM.
+
+If an LLM later writes `fastdyn_work/routing.json` and recommends creating new model files or adding TOML routing entries, rerun trace analysis with:
+```bash
+fastdyn trace-analyze -c configs/automatic_ardurover462.toml -o fastdyn_work --latest-run-dir fastdyn_recent_run --apply-routing
+```
+That mode asks before applying each file/config change, then generates the routed implementation prompt.
+
+## 4. LLM Prompt Phase
+
+After `trace-analyze` creates `fastdyn_work/prompt.txt`, send that prompt to the configured LLM provider:
+```bash
+fastdyn llm -d fastdyn_work --compile --model gpt-5.4 --reasoning-effort medium --evaluate
+```
+
+The `llm` command reads `fastdyn_work/prompt.txt`, saves the prompt and response under `fastdyn_llm_history/`, and auto-detects the target model file from `fastdyn_work/analysis.json` when `-o/--output` is omitted. For known-device implementation prompts, it expects SEARCH/REPLACE output and patches the detected model file. With `--compile`, it builds the BoardRunner SDK model after applying the patch. With `--evaluate`, it appends per-call metrics to `fastdyn_llm_history/metrics.jsonl`.
+
+If the LLM returns a VETO or routing-only JSON response, `fastdyn llm` writes `fastdyn_work/routing.json` but does not create files or edit TOML. Rerun trace analysis to consume that routing decision:
+```bash
+fastdyn trace-analyze -c configs/automatic_ardurover462.toml -o fastdyn_work --latest-run-dir fastdyn_recent_run
+```
+
+If that routing decision requires new files or TOML entries, rerun with `--apply-routing` to review and apply those changes interactively before generating the next implementation prompt.
