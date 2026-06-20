@@ -110,6 +110,7 @@ def initialize_llm(model=None, base_url=DEFAULT_BASE_URL, storage_dir=DEFAULT_LL
         llm=LLM(
             model=selected_model,
             base_url=base_url,
+            api_key=os.environ.get("OPENAI_API_KEY", "ollama"),
         ),
         model=selected_model,
         base_url=base_url,
@@ -1080,8 +1081,8 @@ def parse_args():
     )
     parser.add_argument(
         "--base-url",
-        default=DEFAULT_BASE_URL,
-        help=f"LLM base URL. Default: {DEFAULT_BASE_URL}",
+        default=os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE_URL),
+        help=f"LLM base URL. Default: $OPENAI_BASE_URL or {DEFAULT_BASE_URL}",
     )
     return parser.parse_args()
 

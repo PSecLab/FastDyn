@@ -59,6 +59,21 @@ FastDyn/CrewAI receives the provider-qualified name:
 ollama/qwen3:30b
 ```
 
+### Running from Docker
+
+If you are running FastDyn inside a Docker container, you must forward the Ollama endpoint from the host so the agentic harness can reach it. Assuming Ollama is running on the host via `ollama serve`:
+
+```sh
+docker run --rm -it \
+  -e OPENAI_BASE_URL=http://$(hostname -I | awk '{print $1}'):11434/v1 \
+  -e OPENAI_API_KEY=ollama \
+  -e NO_PROXY="localhost,127.0.0.1,::1,$(hostname -I | awk '{print $1}')" \
+  -e no_proxy="localhost,127.0.0.1,::1,$(hostname -I | awk '{print $1}')" \
+  fastdyn-env
+```
+
+*(Note: Replace `fastdyn-env` with your actual Docker image name. Also, ensure Ollama is configured to listen on all network interfaces on the host by starting it with `OLLAMA_HOST=0.0.0.0 ollama serve`.)*
+
 Harness generation supports a custom endpoint only when invoking `harness.py` directly with `--base-url`:
 
 ```sh

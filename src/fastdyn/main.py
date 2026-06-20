@@ -788,6 +788,10 @@ def harness(binary, model, work_dir):
     ]
     if model:
         command.extend(["--model", model])
+    
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    if base_url:
+        command.extend(["--base-url", base_url])
 
     log.info("Running agentic harness: %s", " ".join(command))
     result = subprocess.run(command, cwd=str(fastdyn_root))
