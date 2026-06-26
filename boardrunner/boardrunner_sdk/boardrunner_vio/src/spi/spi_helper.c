@@ -9,7 +9,7 @@
 
 // Assume all necessary struct definitions (SPIBus, ConfigSection, etc.) are included here
 
-bool spi_slave_device_parse(SPIBus* bus, ConfigSection* model_info) {
+bool spi_slave_device_parse(SPIBus* bus, ConfigSection* model_info, const char* bus_name) {
     if (!bus || !model_info) {
         fprintf(stderr, "Error: Invalid arguments passed to spi_slave_device_parse.\n");
         return false;
@@ -18,7 +18,7 @@ bool spi_slave_device_parse(SPIBus* bus, ConfigSection* model_info) {
     for (int i = 0; i < model_info->device_count; i++) {
         DeviceModels* current_dev = &model_info->devices[i];
 
-        if (strstr(current_dev->name, "spi") != NULL) {
+        if (strcmp(current_dev->name, bus_name) == 0) {
             // Use the specific type: SpiSlaveList
             SpiSlaveList* slavelist = calloc(1, sizeof(SpiSlaveList));
             if (!slavelist) {
