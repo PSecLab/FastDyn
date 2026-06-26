@@ -42,4 +42,4 @@ fastdyn_llm_history
 *.out
 
 # useful gate for the automatic ardurover rehosting to avoid pushing models
-/boardrunner/boardrunner_sdk/model/
+# /boardrunner/boardrunner_sdk/model/

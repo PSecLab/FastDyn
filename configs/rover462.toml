@@ -1,4 +1,16 @@
 # ==============================================================================
+#                               Rehosting Configuration
+# ==============================================================================
+[Rehosting]
+[Rehosting.directories]
+static_analysis_cache_dir = "./fastdyn_static_analysis"
+firmware_source_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/source_code_ardupilot/ardupilot"]
+firmware_build_roots = ["/scratch/Fastdyn/ardurover_rehosting_fastdyn/ardupilot"]
+modeling_dir = "boardrunner/boardrunner_sdk/model"
+
+# [Rehosting.milestones]
+# targets = ["HAL_ChibiOS::run"]
+# ==============================================================================
 #                              Memory Configuration
 # ==============================================================================
 [Memory]
@@ -31,20 +43,20 @@ prealloc     = false
 platform = "STM32F427"
 # --- Debugging, Control, and Logging ---
 qemu_path = "../qemu/build/qemu-system-arm"
-enable_gdb = true
+enable_gdb = false
 stop_on_start = false
 launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
 log_file = "qemu.log"
-log_options = "none"
-icount = { shift = 5, sleep = false, align = false }
-timer_irq_period_ns = 1000000
+log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
 coverage=false
 finline='None'
-print_command = false          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
+print_command = true          #set to true if you want to print the final qemu on the terminal [Useful for debugging]
+reset_memory_files = true     # clear file-backed RAM before QEMU starts to avoid stale SRAM across runs
+ignore_functions = ["__idle_thread", "port_wait_for_interrupt"]
 
 [CPU]
 [[CPU.cpu0]]
@@ -55,11 +67,14 @@ cpu = "cortex-m4"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../qemu/ws/monitor.elf" # The VMM-like monitor that runs with the target
 binary = "virtuals/physics/flight_controllers/courbet/bin/ardurover_v462"
+
 init_nsvtor = "0x08004000"
 twintrace = "None" #options are record, replay or None
 hardware_trace = 'hardware_log/io.log'   #useful in cases like replay to generate the replay binary
 introspect = false
-existing_config_path = "virtuals/physics/flight_controllers/courbet/rover462/unlabeled_conf"
+# existing_config_path = "virtuals/physics/flight_controllers/courbet/rover462/unlabeled_conf"
+symbol_file = "virtuals/physics/flight_controllers/courbet/bin/ardurover_v462"
+optifuzz = false
 
 # --- Embedded CPU Behavior Configurations ---
 logger_content = """
@@ -67,71 +82,6 @@ logger_content = """
 # level = DEBUG
 # output = stderr
 """
-
-# ==============================================================================
-#                                FMU Configuration
-# ==============================================================================
-
-[FMU]
-active = "rover"
-auto_build = true
-
-[FMU.models.rover]
-model = "FastDyn.Rover"
-model_file = "modelica/FastDyn/Rover.mo"
-source_roots = ["modelica", "third_party/common/modelica_models"]
-output = "out/fmi3/Rover"
-build = true
-release = false
-
-[FMU.models.rover.parameters]
-lat0 = 40.414929
-lon0 = -86.932387
-ground_alt_wgs84 = 149.0
-
-# ==============================================================================
-#                             Runtime Helpers
-# ==============================================================================
-
-[Rumoca]
-enabled = false
-
-[Run]
-cwd = "."
-
-[Run.profiling]
-timing = true
-timing_echo = true
-python = false
-perf = "off"
-perf_frequency_hz = 99
-fmu = true
-
-[Run.processes.mavproxy]
-enabled = true
-quiet = true
-cwd = "virtuals/physics/flight_controllers/courbet/mavlink"
-env = { PYTHONPATH = "." }
-command = [
-    "mavproxy.py",
-    "--daemon",
-    "--master=udpout:127.0.0.1:${FASTDYN_MAVLINK_FIRMWARE_PORT:-14551}",
-    "--out=udpout:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
-    "--load-module=fastdyn_cesium:{\"port\":${FASTDYN_MAVCESIUM_PORT:-5000}}",
-]
-ready_message = "MAVCesium web viewer: open http://127.0.0.1:${FASTDYN_MAVCESIUM_PORT:-5000}/mavcesium/"
-
-[Run.processes.health]
-enabled = true
-terminate_run_on_exit = true
-command = [
-    "python3",
-    "virtuals/physics/flight_controllers/courbet/mavlink/mav_health_check.py",
-    "--connect",
-    "udpin:127.0.0.1:${FASTDYN_MAVLINK_GCS_PORT:-14552}",
-    "--monitor-sec",
-    "10",
-]
 
 # ==============================================================================
 #                              Device Configuration
@@ -157,11 +107,525 @@ command = [
     # This model explicitly marks memory as unhandled.
 
 # --- Peripheral Definitions ---
-[Device.remaining_space]
-    ranges = [["0x40000000", "0x400107FF"],["0x40010C00", "0x40010FFF"], ["0x40011400", "0xE0000000"], ["0xE0000000", "0xEFFFFFFF"]]
-    irq = [['1','100']]
-    description = "Memory regions that will handled by passthrough and are not of interest for the modeling."
+[Device.rcc]
+    ranges = [["0x40023800", "0x40023c00"]]
+    description = "RCC"
+    read_priority = "elder"
+    [[Device.rcc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/rcc.so"
 
-    [[Device.remaining_space.handlers]]
-        model = "classic"
+[Device.gpioa]
+    ranges = [["0x40020000", "0x40020400"]]
+    description = "GPIOA"
+    read_priority = "elder"
+    [[Device.gpioa.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioa.so"
+
+[Device.gpiob]
+    ranges = [["0x40020400", "0x40020800"]]
+    description = "GPIOB"
+    read_priority = "elder"
+    [[Device.gpiob.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiob.so"
+
+[Device.gpioc]
+    ranges = [["0x40020800", "0x40020c00"]]
+    description = "GPIOC"
+    read_priority = "elder"
+    [[Device.gpioc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioc.so"
+
+[Device.gpiod]
+    ranges = [["0x40020c00", "0x40021000"]]
+    description = "GPIOD"
+    read_priority = "elder"
+    [[Device.gpiod.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiod.so"
+
+[Device.gpioe]
+    ranges = [["0x40021000", "0x40021400"]]
+    description = "GPIOE"
+    read_priority = "elder"
+    [[Device.gpioe.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioe.so"
+
+[Device.gpiof]
+    ranges = [["0x40021400", "0x40021800"]]
+    description = "GPIOF"
+    read_priority = "elder"
+    [[Device.gpiof.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiof.so"
+
+[Device.gpiog]
+    ranges = [["0x40021800", "0x40021c00"]]
+    description = "GPIOG"
+    read_priority = "elder"
+    [[Device.gpiog.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpiog.so"
+
+[Device.gpioh]
+    ranges = [["0x40021c00", "0x40022000"]]
+    description = "GPIOH"
+    read_priority = "elder"
+    [[Device.gpioh.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioh.so"
+
+[Device.gpioi]
+    ranges = [["0x40022000", "0x40022400"]]
+    description = "GPIOI"
+    read_priority = "elder"
+    [[Device.gpioi.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/gpioi.so"
+
+[Device.pwr]
+    ranges = [["0x40007000", "0x40007400"]]
+    description = "PWR"
+    read_priority = "elder"
+    [[Device.pwr.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/pwr.so"
+
+[Device.dwt]
+    ranges = [["0xe0001000", "0xe0002000"]]
+    irq = [[1, 150]]
+    description = "DWT"
+    read_priority = "elder"
+    [[Device.dwt.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/dwt.so"
+    [[Device.dwt.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+
+[Device.dbg]
+    ranges = [["0xe0042000", "0xe0042010"]]
+    irq = [[1, 150]]
+    description = "DBG"
+    read_priority = "elder"
+    [[Device.dbg.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/dbg.so"
+
+[Device.scb]
+    ranges = [["0xe000ed00", "0xe000ed41"]]
+    irq = [[1, 150]]
+    description = "SCB"
+    read_priority = "elder"
+    [[Device.scb.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/scb.so"
+
+[Device.fpu]
+    ranges = [["0xe000ef34", "0xe000ef41"]]
+    irq = [[1, 150]]
+    description = "FPU"
+    read_priority = "elder"
+    [[Device.fpu.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/fpu.so"
+
+[Device.fpu_cpacr]
+    ranges = [["0xe000ed88", "0xe000ed8d"]]
+    irq = [[1, 150]]
+    description = "FPU CPACR"
+    read_priority = "elder"
+    [[Device.fpu_cpacr.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/fpu_cpacr.so"
+
+[Device.systick]
+    ranges = [["0xe000e010", "0xe000e020"]]
+    irq = [[1, 150]]
+    description = "SysTick"
+    read_priority = "elder"
+    [[Device.systick.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/systick.so"
+
+[Device.flash]
+    ranges = [["0x40023c00", "0x40024000"]]
+    irq = [[1, 150]]
+    description = "FLASH"
+    read_priority = "elder"
+    [[Device.flash.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/flash.so"
+    [[Device.flash.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.dma1]
+    ranges = [["0x40026000", "0x40026400"]]
+    irq = [[1, 150]]
+    description = "DMA1"
+    read_priority = "elder"
+    [[Device.dma1.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/dma1.so"
+    [[Device.dma1.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.dma2]
+    ranges = [["0x40026400", "0x40026800"]]
+    irq = [[1, 150]]
+    description = "DMA2"
+    read_priority = "elder"
+    [[Device.dma2.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/dma2.so"
+    [[Device.dma2.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+[Device.nvic]
+    ranges = [["0xe000e100", "0xe000e455"]]
+    irq = [[1, 150]]
+    description = "NVIC"
+    read_priority = "elder"
+    [[Device.nvic.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/nvic.so"
+    [[Device.nvic.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.tim5]
+    ranges = [["0x40000c00", "0x40001000"]]
+    irq = [[1, 150]]
+    description = "TIM5"
+    read_priority = "elder"
+    [[Device.tim5.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/tim5.so"
+    [[Device.tim5.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.coredebug]
+    ranges = [["0xe000edf0", "0xe000ee00"]]
+    irq = [[1, 150]]
+    description = "CoreDebug"
+    read_priority = "elder"
+    [[Device.coredebug.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/coredebug.so"
+    [[Device.coredebug.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.otg_fs_global]
+    ranges = [["0x50000000", "0x50000400"]]
+    irq = [[1, 150]]
+    description = "OTG_FS_GLOBAL"
+    read_priority = "elder"
+    [[Device.otg_fs_global.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/otg_fs_global.so"
+    [[Device.otg_fs_global.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.otg_fs_device]
+    ranges = [["0x50000800", "0x50000c00"]]
+    irq = [[1, 150]]
+    description = "OTG_FS_DEVICE"
+    read_priority = "elder"
+    [[Device.otg_fs_device.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/otg_fs_device.so"
+    [[Device.otg_fs_device.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.otg_fs_pwrclk]
+    ranges = [["0x50000e00", "0x50001200"]]
+    irq = [[1, 150]]
+    description = "OTG_FS_PWRCLK"
+    read_priority = "elder"
+    [[Device.otg_fs_pwrclk.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/otg_fs_pwrclk.so"
+    [[Device.otg_fs_pwrclk.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.c_adc]
+    ranges = [["0x40012300", "0x4001230d"]]
+    irq = [[1, 150]]
+    description = "C_ADC"
+    read_priority = "elder"
+    [[Device.c_adc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/c_adc.so"
+    [[Device.c_adc.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.adc1]
+    ranges = [["0x40012000", "0x40012051"]]
+    irq = [[1, 150]]
+    description = "ADC1"
+    read_priority = "elder"
+    [[Device.adc1.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/adc1.so"
+    [[Device.adc1.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.spi2]
+    ranges = [["0x40003800", "0x40003c00"]]
+    irq = [[1, 150]]
+    description = "SPI2"
+    read_priority = "elder"
+    [[Device.spi2.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/spi2.so"
+    [[Device.spi2.connections]]
+        # type = "slave"    -> a real device attached to the SPI bus (routed to QEMU)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+    [[Device.spi2.connections]]
+        type = "slave"
+        name = "ramtron_fram_spi.c"
+        cs_id = 0
+        device_scroll = "boardrunner/boardrunner_sdk/build/ramtron_fram_spi.so"
+        enabled = true
+
+[Device.tim4]
+    ranges = [["0x40000800", "0x40000c00"]]
+    irq = [[1, 150]]
+    description = "TIM4"
+    read_priority = "elder"
+    [[Device.tim4.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/tim4.so"
+    [[Device.tim4.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.sdio]
+    ranges = [["0x40012c00", "0x40013000"]]
+    irq = [[1, 150]]
+    description = "SDIO"
+    read_priority = "elder"
+    [[Device.sdio.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/sdio.so"
+    [[Device.sdio.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.usart2]
+    ranges = [["0x40004400", "0x40004800"]]
+    irq = [[1, 150]]
+    description = "USART2"
+    read_priority = "elder"
+    [[Device.usart2.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/usart2.so"
+    [[Device.usart2.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.usart3]
+    ranges = [["0x40004800", "0x40004c00"]]
+    irq = [[1, 150]]
+    description = "USART3"
+    read_priority = "elder"
+    [[Device.usart3.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/usart3.so"
+    [[Device.usart3.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.uart4]
+    ranges = [["0x40004c00", "0x40005000"]]
+    irq = [[1, 150]]
+    description = "UART4"
+    read_priority = "elder"
+    [[Device.uart4.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/uart4.so"
+    [[Device.uart4.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.uart8]
+    ranges = [["0x40007c00", "0x40008000"]]
+    irq = [[1, 150]]
+    description = "UART8"
+    read_priority = "elder"
+    [[Device.uart8.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/uart8.so"
+    [[Device.uart8.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.uart7]
+    ranges = [["0x40007800", "0x40007c00"]]
+    irq = [[1, 150]]
+    description = "UART7"
+    read_priority = "elder"
+    [[Device.uart7.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/uart7.so"
+    [[Device.uart7.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.tim1]
+    ranges = [["0x40010000", "0x40010400"]]
+    irq = [[1, 150]]
+    description = "TIM1"
+    read_priority = "elder"
+    [[Device.tim1.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/tim1.so"
+    [[Device.tim1.connections]]
+        # type = "slave"    -> a real device attached to this bus (routed to QEMU via boardrunner)
+        # type = "endpoint" -> a host-side backend only (Gazebo, PTY, etc. — informational, NOT forwarded to QEMU)
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.usart6]
+    ranges = [["0x40011400", "0x40011800"]]
+    irq = [[1, 150]]
+    description = "USART6"
+    read_priority = "elder"
+    [[Device.usart6.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/usart6.so"
+        name    = "gazebo"
+
+    [[Device.usart6.connections]]
+        type = "endpoint"
+        name = "ap_iomcu_uart_endpoint.py"
+        enabled = true
+
+
+[Device.spi1]
+    ranges = [["0x40013000", "0x40013400"]]
+    irq = [[1, 150]]
+    description = "SPI1"
+    read_priority = "elder"
+    [[Device.spi1.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/spi1.so"
+    [[Device.spi1.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
         enabled = false
