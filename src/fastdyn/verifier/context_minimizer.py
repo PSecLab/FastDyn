@@ -400,17 +400,18 @@ class MMIOAnalyzer:
             return (acc.peripheral, acc.register, acc.access_type)
     def separate_init_and_runtime(self, accesses: List[MMIOAccess]) -> Tuple[List[MMIOAccess], List[MMIOAccess]]:
         fastdyn_log.debug(f"Separating accesses...")
-        op_key = lambda acc: (acc.peripheral, acc.register, acc.access_type)
         if len(accesses) < 2: return accesses, []
-        op_counts = Counter(op_key(acc) for acc in accesses)
-        if not op_counts or not op_counts.most_common(1): return accesses, []
-        most_common_op, count = op_counts.most_common(1)[0]
-        if count <= 1:
+        op_counts = Counter(self._get_op_key(acc) for acc in accesses)
+        if not op_counts: return accesses, []
+
+        repeating_ops = {op for op, count in op_counts.items() if count >= 10}
+
+        if not repeating_ops:
             fastdyn_log.debug("No dominant repetitive operation found. Classifying all as initialization.")
             return accesses, []
         loop_start_time = -1
         for acc in accesses:
-            if op_key(acc) == most_common_op:
+            if self._get_op_key(acc) in repeating_ops:
                 loop_start_time = acc.timestamp_ns
                 break
         init_accesses = [acc for acc in accesses if acc.timestamp_ns < loop_start_time]

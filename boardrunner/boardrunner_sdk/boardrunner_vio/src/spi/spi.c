@@ -8,10 +8,10 @@
  * @return An initialized SPIBus struct. If initialization fails, the
  * returned struct will be empty (num_slaves will be 0).
  */
-SPIBus api_spi_init_bus(ConfigSection* model_info) {
+SPIBus api_spi_init_bus(ConfigSection* model_info, const char* bus_name) {
     SPIBus bus = {0};
     bool success;
-    success = spi_slave_device_parse(&bus, model_info); //parses all the attached slave devices
+    success = spi_slave_device_parse(&bus, model_info, bus_name); //parses all the attached slave devices
     if (!success) {
         utils_die("Unable to parse the slave devices attached to I2C");
     }

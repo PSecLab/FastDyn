@@ -39,8 +39,15 @@ source ./setup.sh --build-qemu --build-gazebo --skip-optifuzz
 ```
 *(Omit `--build-qemu` if the patched QEMU is already built).*
 
+Then, build the `libhw` repo, by first running the setup file in libhw folder
+```bash
+cd ../libhw
+make
+```
+
 Then, to build FastDyn correctly for this legacy backend, run:
 ```bash
+cd ../Fastdyn
 make PROBE=true DEV=true LIBHW=true LIBGZ=true FLIGHT_CONTROLLERS=true DEBUG_PRINT=true LIBFUZZ=true
 ```
 
