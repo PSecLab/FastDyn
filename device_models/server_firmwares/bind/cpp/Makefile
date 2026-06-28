@@ -66,6 +66,19 @@ COMMON_CFLAGS := $(ARCH_FLAGS) $(DEFS) $(INCLUDE_DIRS) -Os -g -flto=thin -ffrees
 CFLAGS   := $(COMMON_CFLAGS)
 CXXFLAGS := $(COMMON_CFLAGS) -fno-exceptions -fno-rtti -fno-use-cxa-atexit
 
+# ---------------- Codegen (llc) flags ----------------
+# Disable machine if-conversion so conditional returns are kept as explicit
+# branches to a standalone return block, instead of a predicated `bxeq lr`
+# buried mid-basic-block (a Thumb IT-block conditional return). The mid-block
+# return makes the ASM basic-block boundary disagree with the LLIL-derived
+# epilogue block start, which breaks the BIND epilogue/stage analysis. This
+# only affects control-flow predication; data predication (select->cmov) stays.
+IFCVT_FLAGS := --disable-ifcvt-simple --disable-ifcvt-simple-false \
+               --disable-ifcvt-triangle --disable-ifcvt-triangle-rev \
+               --disable-ifcvt-triangle-false --disable-ifcvt-triangle-false-rev \
+               --disable-ifcvt-diamond --disable-ifcvt-forked-diamond \
+               --disable-early-ifcvt
+
 # ---------------- Link flags ----------------
 LD_SCRIPT := ./scripts/stm32_flash.ld
 
@@ -114,7 +127,7 @@ bc: $(OBJ_FILES) | $(BUILD_DIR)
 
 # Compile .bc -> .o and link
 exec: $(BC_FILE) $(STARTUP_OBJ)
-	$(LLC) -filetype=obj $(BC_FILE) -o $(BUILD_DIR)/$(BIN)_from_bc.o
+	$(LLC) -filetype=obj $(IFCVT_FLAGS) $(BC_FILE) -o $(BUILD_DIR)/$(BIN)_from_bc.o
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(CXXLINKFLAGS) \
 		$(BUILD_DIR)/$(BIN)_from_bc.o $(STARTUP_OBJ) $(LDLIBS) -o $(ELF_FILE)
 
