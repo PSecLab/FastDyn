@@ -28,6 +28,7 @@
 Reset_Handler:
   ldr   sp, =_estack
 
+<<<<<<< HEAD
   @ Enable the FPU (CPACR @ 0xE000ED88 |= CP10/CP11 full access). This firmware
   @ is built -mfloat-abi=hard but has no SystemInit, and the analysis harness
   @ jumps directly into FP functions; without this the first FP instruction
@@ -38,6 +39,15 @@ Reset_Handler:
   str r1, [r0]
   dsb
   isb
+=======
+  /* Enable FPU: set CP10 and CP11 full access in CPACR */
+  ldr   r0, =0xE000ED88
+  ldr   r1, =0x00F00000
+  str   r1, [r0]
+  dsb
+  isb
+
+>>>>>>> cb3d153903cc11d8875fca306f653ba08270f296
 
   ldr r0, =_sdata
   ldr r1, =_edata
