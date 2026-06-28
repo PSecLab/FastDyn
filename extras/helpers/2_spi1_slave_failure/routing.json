@@ -1,0 +1,32 @@
+{
+  "veto_pipeline_guess": true,
+  "reasoning": "GDB trace confirms the firmware passed SPI2/FRAM successfully, then hangs during ms5611 barometer probe on SPI1. The SPI1 model fails to complete the DMA transaction (spi_lld_send aborts), starving the thread into __idle_thread. Root cause is the SPI1 controller model and the missing MS5611 slave.",
+  "request_existing_models": [
+    {
+      "name": "spi1.c",
+      "intent": "update",
+      "reference_functions_needed": []
+    },
+    {
+      "name": "dma2.c",
+      "intent": "context_only",
+      "reference_functions_needed": []
+    }
+  ],
+  "create_new_models": [
+    {
+      "name": "ms5611_spi.c",
+      "category": "slave",
+      "bus_type": "SPI",
+      "mmio_range": null,
+      "attach_to_peripheral": "spi1",
+      "connection_id": "CS: device=3",
+      "reference_functions_needed": [
+        "AP_BoardConfig::check_ms5611",
+        "AP_BoardConfig::spi_check_register"
+      ],
+      "details": "MS5611 barometer on SPI1. Firmware sends reset cmd 0x1E, then reads PROM calibration coefficients and ADC conversion results. Must respond to MS5611 SPI protocol commands so the probe succeeds and the DMA transfer completes."
+    }
+  ],
+  "handled": false
+}

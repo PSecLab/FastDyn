@@ -123,7 +123,7 @@ reverse-engineering the register logic — it is NOT a lookup table to copy from
 The `_init` function receives a `ConfigSection* model_info` pointer that contains
 the peripheral's configuration from the platform description (base address, IRQ
 numbers, bus connections, etc.). Use it when calling bus-init APIs like
-`api_i2c_init_bus(model_info)` or `api_spi_init_bus(model_info)`. Do not
+`api_i2c_init_bus(model_info)` or `api_spi_init_bus(model_info, "spi2")`. Do not
 hardcode values that can be read from the configuration.
 """
 
@@ -305,7 +305,7 @@ qemu_api_list = """
 - `uint64_t qemu_plugin_timer_new_period_ns(void (*cb)(void *), void *data, uint64_t period)`: Accepts a callback function, user data, and a nanosecond period to create and arm a periodic timer that executes the callback at each interval, returning a uint64_t timer handle.
 - `void dev_debug(char *str)`: Any debug messages must be logged using this function.
 - `int api_pty_fd_gen(const char* dev_name)`: Takes a string device name (e.g. \"usart6\") and returns an integer file descriptor for a host-side pseudo-terminal device. The actual PTY path is determined by the framework at runtime.
-- `void api_pty_write_req(int fd, uint8_t value)`: Takes a file descriptor fd and a byte value as input to write the byte to the pseudo-terminal, with no output.
+- `int api_pty_write_req(int fd, uint8_t value)`: Writes one byte to the pseudo-terminal. Returns 1 when the byte was written, 0 when the non-blocking PTY would block and should be retried later, and -1 on fatal error.
 - `int api_pty_read_nonblock(int fd, uint8_t *buff);`: Attempts to read a single byte from the pseudo-terminal fd in non-blocking mode, returning a status.
 - `I2CBus api_i2c_init_bus(ConfigSection* model_info)`: Initializes an I2C bus from a configuration section and returns the I2CBus struct by value.
 - `int api_i2c_start_transfer(I2CBus* bus, uint8_t address, bool is_recv)`: Starts an I2C transaction with a slave device.
@@ -313,7 +313,7 @@ qemu_api_list = """
 - `void api_i2c_end_transfer(I2CBus* bus)`: Ends the current I2C transaction.
 - `int api_i2c_send(I2CBus *bus, uint8_t data)`: Sends a byte to the active I2C slave device.
 - `uint8_t api_i2c_recv(I2CBus *bus)`: Receives a byte from the active I2C slave device.
-- `SPIBus api_spi_init_bus(ConfigSection* model_info)`: Takes a ConfigSection pointer, parses the SPI configuration, loads all specified slave device models, and returns a populated SPIBus structure.
+- `SPIBus api_spi_init_bus(ConfigSection* model_info, const char* bus_name)`: Takes a ConfigSection pointer and bus name (e.g. `"spi1"` or `"spi2"`), parses the SPI configuration for that bus, loads all specified slave device models, and returns a populated SPIBus structure.
 - `uint32_t api_spi_transfer(SPIBus *bus, uint32_t val)`: Performs a full-duplex transfer on the bus by sending val (MOSI) to the currently selected slave and returning the uint32_t value received from it (MISO).
 - `void api_spi_set_cs(SPIBus *bus, int cs_id, int level)`: Sets the logic state of a chip select line by taking a cs_id and level (0=active, 1=inactive), and notifies all relevant slaves by calling their set_cs callback.
 - `void api_dma_register_stream(int controller_id, int stream_id, dma_request_handler_t handler, void *opaque)`: Called by a DMA model to register a no-payload handler for a specific DMA controller (e.g. 1 for DMA1) and stream index.

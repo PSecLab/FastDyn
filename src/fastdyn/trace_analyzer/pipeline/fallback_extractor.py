@@ -53,6 +53,59 @@ def find_source_line_ctags(file_path: Path, method_name: str) -> int | None:
         pass
     return None
 
+def _compile_entry_path(entry: dict[str, Any]) -> Path | None:
+    fpath = entry.get("file", "")
+    if not fpath:
+        return None
+    path = Path(fpath)
+    if not path.is_absolute():
+        path = Path(entry.get("directory", "")) / path
+    if not path.exists() or path.suffix not in (".cpp", ".c", ".cc", ".cxx"):
+        return None
+    return path
+
+def _matching_compile_entries(
+    compile_db: list[dict[str, Any]],
+    *,
+    class_name: str,
+) -> list[tuple[dict[str, Any], Path]]:
+    entries: list[tuple[dict[str, Any], Path]] = []
+    for entry in compile_db:
+        path = _compile_entry_path(entry)
+        if path is None:
+            continue
+        entries.append((entry, path))
+
+    if not class_name:
+        return entries
+
+    preferred: list[tuple[dict[str, Any], Path]] = []
+    others: list[tuple[dict[str, Any], Path]] = []
+    for item in entries:
+        _, path = item
+        if path.name.startswith(class_name) or class_name in str(path.parent):
+            preferred.append(item)
+        else:
+            others.append(item)
+    return preferred + others
+
+def _source_line_regex(file_path: Path, *, class_name: str, method_name: str) -> int | None:
+    try:
+        content = file_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+
+    patterns = []
+    if class_name and class_name != method_name:
+        patterns.append(re.compile(rf"\b{re.escape(class_name)}\s*::\s*{re.escape(method_name)}\s*\("))
+    patterns.append(re.compile(rf"\b{re.escape(method_name)}\s*\("))
+
+    for pattern in patterns:
+        for i, line in enumerate(content):
+            if pattern.search(line):
+                return i + 1
+    return None
+
 def extract_macros(compile_cmd: dict[str, Any], source_code: str) -> MacroContext:
     try:
         from fastdyn.binary.binary_utils.macros import compile_command_args
@@ -147,45 +200,33 @@ def run_compile_db_fallback(
     target_path = None
     anchor_line = None
 
-    # First pass: try ctags on all matching files
-    for entry in compile_db:
-        fpath = entry.get("file", "")
-        fname = Path(fpath).name
-        if fname.startswith(class_name) and fname.endswith((".cpp", ".c", ".cc", ".cxx")):
-            p = Path(fpath)
-            if not p.is_absolute():
-                p = Path(entry.get("directory", "")) / p
-            if p.exists():
-                line = find_source_line_ctags(p, method_name)
-                if line is not None:
-                    target_entry = entry
-                    target_path = p
-                    anchor_line = line
-                    break
+    source_entries = _matching_compile_entries(compile_db, class_name=class_name)
 
-    # Second pass: fallback regex if ctags missed it
+    # First pass: try ctags on likely class/path matches only. The broad regex
+    # pass below handles class methods implemented in files such as board_drivers.cpp.
+    ctags_entries = [
+        (entry, path)
+        for entry, path in source_entries
+        if class_name and (path.name.startswith(class_name) or class_name in str(path.parent))
+    ]
+    for entry, path in ctags_entries:
+        line = find_source_line_ctags(path, method_name)
+        if line is not None:
+            target_entry = entry
+            target_path = path
+            anchor_line = line
+            break
+
+    # Second pass: fallback regex if ctags missed it. Search all compile-db
+    # sources, not just files beginning with the C++ class name.
     if not target_path:
-        for entry in compile_db:
-            fpath = entry.get("file", "")
-            fname = Path(fpath).name
-            if fname.startswith(class_name) and fname.endswith((".cpp", ".c", ".cc", ".cxx")):
-                p = Path(fpath)
-                if not p.is_absolute():
-                    p = Path(entry.get("directory", "")) / p
-                if p.exists():
-                    try:
-                        content = p.read_text(errors="replace").splitlines()
-                        pattern = re.compile(rf"\b{method_name}\s*\(")
-                        for i, line in enumerate(content):
-                            if pattern.search(line):
-                                target_entry = entry
-                                target_path = p
-                                anchor_line = i + 1
-                                break
-                    except OSError:
-                        pass
-                if target_path:
-                    break
+        for entry, path in source_entries:
+            line = _source_line_regex(path, class_name=class_name, method_name=method_name)
+            if line is not None:
+                target_entry = entry
+                target_path = path
+                anchor_line = line
+                break
             
     if not target_entry or not target_path or not target_path.exists():
         return None, None

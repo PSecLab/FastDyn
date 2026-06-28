@@ -260,11 +260,13 @@ class MockIOMCU:
 
 
 def open_endpoint(path):
-    # The framework may hand us an already-created PTY path and that path can
-    # legitimately be a symlink.  Rejecting symlinks here causes the endpoint
-    # to create a brand-new unrelated PTY, so the guest UART and this mock end
-    # up talking to different terminals and the guest only sees idle/zero data.
-    if path and os.path.exists(path):
+    use_existing = os.environ.get("AP_IOMCU_UART_USE_EXISTING_PTY", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    if path and os.path.exists(path) and use_existing:
         fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         set_raw_mode(fd)
         resolved = path
@@ -280,6 +282,12 @@ def open_endpoint(path):
             )
         )
         return fd
+
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
     master, slave = os.openpty()
     tty_name = os.ttyname(slave)

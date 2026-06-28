@@ -10,6 +10,11 @@ modeling_dir = "boardrunner/boardrunner_sdk/model"
 
 # [Rehosting.milestones]
 # targets = ["HAL_ChibiOS::run"]
+
+#This will extract the macros (used in prompt generation) either from the firmware or the build path based on the availability.
+[Rehosting.static_analysis.macros]
+enabled = true
+strategy = "auto"
 # ==============================================================================
 #                              Memory Configuration
 # ==============================================================================
@@ -43,8 +48,8 @@ prealloc     = false
 platform = "STM32F427"
 # --- Debugging, Control, and Logging ---
 qemu_path = "../qemu/build/qemu-system-arm"
-enable_gdb = false
-stop_on_start = false
+enable_gdb = true
+stop_on_start = true
 launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
@@ -629,3 +634,33 @@ logger_content = """
         type    = "endpoint"
         name    = "gazebo"
         enabled = false
+
+[[Device.spi1.connections]]
+    type    = "slave"
+    name    = "ms5611_spi1.c"
+    enabled = true
+    connection_id = "CS: device=3"
+    bus = "spi"
+    device_scroll = "boardrunner/boardrunner_sdk/build/ms5611_spi.so"
+
+[Device.spi4]
+    ranges = [["0x40013400", "0x40013800"]]
+    irq = [[1, 150]]
+    description = "SPI4"
+    read_priority = "elder"
+    [[Device.spi4.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/spi4.so"
+    [[Device.spi4.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[[Device.spi4.connections]]
+    type    = "slave"
+    name    = "ms5611_spi4.c"
+    enabled = true
+    connection_id = "CS: device=2"
+    bus = "spi"
+    device_scroll = "boardrunner/boardrunner_sdk/build/ms5611_spi4.so"

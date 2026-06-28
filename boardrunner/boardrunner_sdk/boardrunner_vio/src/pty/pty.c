@@ -23,11 +23,24 @@ int api_pty_fd_gen(const char* dev_name) {
     return fd;
 }
 
-// Sends a single byte to the pseudo-terminal fd (blocking write)
-void api_pty_write_req(int fd, uint8_t value) {
-        if (write(fd, &value, 1) < 0) {
-            perror("USART1-ERROR: Write() to PTY Failed");
+// Sends a single byte to the pseudo-terminal fd.
+// Returns 1 on success, 0 when the non-blocking PTY would block, and -1 on fatal error.
+int api_pty_write_req(int fd, uint8_t value) {
+    ssize_t n = write(fd, &value, 1);
+
+    if (n == 1) {
+        return 1;
+    }
+
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return 0;
         }
+        perror("PTY write failed");
+        return -1;
+    }
+
+    return 0;
 }
 
 /**

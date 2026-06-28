@@ -163,6 +163,12 @@ def _build_source_block(source_contexts: list[SourceContext]) -> list[str]:
                 parts.append("```c")
                 parts.append(sc.text)
                 parts.append("```\n")
+            elif sc.warnings:
+                function = sc.function or "unknown"
+                parts.append(f"*Source unavailable for `{function}`:*")
+                for warning in sc.warnings:
+                    parts.append(f"- {warning}")
+                parts.append("")
                 
             if sc.class_methods_menu:
                 parts.append(f"**Other methods available in this class:**")

@@ -25,6 +25,7 @@
 #define USART_CR1_UE        (1U << 13)
 
 #define USART6_RXQ_SIZE     2048
+#define USART6_TXQ_SIZE     8192
 #define USART6_POLL_NS      1000000ULL
 
 typedef struct {
@@ -40,6 +41,10 @@ typedef struct {
     unsigned rxq_head;
     unsigned rxq_tail;
     unsigned rxq_count;
+    uint8_t txq[USART6_TXQ_SIZE];
+    unsigned txq_head;
+    unsigned txq_tail;
+    unsigned txq_count;
 } USART6State;
 
 static USART6State g_usart6;
@@ -68,6 +73,49 @@ static bool usart6_rxq_pop(USART6State *s, uint8_t *out) {
     s->rxq_tail = (s->rxq_tail + 1U) % USART6_RXQ_SIZE;
     s->rxq_count--;
     return true;
+}
+
+static bool usart6_txq_push(USART6State *s, uint8_t v) {
+    if (s->txq_count >= USART6_TXQ_SIZE) {
+        return false;
+    }
+    s->txq[s->txq_head] = v;
+    s->txq_head = (s->txq_head + 1U) % USART6_TXQ_SIZE;
+    s->txq_count++;
+    return true;
+}
+
+static bool usart6_txq_pop(USART6State *s, uint8_t *out) {
+    if (s->txq_count == 0U) {
+        return false;
+    }
+    *out = s->txq[s->txq_tail];
+    s->txq_tail = (s->txq_tail + 1U) % USART6_TXQ_SIZE;
+    s->txq_count--;
+    return true;
+}
+
+static void usart6_drain_tx(USART6State *s) {
+    uint8_t ch;
+    int rc;
+
+    if ((s->cr1 & USART_CR1_UE) == 0U || (s->cr1 & USART_CR1_TE) == 0U) {
+        return;
+    }
+
+    usart6_ensure_pty(s);
+    if (s->pty_fd < 0) {
+        return;
+    }
+
+    while (s->txq_count > 0U) {
+        ch = s->txq[s->txq_tail];
+        rc = api_pty_write_req(s->pty_fd, ch);
+        if (rc <= 0) {
+            break;
+        }
+        (void)usart6_txq_pop(s, &ch);
+    }
 }
 
 static void usart6_host_poll(USART6State *s) {
@@ -123,9 +171,10 @@ static void usart6_transmit_byte(USART6State *s, uint8_t ch) {
     s->dr = ch;
 
     if ((s->cr1 & USART_CR1_UE) != 0U && (s->cr1 & USART_CR1_TE) != 0U) {
-        usart6_ensure_pty(s);
-        if (s->pty_fd >= 0) {
-            api_pty_write_req(s->pty_fd, ch);
+        if (usart6_txq_push(s, ch)) {
+            usart6_drain_tx(s);
+        } else {
+            dev_debug("usart6: TX queue full, dropping byte\n");
         }
     }
 
@@ -146,6 +195,7 @@ static void usart6_dma_tx_handler(void *opaque, const uint8_t *data, int len) {
 
 static void usart6_poll_cb(void *opaque) {
     USART6State *s = (USART6State *)opaque;
+    usart6_drain_tx(s);
     usart6_host_poll(s);
     usart6_drain_rx(s);
 }
@@ -169,6 +219,7 @@ uint64_t usart6_read(void *opaque, uint64_t addr, unsigned size) {
     (void)size;
 
     usart6_host_poll(s);
+    usart6_drain_tx(s);
     usart6_drain_rx(s);
 
     switch (offset) {
@@ -221,6 +272,7 @@ void usart6_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
         break;
     case USART_CR1_OFF:
         s->cr1 = (uint32_t)value;
+        usart6_drain_tx(s);
         usart6_drain_rx(s);
         break;
     case USART_CR2_OFF:

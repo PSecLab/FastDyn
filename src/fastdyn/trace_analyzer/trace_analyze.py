@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
+from typing import Any
 
-from .models import TraceAnalyzeRequest, TraceAnalysisResult
+from .models import SourceContext, TraceAnalyzeRequest, TraceAnalysisResult
 from .pipeline.run_context import load_trace_analysis_context
 from .pipeline.exec_trace import build_exec_trace_context
 from .pipeline.source_context import build_source_context
@@ -43,6 +47,116 @@ def _routing_item_refs(item):
     if not isinstance(item, dict):
         return []
     return [str(ref) for ref in _as_list(item.get("reference_functions_needed", [])) if ref]
+
+
+def _normalize_function_key(name: str) -> str:
+    text = " ".join(str(name).strip().split())
+    text = re.sub(r"\s*::\s*", "::", text)
+    return text
+
+
+def _add_lookup_key(keys: list[str], value: str | None) -> None:
+    if not value:
+        return
+    key = _normalize_function_key(value)
+    if key and key not in keys:
+        keys.append(key)
+
+
+def _short_function_name(name: str) -> str:
+    return str(name).split("(", 1)[0].strip()
+
+
+def _function_lookup_keys(raw_name: str, demangled_name: str | None = None) -> list[str]:
+    keys: list[str] = []
+    _add_lookup_key(keys, raw_name)
+    if demangled_name is None:
+        demangled_name = demangle_cpp_symbol(raw_name)
+    _add_lookup_key(keys, demangled_name)
+    _add_lookup_key(keys, _short_function_name(demangled_name))
+    class_name, method_name = extract_identity(demangled_name)
+    if class_name and method_name:
+        if "::" in demangled_name:
+            _add_lookup_key(keys, f"{class_name}::{method_name}")
+        _add_lookup_key(keys, method_name)
+    return keys
+
+
+def _demangle_many(names: list[str]) -> dict[str, str]:
+    if not names or not shutil.which("c++filt"):
+        return {name: name for name in names}
+    try:
+        proc = subprocess.run(
+            ["c++filt"],
+            input="\n".join(names) + "\n",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return {name: name for name in names}
+
+    outputs = proc.stdout.splitlines()
+    if len(outputs) != len(names):
+        return {name: name for name in names}
+    return dict(zip(names, outputs))
+
+
+def _build_function_lookup(functions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    names = [str(f.get("name") or "") for f in functions if f.get("name")]
+    demangled = _demangle_many(names)
+    lookup: dict[str, list[dict[str, Any]]] = {}
+    for f in functions:
+        raw_name = str(f.get("name") or "")
+        if not raw_name:
+            continue
+        for key in _function_lookup_keys(raw_name, demangled.get(raw_name, raw_name)):
+            lookup.setdefault(key, []).append(f)
+    return lookup
+
+
+def _select_requested_function(
+    matches: list[dict[str, Any]],
+    *,
+    exec_trace_functions: set[str],
+) -> tuple[dict[str, Any] | None, bool]:
+    if not matches:
+        return None, False
+    trace_matches = [
+        match for match in matches
+        if str(match.get("name") or "") in exec_trace_functions
+    ]
+    candidates = trace_matches or matches
+    return candidates[0], len(candidates) > 1
+
+
+def _resolve_requested_function(
+    request_name: str,
+    function_lookup: dict[str, list[dict[str, Any]]],
+    *,
+    exec_trace_functions: set[str],
+) -> tuple[dict[str, Any] | None, str | None, bool]:
+    for key in _function_lookup_keys(request_name):
+        matches = function_lookup.get(key, [])
+        if matches:
+            selected, ambiguous = _select_requested_function(
+                matches,
+                exec_trace_functions=exec_trace_functions,
+            )
+            return selected, key, ambiguous
+    return None, None, False
+
+
+def _missing_source_context(function_name: str, warning: str) -> SourceContext:
+    return SourceContext(
+        function=function_name,
+        source_path=None,
+        source_root_relative=None,
+        line=None,
+        start_line=None,
+        end_line=None,
+        warnings=[warning],
+    )
 
 
 def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
@@ -158,30 +272,54 @@ def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
     
     # Stage 7: Source Contexts
     source_contexts = []
+    requested_source_contexts = []
     
     # 1. Peripheral Initialization / Explicitly Requested Contexts
     if reference_functions_override:
-        # If the LLM explicitly requested specific functions, find them by name
+        function_lookup = _build_function_lookup(context.static_artifacts.functions)
+        exec_trace_functions = set(exec_trace.function_sequence)
+
         for func_name in reference_functions_override:
             found = False
             sc = None
-            for f in context.static_artifacts.functions:
-                if f.get("name") == func_name:
-                    found = True
-                    r_func = resolve_pc(
-                        f.get("start"),
-                        functions=context.static_artifacts.functions,
-                        symbols=context.static_artifacts.symbols,
-                        source_map=context.static_artifacts.source_map,
-                    )
-                    sc = build_source_context(
-                        resolved_function=r_func,
-                        source_map=context.static_artifacts.source_map,
-                    )
-                    
-                    if sc.text and not any(s.text == sc.text for s in source_contexts):
-                        source_contexts.append(sc)
-                    break # Found the function, move to next requested function
+            matched_function, matched_key, ambiguous = _resolve_requested_function(
+                func_name,
+                function_lookup,
+                exec_trace_functions=exec_trace_functions,
+            )
+            source_result: dict[str, Any] = {
+                "request": func_name,
+                "status": "unresolved",
+                "matched_key": matched_key,
+                "matched_function": matched_function.get("name") if matched_function else None,
+                "provider": None,
+                "source_root_relative": None,
+                "warnings": [],
+            }
+
+            if ambiguous and matched_function:
+                warning = (
+                    f"Requested source context {func_name!r} matched multiple static functions; "
+                    f"using {matched_function.get('name')!r}."
+                )
+                context.warnings.append(warning)
+                source_result["warnings"].append(warning)
+
+            if matched_function:
+                found = True
+                r_func = resolve_pc(
+                    matched_function.get("start"),
+                    functions=context.static_artifacts.functions,
+                    symbols=context.static_artifacts.symbols,
+                    source_map=context.static_artifacts.source_map,
+                )
+                sc = build_source_context(
+                    resolved_function=r_func,
+                    source_map=context.static_artifacts.source_map,
+                )
+                
+                if sc.text and not any(s.text == sc.text for s in source_contexts):
+                    source_contexts.append(sc)
             
             # Trigger fallback if DWARF source extraction failed or function wasn't in DWARF functions list
             if not found or not sc or not sc.text:
@@ -192,9 +330,25 @@ def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
                         source_contexts.append(fallback_sc)
                         fallback_sc.fallback_macro_context = fallback_mc
 
+            if sc and sc.text:
+                source_result["status"] = "ok"
+                source_result["provider"] = sc.provider
+                source_result["source_root_relative"] = sc.source_root_relative
+            else:
+                warning = (
+                    f"Requested source context not found for {func_name!r}."
+                )
+                if matched_function:
+                    warning += f" Matched static function {matched_function.get('name')!r}, but no local source snippet was found."
+                source_result["warnings"].append(warning)
+                missing_sc = _missing_source_context(func_name, warning)
+                source_contexts.append(missing_sc)
+
+            requested_source_contexts.append(source_result)
+
             # Extract Class Methods Menu
             if sc:
-                demangled = demangle_cpp_symbol(func_name)
+                demangled = demangle_cpp_symbol(source_result["matched_function"] or func_name)
                 class_name, _ = extract_identity(demangled)
                 if class_name and class_name != func_name:
                     class_len = len(class_name)
@@ -302,6 +456,7 @@ def run_trace_analysis(request: TraceAnalyzeRequest) -> TraceAnalysisResult:
         "modeling_dir": str(modeling_dir.absolute()) if modeling_dir else None,
         "io_log_path": str(context.run_artifacts.io_log_path) if context.run_artifacts.io_log_path else None,
         "routing_used": bool(routing_context),
+        "requested_source_contexts": requested_source_contexts,
         "warnings": [
             *context.warnings,
             *io_trace.warnings,

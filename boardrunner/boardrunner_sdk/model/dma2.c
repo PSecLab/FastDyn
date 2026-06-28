@@ -29,13 +29,21 @@
 #define DMA_SXCR_CIRC       (1U << 8)
 #define DMA_SXCR_MINC       (1U << 10)
 
-#define DMA2_STREAM1_QSIZE  4096
+#define DMA2_RX_QSIZE       4096
 #define DMA2_DATA_CHUNK     8
 
 #define DMA2_LISR_TCIF1     (1U << 11)
+#define DMA2_LISR_TCIF2     (1U << 21)
+#define DMA2_LISR_TCIF3     (1U << 27)
+#define DMA2_HISR_TCIF4     (1U << 5)
+#define DMA2_HISR_TCIF5     (1U << 11)
 #define DMA2_HISR_TCIF7     (1U << 27)
 
 #define DMA2_STREAM1_IRQ    57
+#define DMA2_STREAM2_IRQ    58
+#define DMA2_STREAM3_IRQ    59
+#define DMA2_STREAM4_IRQ    60
+#define DMA2_STREAM5_IRQ    68
 #define DMA2_STREAM7_IRQ    70
 
 typedef struct {
@@ -51,18 +59,22 @@ typedef struct {
 } DMA2StreamState;
 
 typedef struct {
+    uint8_t buf[DMA2_RX_QSIZE];
+    unsigned head;
+    unsigned tail;
+    unsigned count;
+} DMA2RxQueue;
+
+typedef struct {
     uint32_t lisr;
     uint32_t hisr;
     DMA2StreamState stream[8];
-    uint8_t s1_queue[DMA2_STREAM1_QSIZE];
-    unsigned s1_q_head;
-    unsigned s1_q_tail;
-    unsigned s1_q_count;
+    DMA2RxQueue rxq[8];
 } DMA2State;
 
 static DMA2State g_dma2;
 
-static void dma2_finish_stream(DMA2State *s, unsigned stream_id) {
+static void dma2_set_tc_flag_and_irq(DMA2State *s, unsigned stream_id) {
     DMA2StreamState *st = &s->stream[stream_id];
 
     switch (stream_id) {
@@ -70,6 +82,30 @@ static void dma2_finish_stream(DMA2State *s, unsigned stream_id) {
         s->lisr |= DMA2_LISR_TCIF1;
         if ((st->cr_cfg & DMA_SXCR_TCIE) != 0U) {
             qemu_plugin_raise_irq(DMA2_STREAM1_IRQ + 16, false);
+        }
+        break;
+    case 2U:
+        s->lisr |= DMA2_LISR_TCIF2;
+        if ((st->cr_cfg & DMA_SXCR_TCIE) != 0U) {
+            qemu_plugin_raise_irq(DMA2_STREAM2_IRQ + 16, false);
+        }
+        break;
+    case 3U:
+        s->lisr |= DMA2_LISR_TCIF3;
+        if ((st->cr_cfg & DMA_SXCR_TCIE) != 0U) {
+            qemu_plugin_raise_irq(DMA2_STREAM3_IRQ + 16, false);
+        }
+        break;
+    case 4U:
+        s->hisr |= DMA2_HISR_TCIF4;
+        if ((st->cr_cfg & DMA_SXCR_TCIE) != 0U) {
+            qemu_plugin_raise_irq(DMA2_STREAM4_IRQ + 16, false);
+        }
+        break;
+    case 5U:
+        s->hisr |= DMA2_HISR_TCIF5;
+        if ((st->cr_cfg & DMA_SXCR_TCIE) != 0U) {
+            qemu_plugin_raise_irq(DMA2_STREAM5_IRQ + 16, false);
         }
         break;
     case 7U:
@@ -81,6 +117,12 @@ static void dma2_finish_stream(DMA2State *s, unsigned stream_id) {
     default:
         break;
     }
+}
+
+static void dma2_finish_stream(DMA2State *s, unsigned stream_id) {
+    DMA2StreamState *st = &s->stream[stream_id];
+
+    dma2_set_tc_flag_and_irq(s, stream_id);
 
     if ((st->cr_cfg & DMA_SXCR_CIRC) != 0U && st->initial_ndtr != 0U) {
         st->ndtr = st->initial_ndtr;
@@ -90,43 +132,44 @@ static void dma2_finish_stream(DMA2State *s, unsigned stream_id) {
     }
 }
 
-static void dma2_signal_stream1(DMA2State *s) {
-    DMA2StreamState *st = &s->stream[1];
-
-    s->lisr |= DMA2_LISR_TCIF1;
-    if ((st->cr_cfg & DMA_SXCR_TCIE) != 0U) {
-        qemu_plugin_raise_irq(DMA2_STREAM1_IRQ + 16, false);
-    }
-}
-
-static bool dma2_s1q_push(DMA2State *s, uint8_t v) {
-    if (s->s1_q_count >= DMA2_STREAM1_QSIZE) {
+static bool dma2_rxq_push(DMA2RxQueue *q, uint8_t v) {
+    if (q->count >= DMA2_RX_QSIZE) {
         return false;
     }
-    s->s1_queue[s->s1_q_head] = v;
-    s->s1_q_head = (s->s1_q_head + 1U) % DMA2_STREAM1_QSIZE;
-    s->s1_q_count++;
+
+    q->buf[q->head] = v;
+    q->head = (q->head + 1U) % DMA2_RX_QSIZE;
+    q->count++;
     return true;
 }
 
-static bool dma2_s1q_pop(DMA2State *s, uint8_t *out) {
-    if (s->s1_q_count == 0U) {
+static bool dma2_rxq_pop(DMA2RxQueue *q, uint8_t *out) {
+    if (q->count == 0U) {
         return false;
     }
-    *out = s->s1_queue[s->s1_q_tail];
-    s->s1_q_tail = (s->s1_q_tail + 1U) % DMA2_STREAM1_QSIZE;
-    s->s1_q_count--;
+
+    *out = q->buf[q->tail];
+    q->tail = (q->tail + 1U) % DMA2_RX_QSIZE;
+    q->count--;
     return true;
 }
 
-static void dma2_service_stream1(DMA2State *s) {
-    DMA2StreamState *st = &s->stream[1];
+static void dma2_service_rx_stream(DMA2State *s, unsigned stream_id, bool signal_partial) {
+    DMA2StreamState *st;
+    DMA2RxQueue *q;
     uint8_t byte;
     uint32_t addr;
     bool moved = false;
 
-    while (st->enabled && st->ndtr > 0U && s->s1_q_count > 0U) {
-        if (!dma2_s1q_pop(s, &byte)) {
+    if (stream_id >= 8U) {
+        return;
+    }
+
+    st = &s->stream[stream_id];
+    q = &s->rxq[stream_id];
+
+    while (st->enabled && st->ndtr > 0U && q->count > 0U) {
+        if (!dma2_rxq_pop(q, &byte)) {
             break;
         }
 
@@ -144,23 +187,29 @@ static void dma2_service_stream1(DMA2State *s) {
         moved = true;
 
         if (st->ndtr == 0U) {
-            dma2_finish_stream(s, 1U);
+            dma2_finish_stream(s, stream_id);
             moved = false;
         }
     }
 
-    if (moved) {
-        dma2_signal_stream1(s);
+    if (moved && signal_partial) {
+        dma2_set_tc_flag_and_irq(s, stream_id);
     }
 }
 
-static void dma2_service_stream7(DMA2State *s) {
-    DMA2StreamState *st = &s->stream[7];
+static void dma2_service_tx_stream(DMA2State *s, unsigned stream_id) {
+    DMA2StreamState *st;
     uint8_t buf[DMA2_DATA_CHUNK];
     uint32_t addr;
     uint32_t chunk_u32;
     int chunk;
     int i;
+
+    if (stream_id >= 8U) {
+        return;
+    }
+
+    st = &s->stream[stream_id];
 
     if (!st->enabled || st->ndtr == 0U) {
         return;
@@ -197,14 +246,14 @@ static void dma2_service_stream7(DMA2State *s) {
             chunk_u32 = (uint32_t)chunk;
         }
 
-        if (api_dma_request_data(2, 7, st->par, buf, chunk) < 0) {
+        if (api_dma_request_data(2, (int)stream_id, st->par, buf, chunk) < 0) {
             break;
         }
 
         st->ndtr -= chunk_u32;
 
         if (st->ndtr == 0U) {
-            dma2_finish_stream(s, 7U);
+            dma2_finish_stream(s, stream_id);
         }
     }
 }
@@ -213,15 +262,45 @@ static void dma2_stream1_data_handler(void *opaque, const uint8_t *data, int len
     DMA2State *s = (DMA2State *)opaque;
     int i;
 
-    if (data == NULL || len <= 0) {
+    if (s == NULL || data == NULL || len <= 0) {
         return;
     }
 
     for (i = 0; i < len; i++) {
-        dma2_s1q_push(s, data[i]);
+        dma2_rxq_push(&s->rxq[1], data[i]);
     }
 
-    dma2_service_stream1(s);
+    dma2_service_rx_stream(s, 1U, true);
+}
+
+static void dma2_stream2_data_handler(void *opaque, const uint8_t *data, int len) {
+    DMA2State *s = (DMA2State *)opaque;
+    int i;
+
+    if (s == NULL || data == NULL || len <= 0) {
+        return;
+    }
+
+    for (i = 0; i < len; i++) {
+        dma2_rxq_push(&s->rxq[2], data[i]);
+    }
+
+    dma2_service_rx_stream(s, 2U, false);
+}
+
+static void dma2_stream3_data_handler(void *opaque, const uint8_t *data, int len) {
+    DMA2State *s = (DMA2State *)opaque;
+    int i;
+
+    if (s == NULL || data == NULL || len <= 0) {
+        return;
+    }
+
+    for (i = 0; i < len; i++) {
+        dma2_rxq_push(&s->rxq[3], data[i]);
+    }
+
+    dma2_service_rx_stream(s, 3U, false);
 }
 
 void* dma2_init(ConfigSection* model_info) {
@@ -235,7 +314,9 @@ void* dma2_init(ConfigSection* model_info) {
     }
 
     api_dma_register_stream_data(2, 1, dma2_stream1_data_handler, &g_dma2);
-    dev_debug("dma2: stream1 RX and stream7 TX DMA paths ready\n");
+    api_dma_register_stream_data(2, 2, dma2_stream2_data_handler, &g_dma2);
+    api_dma_register_stream_data(2, 3, dma2_stream3_data_handler, &g_dma2);
+    dev_debug("dma2: stream1/2/3 RX and stream4/5/7 TX DMA paths ready\n");
     return &g_dma2;
 }
 
@@ -261,7 +342,10 @@ uint64_t dma2_read(void *opaque, uint64_t addr, unsigned size) {
             DMA2StreamState *st = &s->stream[stream_id];
             switch (stream_off) {
             case DMA_SXCR_OFF:
-                return st->enabled ? DMA_SXCR_EN : 0;
+                if (stream_id == 1U || stream_id == 7U) {
+                    return st->enabled ? DMA_SXCR_EN : 0U;
+                }
+                return st->cr_cfg | (st->enabled ? DMA_SXCR_EN : 0U);
             case DMA_SXNDTR_OFF:
                 return st->ndtr;
             case DMA_SXPAR_OFF:
@@ -306,7 +390,8 @@ void dma2_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
 
             switch (stream_off) {
             case DMA_SXCR_OFF:
-                if (((uint32_t)value & DMA_SXCR_EN) != 0U && ((uint32_t)value & ~DMA_SXCR_EN) == 0U) {
+                if ((((uint32_t)value & DMA_SXCR_EN) != 0U) &&
+                    (((uint32_t)value & ~DMA_SXCR_EN) == 0U)) {
                     st->enabled = true;
                 } else {
                     st->cr_cfg = ((uint32_t)value & ~DMA_SXCR_EN);
@@ -315,43 +400,64 @@ void dma2_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
                         st->mem_index = 0U;
                     }
                 }
+
                 if (stream_id == 1U) {
-                    dma2_service_stream1(s);
-                } else if (stream_id == 7U) {
-                    dma2_service_stream7(s);
+                    dma2_service_rx_stream(s, 1U, true);
+                } else if (stream_id == 2U) {
+                    dma2_service_rx_stream(s, 2U, false);
+                } else if (stream_id == 3U) {
+                    dma2_service_rx_stream(s, 3U, false);
+                } else if (stream_id == 4U || stream_id == 5U || stream_id == 7U) {
+                    dma2_service_tx_stream(s, stream_id);
                 }
                 return;
+
             case DMA_SXNDTR_OFF:
                 st->ndtr = (uint32_t)value;
                 st->initial_ndtr = (uint32_t)value;
                 st->mem_index = 0U;
+
                 if (stream_id == 1U) {
-                    dma2_service_stream1(s);
-                } else if (stream_id == 7U) {
-                    dma2_service_stream7(s);
+                    dma2_service_rx_stream(s, 1U, true);
+                } else if (stream_id == 2U) {
+                    dma2_service_rx_stream(s, 2U, false);
+                } else if (stream_id == 3U) {
+                    dma2_service_rx_stream(s, 3U, false);
+                } else if (stream_id == 4U || stream_id == 5U || stream_id == 7U) {
+                    dma2_service_tx_stream(s, stream_id);
                 }
                 return;
+
             case DMA_SXPAR_OFF:
                 st->par = (uint32_t)value;
-                if (stream_id == 7U) {
-                    dma2_service_stream7(s);
+                if (stream_id == 4U || stream_id == 5U || stream_id == 7U) {
+                    dma2_service_tx_stream(s, stream_id);
                 }
                 return;
+
             case DMA_SXM0AR_OFF:
                 st->m0ar = (uint32_t)value;
                 st->mem_index = 0U;
+
                 if (stream_id == 1U) {
-                    dma2_service_stream1(s);
-                } else if (stream_id == 7U) {
-                    dma2_service_stream7(s);
+                    dma2_service_rx_stream(s, 1U, true);
+                } else if (stream_id == 2U) {
+                    dma2_service_rx_stream(s, 2U, false);
+                } else if (stream_id == 3U) {
+                    dma2_service_rx_stream(s, 3U, false);
+                } else if (stream_id == 4U || stream_id == 5U || stream_id == 7U) {
+                    dma2_service_tx_stream(s, stream_id);
                 }
                 return;
+
             case DMA_SXM1AR_OFF:
                 st->m1ar = (uint32_t)value;
                 return;
+
             case DMA_SXFCR_OFF:
                 st->fcr = (uint32_t)value;
                 return;
+
             default:
                 return;
             }

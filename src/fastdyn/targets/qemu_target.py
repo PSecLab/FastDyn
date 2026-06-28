@@ -34,6 +34,18 @@ def _bool01(v: bool) -> str:
     return "1" if bool(v) else "0"
 
 
+def _prepare_python_endpoint_pty(pty_path):
+    if os.environ.get("FASTDYN_KEEP_ENDPOINT_PTY", "").lower() in {"1", "true", "yes"}:
+        return
+
+    try:
+        if os.path.islink(pty_path):
+            os.unlink(pty_path)
+            log.info("Removed stale Python endpoint PTY symlink: %s", pty_path)
+    except OSError as exc:
+        log.warning("Failed to remove stale Python endpoint PTY symlink %s: %s", pty_path, exc)
+
+
 _MEMORY_SIZE_RE = re.compile(r"^(0x[0-9a-fA-F]+|\d+)\s*([kmgtpeKMGTPE]?)(?:i?[bB])?$")
 _MEMORY_SIZE_MULTIPLIERS = {
     "": 1,
@@ -665,6 +677,7 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary, python_endpoints=None
     endpoint_procs = []
     for ep_path, dev_name in python_endpoints or []:
         pty_path = f"/tmp/{dev_name}_pty"
+        _prepare_python_endpoint_pty(pty_path)
         log.info("Launching Python endpoint: %s on %s", ep_path, pty_path)
         with timing.phase("qemu.endpoint.popen", endpoint=ep_path):
             endpoint_procs.append(subprocess.Popen(["python3", ep_path, pty_path]))
