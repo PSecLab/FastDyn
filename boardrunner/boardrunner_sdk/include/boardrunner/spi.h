@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <device.h>
 
 
@@ -32,4 +33,10 @@ typedef struct {
 SPIBus api_spi_init_bus(ConfigSection* model_info, const char* bus_name);             //takes the user configuration for attached slaves and creates a bus with slaves attached
 uint32_t api_spi_transfer(SPIBus *bus, uint32_t val);           //transfer the data to all the slaves and calls spi_transfer_raw_default for each slave
 void api_spi_set_cs(SPIBus *bus, int cs_id, int level);
+bool api_spi_select(SPIBus *bus, int cs_id);
+bool api_spi_deselect(SPIBus *bus, int cs_id);
+int api_spi_active_cs(const SPIBus *bus);
+int api_spi_active_count(const SPIBus *bus);
+uint8_t api_spi_transfer_byte(SPIBus *bus, uint8_t val);
+int api_spi_transfer_buf(SPIBus *bus, const uint8_t *tx, uint8_t *rx, size_t len);
 //End of SPI API funcitons definitions

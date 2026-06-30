@@ -1,0 +1,72 @@
+{
+    "veto_pipeline_guess": true,
+    "reasoning": "The latest GDB run shows board validation passes, Rover::startup_INS is entered, and MPU9250 FIFO reads now produce structured samples with accel/gyro raw callbacks firing. The remaining no_new_coverage exit occurs while boot-time INS/gyro calibration repeatedly polls IMU FIFO data, so the next fix should make the generated IMU slave data coherent and stationary enough for calibration instead of changing SPI routing.",
+    "request_existing_models": [
+        {
+            "name": "mpu9250_spi.c",
+            "intent": "update",
+            "reference_functions_needed": [
+                "Rover::startup_INS",
+                "AP_InertialSensor::init",
+                "AP_InertialSensor::_init_gyro",
+                "AP_InertialSensor_Invensense::probe",
+                "AP_InertialSensor_Invensense::_hardware_init",
+                "AP_InertialSensor_Invensense::_init",
+                "AP_InertialSensor_Invensense::_poll_data",
+                "AP_InertialSensor_Invensense::_read_fifo",
+                "AP_InertialSensor_Invensense::_accumulate_sensor_rate_sampling",
+                "AP_InertialSensor_Invensense::_check_raw_temp",
+                "AP_Compass_AK8963::probe_mpu9250"
+            ],
+            "details": "Update the internal MPU9250 SPI slave model using the latest GDB evidence. Confirmed progress: AP_BoardConfig::init returns, Rover::startup_INS enters, spi_check_register(dev=mpu9250, reg=0x75, expected=0x71) returns true, FIFO count reports one 14-byte sample, sample reads no longer leak WHOAMI into FIFO, and accel_raw_sample/gyro_raw_sample callbacks now fire. Remaining stall: no_new_coverage while AP_InertialSensor::init performs boot INS/gyro calibration; AP_Scheduler::loop is not reached. Latest observed samples look structured but changing over time, for example sample_bytes=00 18 00 00 40 00 01 42 00 06 00 00 00 00 then later temperature/gyro fields advance. Review the model's generated stationary sample data, FIFO count/status behavior, FIFO_R_W streaming, direct accel/temp/gyro register reads, reset/config writes, and SPI transaction state so calibration receives stable, physically plausible stationary MPU9250 data. Preserve correct WHOAMI and SPI1 CS4 attachment."
+        },
+        {
+            "name": "icm20602_spi.c",
+            "intent": "update",
+            "reference_functions_needed": [
+                "Rover::startup_INS",
+                "AP_InertialSensor::init",
+                "AP_InertialSensor::_init_gyro",
+                "AP_BoardConfig::spi_check_register",
+                "AP_InertialSensor_Invensense::probe",
+                "AP_InertialSensor_Invensense::_hardware_init",
+                "AP_InertialSensor_Invensense::_init",
+                "AP_InertialSensor_Invensense::_read_fifo",
+                "AP_InertialSensor_Invensense::_accumulate_sensor_rate_sampling",
+                "AP_InertialSensor_Invensense::_check_raw_temp"
+            ],
+            "details": "Update this SPI4 ICM20602 slave in the same coherent stationary-IMU pass. It already passes board validation on dev=icm20602_ext, but it should not retain a synthetic motion pattern that will break the same gyro/INS calibration path once polled. Keep SPI4 CS4 and WHOAMI behavior correct while aligning FIFO/status/sample semantics with the firmware's Invensense driver expectations."
+        },
+        {
+            "name": "icm20948_spi.c",
+            "intent": "update",
+            "reference_functions_needed": [
+                "Rover::startup_INS",
+                "AP_InertialSensor::init",
+                "AP_InertialSensor::_init_gyro",
+                "AP_BoardConfig::spi_check_register",
+                "AP_InertialSensor_Invensensev2::probe",
+                "AP_InertialSensor_Invensensev2::_hardware_init",
+                "AP_InertialSensor_Invensensev2::_init",
+                "AP_InertialSensor_Invensensev2::_poll_data",
+                "AP_InertialSensor_Invensensev2::_read_fifo",
+                "AP_InertialSensor_Invensensev2::_accumulate_sensor_rate_sampling"
+            ],
+            "details": "Update this SPI4 ICM20948 slave in the same coherent stationary-IMU pass. It already passes board validation on dev=icm20948_ext, but the vehicle has multiple detected IMUs and startup calibration needs all enabled gyros to converge. Keep SPI4 CS1, banked register behavior, WHOAMI, FIFO count/status, and FIFO streaming coherent with the v2 Invensense driver while avoiding synthetic motion during boot calibration."
+        },
+        {
+            "name": "spi1.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Context only. SPI1 routing now gets through board validation and delivers MPU9250 FIFO samples. Do not rewrite SPI1 unless a direct bus-level contract mismatch is discovered."
+        },
+        {
+            "name": "spi4.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Context only. SPI4 board-validation devices pass. Include only for current SPI API usage and multi-slave CS behavior."
+        }
+    ],
+    "create_new_models": [],
+    "handled": true
+}

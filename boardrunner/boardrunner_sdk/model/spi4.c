@@ -2,6 +2,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include <device.h>
+#include <boardrunner/dma.h>
+#include <boardrunner/signals.h>
 #include <boardrunner/vio.h>
 #include <boardrunner/spi.h>
 
@@ -48,7 +50,6 @@ typedef struct {
     int selected_logical_cs_id;
     int selected_actual_cs_id;
     bool explicit_cs_active;
-    int preferred_imu_logical_cs;
     int actual_cs_icm20948_ext;
     int actual_cs_ms5611_ext;
     int actual_cs_icm20602_ext;
@@ -157,7 +158,7 @@ static void spi4_set_all_cs_high(SPI4State *s) {
     int i;
 
     for (i = 0; i < s->bus.Slaves.num_slaves; i++) {
-        api_spi_set_cs(&s->bus, s->bus.Slaves.slave[i].cs_id, 1);
+        api_spi_deselect(&s->bus, s->bus.Slaves.slave[i].cs_id);
     }
 
     s->selected_logical_cs_id = -1;
@@ -185,7 +186,7 @@ static void spi4_deselect_if_needed(SPI4State *s) {
     }
 
     if (s->selected_actual_cs_id >= 0) {
-        api_spi_set_cs(&s->bus, s->selected_actual_cs_id, 1);
+        api_spi_deselect(&s->bus, s->selected_actual_cs_id);
     }
 
     s->selected_logical_cs_id = -1;
@@ -213,15 +214,13 @@ static void spi4_select_logical_cs(SPI4State *s, int logical_cs_id, bool explici
         return;
     }
 
-    if (s->selected_actual_cs_id >= 0) {
-        api_spi_set_cs(&s->bus, s->selected_actual_cs_id, 1);
+    if (!api_spi_select(&s->bus, actual_cs_id)) {
+        return;
     }
 
     s->selected_logical_cs_id = logical_cs_id;
     s->selected_actual_cs_id = actual_cs_id;
     s->explicit_cs_active = explicit_cs;
-
-    api_spi_set_cs(&s->bus, actual_cs_id, 0);
 }
 
 static int spi4_signal_to_logical_cs(int signal_id) {
@@ -260,38 +259,11 @@ static void spi4_cs_signal(void *opaque, int signal_id, bool level) {
     }
 }
 
-static int spi4_guess_logical_cs_for_first_byte(SPI4State *s, uint8_t tx) {
-    if (tx == 0x1EU ||
-        tx == 0x00U ||
-        (tx >= 0x40U && tx <= 0x5FU) ||
-        (tx >= 0xA0U && tx <= 0xAEU && (tx & 0x01U) == 0U)) {
-        return SPI4_CS_MS5611_EXT;
-    }
-
-    if (tx == 0x7FU || tx == 0x80U) {
-        if (s->actual_cs_icm20948_ext >= 0) {
-            return SPI4_CS_ICM20948_EXT;
-        }
-    }
-
-    return s->preferred_imu_logical_cs;
-}
-
-static void spi4_select_for_tx_if_needed(SPI4State *s, uint8_t tx) {
-    if (s->selected_logical_cs_id >= 0) {
-        return;
-    }
-
-    spi4_select_logical_cs(s, spi4_guess_logical_cs_for_first_byte(s, tx), false);
-}
-
 static uint8_t spi4_transfer_byte(SPI4State *s, uint8_t tx) {
     uint8_t rx = 0xFFU;
 
-    spi4_select_for_tx_if_needed(s, tx);
-
     if (s->selected_actual_cs_id >= 0) {
-        rx = (uint8_t)(api_spi_transfer(&s->bus, tx) & 0xFFU);
+        rx = api_spi_transfer_byte(&s->bus, tx);
     }
 
     if ((s->cr2 & SPI_CR2_RXDMAEN) != 0U) {
@@ -313,6 +285,9 @@ static void spi4_dma_tx_handler(void *opaque, const uint8_t *data, int len) {
         s = &g_spi4;
     }
     if (data == NULL || len <= 0) {
+        return;
+    }
+    if ((s->cr1 & SPI_CR1_SPE) == 0U) {
         return;
     }
 
@@ -342,12 +317,6 @@ void* spi4_init(ConfigSection* model_info) {
     g_spi4.actual_cs_icm20602_ext = spi4_find_cs_by_name(&g_spi4, "icm20602");
     if (g_spi4.actual_cs_icm20602_ext < 0 && spi4_bus_has_cs(&g_spi4, SPI4_CS_ICM20602_EXT)) {
         g_spi4.actual_cs_icm20602_ext = SPI4_CS_ICM20602_EXT;
-    }
-
-    if (g_spi4.actual_cs_icm20602_ext >= 0) {
-        g_spi4.preferred_imu_logical_cs = SPI4_CS_ICM20602_EXT;
-    } else {
-        g_spi4.preferred_imu_logical_cs = SPI4_CS_ICM20948_EXT;
     }
 
     api_dma_register_stream_data(2, DMA2_STREAM_SPI4_TX, spi4_dma_tx_handler, &g_spi4);
@@ -402,7 +371,7 @@ void spi4_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
     switch (offset & ~0x3ULL) {
     case SPI4_CR1_OFF:
         s->cr1 = spi4_merge_reg32(s->cr1, offset - SPI4_CR1_OFF, value, size);
-        if ((s->cr1 & SPI_CR1_SPE) == 0U) {
+        if ((s->cr1 & SPI_CR1_SPE) == 0U && !s->explicit_cs_active) {
             spi4_deselect_if_needed(s);
         } else {
             spi4_maybe_request_tx_dma(s);

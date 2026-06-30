@@ -1,6 +1,52 @@
 #include "spi_internal.h"
 #include <utils.h>
 
+#include <stdio.h>
+#include <stdlib.h>
+
+static bool api_spi_debug_enabled(void) {
+    static int initialized = 0;
+    static bool enabled = false;
+
+    if (!initialized) {
+        const char *env = getenv("BOARD_RUNNER_SPI_DEBUG");
+        enabled = (env != NULL && env[0] != '\0' && env[0] != '0');
+        initialized = 1;
+    }
+
+    return enabled;
+}
+
+static SpiSlaveDetails *api_spi_find_slave_by_cs(SPIBus *bus, int cs_id) {
+    if (!bus) {
+        return NULL;
+    }
+
+    for (int i = 0; i < bus->Slaves.num_slaves; i++) {
+        SpiSlaveDetails *slave = &bus->Slaves.slave[i];
+        if (slave->cs_id == cs_id) {
+            return slave;
+        }
+    }
+
+    return NULL;
+}
+
+static SpiSlaveDetails *api_spi_first_active_slave(SPIBus *bus) {
+    if (!bus) {
+        return NULL;
+    }
+
+    for (int i = 0; i < bus->Slaves.num_slaves; i++) {
+        SpiSlaveDetails *slave = &bus->Slaves.slave[i];
+        if (slave->cs_enable == 1) {
+            return slave;
+        }
+    }
+
+    return NULL;
+}
+
 /**
  * @brief Initializes an SPI bus by parsing slave device configuration.
  *
@@ -32,30 +78,131 @@ SPIBus api_spi_init_bus(ConfigSection* model_info, const char* bus_name) {
  */
 void api_spi_set_cs(SPIBus *bus, int cs_id, int level) {
     if (!bus) {
-        // Safety check for null bus pointer
         return;
     }
 
-    // Determine the new enable state (1 for active, 0 for inactive)
-    // This assumes an active-low chip select, which is standard.
     int new_enable_state = (level == 0) ? 1 : 0;
+    bool found = false;
 
-    // Loop through all slaves registered on the bus
     for (int i = 0; i < bus->Slaves.num_slaves; i++) {
         SpiSlaveDetails* current_slave = &bus->Slaves.slave[i];
 
-        // Check if this slave is attached to the target CS line
         if (current_slave->cs_id == cs_id) {
+            found = true;
 
-            // 1. Update the bus's record of this slave's state
+            if (current_slave->cs_enable == new_enable_state) {
+                continue;
+            }
             current_slave->cs_enable = new_enable_state;
 
-            // 2. Notify the slave model by calling its callback, if it exists
             if (current_slave->set_cs) {
                 current_slave->set_cs(level);
             }
         }
     }
+
+    if (!found && api_spi_debug_enabled()) {
+        fprintf(stderr, "SPI warning: CS id %d is not attached to this bus\n", cs_id);
+    }
+}
+
+/**
+ * @brief Select one SPI slave and deselect all other slaves on the bus.
+ *
+ * This is preferred over direct api_spi_set_cs(..., 0) in generated bus models
+ * when the firmware asserts a specific chip select. It is edge-aware: selecting
+ * an already-selected slave does not re-call the slave set_cs callback, so slave
+ * command state is preserved across split DMA/PIO chunks while CS remains low.
+ */
+bool api_spi_select(SPIBus *bus, int cs_id) {
+    bool found = false;
+
+    if (!bus) {
+        return false;
+    }
+
+    for (int i = 0; i < bus->Slaves.num_slaves; i++) {
+        SpiSlaveDetails *slave = &bus->Slaves.slave[i];
+
+        if (slave->cs_id == cs_id) {
+            found = true;
+            continue;
+        }
+
+        if (slave->cs_enable == 1) {
+            api_spi_set_cs(bus, slave->cs_id, 1);
+        }
+    }
+
+    if (!found) {
+        if (api_spi_debug_enabled()) {
+            fprintf(stderr, "SPI warning: cannot select missing CS id %d\n", cs_id);
+        }
+        return false;
+    }
+
+    api_spi_set_cs(bus, cs_id, 0);
+    return true;
+}
+
+/**
+ * @brief Deselect one SPI slave by driving its CS line inactive/high.
+ */
+bool api_spi_deselect(SPIBus *bus, int cs_id) {
+    if (!api_spi_find_slave_by_cs(bus, cs_id)) {
+        if (api_spi_debug_enabled()) {
+            fprintf(stderr, "SPI warning: cannot deselect missing CS id %d\n", cs_id);
+        }
+        return false;
+    }
+
+    api_spi_set_cs(bus, cs_id, 1);
+    return true;
+}
+
+/**
+ * @brief Return the active CS id, -1 if none, or -2 if multiple slaves are active.
+ */
+int api_spi_active_cs(const SPIBus *bus) {
+    int active_cs = -1;
+    int active_count = 0;
+
+    if (!bus) {
+        return -1;
+    }
+
+    for (int i = 0; i < bus->Slaves.num_slaves; i++) {
+        const SpiSlaveDetails *slave = &bus->Slaves.slave[i];
+        if (slave->cs_enable == 1) {
+            active_cs = slave->cs_id;
+            active_count++;
+        }
+    }
+
+    if (active_count > 1) {
+        return -2;
+    }
+
+    return active_cs;
+}
+
+/**
+ * @brief Return how many slaves are currently selected on a bus.
+ */
+int api_spi_active_count(const SPIBus *bus) {
+    int active_count = 0;
+
+    if (!bus) {
+        return 0;
+    }
+
+    for (int i = 0; i < bus->Slaves.num_slaves; i++) {
+        if (bus->Slaves.slave[i].cs_enable == 1) {
+            active_count++;
+        }
+    }
+
+    return active_count;
 }
 
 /**
@@ -74,32 +221,72 @@ void api_spi_set_cs(SPIBus *bus, int cs_id, int level) {
 uint32_t api_spi_transfer(SPIBus *bus, uint32_t val) {
     uint32_t ret_val = 0xFFFFFFFF;
     if (!bus) {
-        // Safety check, return idle value
         return ret_val;
     }
-    printf("Current value to be written\n %d", val);
 
-    // Find the currently selected slave
-    for (int i = 0; i < bus->Slaves.num_slaves; i++) {
-        SpiSlaveDetails* current_slave = &bus->Slaves.slave[i];
+    int active_count = api_spi_active_count(bus);
+    if (active_count == 0) {
+        if (api_spi_debug_enabled()) {
+            fprintf(stderr, "SPI warning: transfer with no active slave, MOSI=0x%02x\n",
+                    (unsigned)(val & 0xFFU));
+        }
+        return ret_val;
+    }
+    if (active_count > 1 && api_spi_debug_enabled()) {
+        fprintf(stderr, "SPI warning: transfer with %d active slaves; using first active slave\n",
+                active_count);
+    }
 
-        // Check if this slave is enabled (active)
-        if (current_slave->cs_enable == 1) {
+    SpiSlaveDetails *current_slave = api_spi_first_active_slave(bus);
+    if (!current_slave) {
+        return ret_val;
+    }
 
-            // Found the active slave. Call its transfer function, if it exists.
-            if (current_slave->transfer) {
-                return current_slave->transfer(val);
-            } else {
-                // Slave is active but has no transfer function.
-                // This is a configuration error, but we'll return idle.
-                fprintf(stderr, "SPI Error: Slave '%s' is active but has no transfer function.\n",
-                        current_slave->name ? current_slave->name : "unknown");
-                return ret_val;
-            }
+    if (!current_slave->transfer) {
+        fprintf(stderr, "SPI Error: Slave '%s' is active but has no transfer function.\n",
+                current_slave->name ? current_slave->name : "unknown");
+        return ret_val;
+    }
+
+    return current_slave->transfer(val);
+}
+
+/**
+ * @brief Byte-oriented wrapper for api_spi_transfer.
+ */
+uint8_t api_spi_transfer_byte(SPIBus *bus, uint8_t val) {
+    return (uint8_t)(api_spi_transfer(bus, val) & 0xFFU);
+}
+
+/**
+ * @brief Transfer a contiguous SPI burst without changing CS state.
+ *
+ * The caller owns CS assertion/deassertion. This helper exists so generated DMA
+ * handlers can preserve transaction state across multi-byte bursts instead of
+ * manually reselecting slaves for each byte. If tx is NULL, 0xFF is clocked.
+ * If rx is NULL, received bytes are discarded.
+ *
+ * Returns the number of transferred bytes, or -1 on invalid arguments or when
+ * no slave is active.
+ */
+int api_spi_transfer_buf(SPIBus *bus, const uint8_t *tx, uint8_t *rx, size_t len) {
+    if (!bus || len == 0U) {
+        return -1;
+    }
+    if (api_spi_active_count(bus) == 0) {
+        if (api_spi_debug_enabled()) {
+            fprintf(stderr, "SPI warning: buffer transfer with no active slave, len=%zu\n", len);
+        }
+        return -1;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        uint8_t tx_byte = tx ? tx[i] : 0xFFU;
+        uint8_t rx_byte = api_spi_transfer_byte(bus, tx_byte);
+        if (rx) {
+            rx[i] = rx_byte;
         }
     }
-    printf("Current value to be returned\n %d", ret_val);
 
-    // If no slave was found to be active, return the idle bus value
-    return ret_val;
+    return (int)len;
 }

@@ -64,11 +64,11 @@ static void icm20602_update_sample(ICM20602State *s) {
 
     s->sample_counter++;
 
-    ax = 32;
+    ax = 0;
     ay = 0;
     az = 16384;
-    temp = (int16_t)(300 + (s->sample_counter & 0x1F));
-    gx = (int16_t)(8 + (s->sample_counter & 0x0F));
+    temp = 300;
+    gx = 0;
     gy = 0;
     gz = 0;
 
@@ -104,6 +104,29 @@ static bool icm20602_fifo_enabled(ICM20602State *s) {
            ((s->regs[ICM20602_REG_USER_CTRL] & ICM20602_USER_FIFO_EN) != 0U);
 }
 
+static bool icm20602_reg_autoincrement(uint8_t reg) {
+    uint8_t addr = reg & 0x7FU;
+
+    if (addr == ICM20602_REG_FIFO_R_W) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool icm20602_reg_refreshes_sample(uint8_t reg) {
+    uint8_t addr = reg & 0x7FU;
+
+    switch (addr) {
+    case ICM20602_REG_ACCEL_XOUT_H:
+    case ICM20602_REG_TEMP_OUT_H:
+    case ICM20602_REG_GYRO_XOUT_H:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static uint8_t icm20602_read_reg(ICM20602State *s, uint8_t reg) {
     uint8_t addr = reg & 0x7FU;
 
@@ -133,24 +156,10 @@ static uint8_t icm20602_read_reg(ICM20602State *s, uint8_t reg) {
         }
         return s->fifo_sample[s->fifo_pos++];
 
-    case ICM20602_REG_ACCEL_XOUT_H:
-    case ICM20602_REG_ACCEL_XOUT_H + 1:
-    case ICM20602_REG_ACCEL_XOUT_H + 2:
-    case ICM20602_REG_ACCEL_XOUT_H + 3:
-    case ICM20602_REG_ACCEL_XOUT_H + 4:
-    case ICM20602_REG_ACCEL_XOUT_H + 5:
-    case ICM20602_REG_TEMP_OUT_H:
-    case ICM20602_REG_TEMP_OUT_H + 1:
-    case ICM20602_REG_GYRO_XOUT_H:
-    case ICM20602_REG_GYRO_XOUT_H + 1:
-    case ICM20602_REG_GYRO_XOUT_H + 2:
-    case ICM20602_REG_GYRO_XOUT_H + 3:
-    case ICM20602_REG_GYRO_XOUT_H + 4:
-    case ICM20602_REG_GYRO_XOUT_H + 5:
-        icm20602_update_sample(s);
-        return s->regs[addr];
-
     default:
+        if (icm20602_reg_refreshes_sample(addr)) {
+            icm20602_update_sample(s);
+        }
         return s->regs[addr];
     }
 }
@@ -174,6 +183,7 @@ static void icm20602_write_reg(ICM20602State *s, uint8_t reg, uint8_t value) {
     if (addr == ICM20602_REG_USER_CTRL &&
         (value & ICM20602_USER_FIFO_RESET) != 0U) {
         s->fifo_pos = 0U;
+        icm20602_update_sample(s);
     }
 }
 
@@ -197,12 +207,18 @@ uint32_t slave_spi_transfer(uint32_t value) {
 
     if (s->read_phase) {
         uint8_t ret = icm20602_read_reg(s, s->current_reg);
-        s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+
+        if (icm20602_reg_autoincrement(s->current_reg)) {
+            s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+        }
+
         return ret;
     }
 
     icm20602_write_reg(s, s->current_reg, byte);
-    s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+    if (icm20602_reg_autoincrement(s->current_reg)) {
+        s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+    }
     return 0xFFU;
 }
 

@@ -37,23 +37,6 @@ set $inv_fifo_count_events = 0
 set $inv_accum_events = 0
 set $accel_notify_events = 0
 set $gyro_notify_events = 0
-set $ins_init_events = 0
-set $backend_start_events = 0
-set $backend_loop_events = 0
-set $register_gyro_events = 0
-set $register_accel_events = 0
-set $gyro_init_events = 0
-set $gyro_init_iter_events = 0
-set $gyro_init_collect_events = 0
-set $gyro_init_eval_events = 0
-set $gyro_init_converge_events = 0
-set $gyro_init_finish_events = 0
-set $inv_start_events = 0
-set $inv2_start_events = 0
-set $inv2_poll_events = 0
-set $inv2_fifo_events = 0
-set $inv2_fifo_count_events = 0
-set $inv2_accum_events = 0
 set $runtime_stop_at = 200
 
 printf "\n[diag] FastDyn idle-starvation diagnostic script loaded\n"
@@ -174,29 +157,6 @@ def _eval_at(type_name, addr, field):
     return _safe_eval("((%s*)0x%x)->%s" % (type_name, addr, field))
 
 
-def _fmt_vec(expr):
-    x = _safe_eval("(%s).x" % expr)
-    y = _safe_eval("(%s).y" % expr)
-    z = _safe_eval("(%s).z" % expr)
-    if x is None or y is None or z is None:
-        return _safe_str(_safe_eval(expr))
-    return "(%s,%s,%s)" % (_safe_str(x), _safe_str(y), _safe_str(z))
-
-
-def _fmt_array(expr, n=3):
-    parts = []
-    for i in range(n):
-        parts.append("%u:%s" % (i, _safe_str(_safe_eval("%s[%u]" % (expr, i)))))
-    return "[" + " ".join(parts) + "]"
-
-
-def _fmt_vec_array(expr, n=3):
-    parts = []
-    for i in range(n):
-        parts.append("%u:%s" % (i, _fmt_vec("%s[%u]" % (expr, i))))
-    return "[" + " ".join(parts) + "]"
-
-
 def _dump_ins_state(label, this_addr):
     if this_addr is None:
         print("[%s] INS state unavailable: missing this" % label)
@@ -263,33 +223,6 @@ def _runtime_summary(reason):
             _gdb_counter("inv_accum_events"),
             _gdb_counter("accel_notify_events"),
             _gdb_counter("gyro_notify_events"),
-        )
-    )
-    print(
-        "[summary] ins_init=%u gyro_init=%u gyro_iter=%u gyro_collect=%u gyro_eval=%u gyro_converge=%u gyro_finish=%u"
-        % (
-            _gdb_counter("ins_init_events"),
-            _gdb_counter("gyro_init_events"),
-            _gdb_counter("gyro_init_iter_events"),
-            _gdb_counter("gyro_init_collect_events"),
-            _gdb_counter("gyro_init_eval_events"),
-            _gdb_counter("gyro_init_converge_events"),
-            _gdb_counter("gyro_init_finish_events"),
-        )
-    )
-    print(
-        "[summary] backend_start=%u backend_loop=%u register_gyro=%u register_accel=%u inv_start=%u inv2_start=%u inv2_poll=%u inv2_fifo=%u inv2_fifo_count=%u inv2_accum=%u"
-        % (
-            _gdb_counter("backend_start_events"),
-            _gdb_counter("backend_loop_events"),
-            _gdb_counter("register_gyro_events"),
-            _gdb_counter("register_accel_events"),
-            _gdb_counter("inv_start_events"),
-            _gdb_counter("inv2_start_events"),
-            _gdb_counter("inv2_poll_events"),
-            _gdb_counter("inv2_fifo_events"),
-            _gdb_counter("inv2_fifo_count_events"),
-            _gdb_counter("inv2_accum_events"),
         )
     )
     _bt(12)
@@ -822,338 +755,6 @@ class WaitForSampleBreakpoint(gdb.Breakpoint):
         return False
 
 
-class INSInitBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(INSInitBreakpoint, self).__init__("AP_InertialSensor::init", internal=False)
-
-    def stop(self):
-        count = _inc_counter("ins_init_events")
-        frame = gdb.selected_frame()
-        this = _safe_frame_var(frame, "this")
-        this_addr = _safe_int(this)
-        loop_rate = _safe_int(_safe_frame_var(frame, "loop_rate"))
-        print("\n[gyro-cal] AP_InertialSensor::init enter hit=%u loop_rate=%s this=%s" % (count, loop_rate if loop_rate is not None else "<unavailable>", _safe_str(this)))
-        _dump_ins_state("gyro-cal-init-enter", this_addr)
-
-        def on_return(_ret):
-            print("[gyro-cal] AP_InertialSensor::init returned")
-            _dump_ins_state("gyro-cal-init-return", this_addr)
-
-        InspectReturn("AP_InertialSensor::init", on_return)
-        return False
-
-
-class BackendStartBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(BackendStartBreakpoint, self).__init__("AP_InertialSensor::_start_backends", internal=False)
-
-    def stop(self):
-        count = _inc_counter("backend_start_events")
-        frame = gdb.selected_frame()
-        this = _safe_frame_var(frame, "this")
-        this_addr = _safe_int(this)
-        print("\n[backend-start] AP_InertialSensor::_start_backends enter hit=%u this=%s" % (count, _safe_str(this)))
-        _dump_ins_state("backend-start-enter", this_addr)
-
-        def on_return(_ret):
-            print("[backend-start] AP_InertialSensor::_start_backends returned")
-            _dump_ins_state("backend-start-return", this_addr)
-
-        InspectReturn("AP_InertialSensor::_start_backends", on_return)
-        return False
-
-
-class BackendLoopBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(BackendLoopBreakpoint, self).__init__("libraries/AP_InertialSensor/AP_InertialSensor.cpp:855", internal=False)
-
-    def stop(self):
-        count = _inc_counter("backend_loop_events")
-        frame = gdb.selected_frame()
-        i = _safe_int(_safe_frame_var(frame, "i"))
-        this = _safe_frame_var(frame, "this")
-        this_addr = _safe_int(this)
-        backend = _safe_eval("_backends[%u]" % i) if i is not None else None
-        print(
-            "[backend-start] about to start backend hit=%u i=%s backend=%s gyro_count=%s accel_count=%s"
-            % (
-                count,
-                i if i is not None else "<unavailable>",
-                _safe_str(backend),
-                _safe_str(_eval_at("AP_InertialSensor", this_addr, "_gyro_count")),
-                _safe_str(_eval_at("AP_InertialSensor", this_addr, "_accel_count")),
-            )
-        )
-        return False
-
-
-class RegisterSensorBreakpoint(gdb.Breakpoint):
-    def __init__(self, symbol, label, counter_name):
-        super(RegisterSensorBreakpoint, self).__init__(symbol, internal=False)
-        self.label = label
-        self.counter_name = counter_name
-
-    def stop(self):
-        count = _inc_counter(self.counter_name)
-        frame = gdb.selected_frame()
-        this = _safe_frame_var(frame, "this")
-        this_addr = _safe_int(this)
-        instance_ref = _safe_frame_var(frame, "instance")
-        rate = _safe_int(_safe_frame_var(frame, "raw_sample_rate_hz"))
-        devid = _safe_frame_var(frame, "id")
-        print(
-            "[backend-start] %s enter hit=%u instance_ref=%s rate=%s id=%s before gyro_count=%s accel_count=%s"
-            % (
-                self.label,
-                count,
-                _safe_str(instance_ref),
-                rate if rate is not None else "<unavailable>",
-                _safe_str(devid),
-                _safe_str(_eval_at("AP_InertialSensor", this_addr, "_gyro_count")),
-                _safe_str(_eval_at("AP_InertialSensor", this_addr, "_accel_count")),
-            )
-        )
-
-        def on_return(ret):
-            print(
-                "[backend-start] %s returned ret=%s instance_ref=%s after gyro_count=%s accel_count=%s"
-                % (
-                    self.label,
-                    _safe_str(ret),
-                    _safe_str(instance_ref),
-                    _safe_str(_eval_at("AP_InertialSensor", this_addr, "_gyro_count")),
-                    _safe_str(_eval_at("AP_InertialSensor", this_addr, "_accel_count")),
-                )
-            )
-
-        InspectReturn(self.label, on_return)
-        return False
-
-
-class InvensenseStartBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(InvensenseStartBreakpoint, self).__init__("AP_InertialSensor_Invensense::start", internal=False)
-
-    def stop(self):
-        count = _inc_counter("inv_start_events")
-        frame = gdb.selected_frame()
-        this = _safe_frame_var(frame, "this")
-        this_addr = _safe_int(this)
-        print(
-            "\n[backend-start] Invensense::start enter hit=%u this=%s type=%s gyro_instance=%s accel_instance=%s"
-            % (
-                count,
-                _safe_str(this),
-                _safe_str(_eval_at("AP_InertialSensor_Invensense", this_addr, "_mpu_type")),
-                _safe_str(_eval_at("AP_InertialSensor_Invensense", this_addr, "gyro_instance")),
-                _safe_str(_eval_at("AP_InertialSensor_Invensense", this_addr, "accel_instance")),
-            )
-        )
-
-        def on_return(_ret):
-            print(
-                "[backend-start] Invensense::start returned this=0x%x type=%s gyro_instance=%s accel_instance=%s"
-                % (
-                    this_addr or 0,
-                    _safe_str(_eval_at("AP_InertialSensor_Invensense", this_addr, "_mpu_type")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensense", this_addr, "gyro_instance")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensense", this_addr, "accel_instance")),
-                )
-            )
-
-        InspectReturn("AP_InertialSensor_Invensense::start", on_return)
-        return False
-
-
-class InvensenseV2StartBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(InvensenseV2StartBreakpoint, self).__init__("AP_InertialSensor_Invensensev2::start", internal=False)
-
-    def stop(self):
-        count = _inc_counter("inv2_start_events")
-        frame = gdb.selected_frame()
-        this = _safe_frame_var(frame, "this")
-        this_addr = _safe_int(this)
-        print(
-            "\n[backend-start] Invensensev2::start enter hit=%u this=%s type=%s gyro_instance=%s accel_instance=%s"
-            % (
-                count,
-                _safe_str(this),
-                _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "_inv2_type")),
-                _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "gyro_instance")),
-                _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "accel_instance")),
-            )
-        )
-
-        def on_return(_ret):
-            print(
-                "[backend-start] Invensensev2::start returned this=0x%x type=%s gyro_instance=%s accel_instance=%s"
-                % (
-                    this_addr or 0,
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "_inv2_type")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "gyro_instance")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "accel_instance")),
-                )
-            )
-
-        InspectReturn("AP_InertialSensor_Invensensev2::start", on_return)
-        return False
-
-
-class GyroInitEntryBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(GyroInitEntryBreakpoint, self).__init__("AP_InertialSensor::_init_gyro", internal=False)
-
-    def stop(self):
-        count = _inc_counter("gyro_init_events")
-        frame = gdb.selected_frame()
-        this = _safe_frame_var(frame, "this")
-        this_addr = _safe_int(this)
-        print("\n[gyro-cal] _init_gyro enter hit=%u this=%s" % (count, _safe_str(this)))
-        _dump_ins_state("gyro-cal-entry", this_addr)
-
-        def on_return(_ret):
-            print("[gyro-cal] _init_gyro returned")
-            _dump_ins_state("gyro-cal-return", this_addr)
-            for i in range(3):
-                print(
-                    "[gyro-cal] return gyro[%u] cal_ok=%s offset=%s id=%s"
-                    % (
-                        i,
-                        _safe_str(_eval_at("AP_InertialSensor", this_addr, "_gyro_cal_ok[%u]" % i)),
-                        _safe_str(_eval_at("AP_InertialSensor", this_addr, "_gyro_offset[%u]" % i)),
-                        _safe_str(_eval_at("AP_InertialSensor", this_addr, "_gyro_id[%u]" % i)),
-                    )
-                )
-
-        InspectReturn("AP_InertialSensor::_init_gyro", on_return)
-        return False
-
-
-class GyroInitOuterLoopBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(GyroInitOuterLoopBreakpoint, self).__init__("libraries/AP_InertialSensor/AP_InertialSensor.cpp:1768", internal=False)
-
-    def stop(self):
-        count = _inc_counter("gyro_init_iter_events")
-        frame = gdb.selected_frame()
-        j = _safe_int(_safe_frame_var(frame, "j"))
-        num_gyros = _safe_int(_safe_frame_var(frame, "num_gyros"))
-        num_converged = _safe_int(_safe_frame_var(frame, "num_converged"))
-        if _maybe_print(count, first=12, every=10):
-            print(
-                "\n[gyro-cal] outer hit=%u j=%s num_gyros=%s num_converged=%s converged=%s best_diff=%s"
-                % (
-                    count,
-                    j if j is not None else "<unavailable>",
-                    num_gyros if num_gyros is not None else "<unavailable>",
-                    num_converged if num_converged is not None else "<unavailable>",
-                    _fmt_array("converged", 3),
-                    _fmt_array("best_diff", 3),
-                )
-            )
-        return False
-
-
-class GyroInitCollectBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(GyroInitCollectBreakpoint, self).__init__("libraries/AP_InertialSensor/AP_InertialSensor.cpp:1784", internal=False)
-
-    def stop(self):
-        count = _inc_counter("gyro_init_collect_events")
-        if _maybe_print(count, first=8, every=50):
-            frame = gdb.selected_frame()
-            j = _safe_int(_safe_frame_var(frame, "j"))
-            i = _safe_int(_safe_frame_var(frame, "i"))
-            print(
-                "[gyro-cal] collect hit=%u j=%s i=%s gyro_sum=%s"
-                % (
-                    count,
-                    j if j is not None else "<unavailable>",
-                    i if i is not None else "<unavailable>",
-                    _fmt_vec_array("gyro_sum", 3),
-                )
-            )
-        return False
-
-
-class GyroInitEvalBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(GyroInitEvalBreakpoint, self).__init__("libraries/AP_InertialSensor/AP_InertialSensor.cpp:1807", internal=False)
-
-    def stop(self):
-        count = _inc_counter("gyro_init_eval_events")
-        frame = gdb.selected_frame()
-        j = _safe_int(_safe_frame_var(frame, "j"))
-        k = _safe_int(_safe_frame_var(frame, "k"))
-        num_converged = _safe_int(_safe_frame_var(frame, "num_converged"))
-        if _maybe_print(count, first=36, every=30):
-            idx = k if k is not None else 0
-            print(
-                "[gyro-cal] eval hit=%u j=%s k=%s num_converged=%s accel_diff=%s gyro_avg=%s gyro_diff=%s diff_norm=%s best_diff=%s converged=%s"
-                % (
-                    count,
-                    j if j is not None else "<unavailable>",
-                    k if k is not None else "<unavailable>",
-                    num_converged if num_converged is not None else "<unavailable>",
-                    _fmt_vec("accel_diff"),
-                    _fmt_vec("gyro_avg[%u]" % idx),
-                    _fmt_vec("gyro_diff[%u]" % idx),
-                    _safe_str(_safe_eval("diff_norm[%u]" % idx)),
-                    _safe_str(_safe_eval("best_diff[%u]" % idx)),
-                    _safe_str(_safe_eval("converged[%u]" % idx)),
-                )
-            )
-        return False
-
-
-class GyroInitConvergedBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(GyroInitConvergedBreakpoint, self).__init__("libraries/AP_InertialSensor/AP_InertialSensor.cpp:1817", internal=False)
-
-    def stop(self):
-        count = _inc_counter("gyro_init_converge_events")
-        frame = gdb.selected_frame()
-        j = _safe_int(_safe_frame_var(frame, "j"))
-        k = _safe_int(_safe_frame_var(frame, "k"))
-        idx = k if k is not None else 0
-        print(
-            "[gyro-cal] convergence-branch hit=%u j=%s k=%s diff_norm=%s gyro_avg=%s last_average=%s num_converged=%s"
-            % (
-                count,
-                j if j is not None else "<unavailable>",
-                k if k is not None else "<unavailable>",
-                _safe_str(_safe_eval("diff_norm[%u]" % idx)),
-                _fmt_vec("gyro_avg[%u]" % idx),
-                _fmt_vec("last_average[%u]" % idx),
-                _safe_str(_safe_frame_var(frame, "num_converged")),
-            )
-        )
-        return False
-
-
-class GyroInitFinishBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(GyroInitFinishBreakpoint, self).__init__("libraries/AP_InertialSensor/AP_InertialSensor.cpp:1832", internal=False)
-
-    def stop(self):
-        count = _inc_counter("gyro_init_finish_events")
-        frame = gdb.selected_frame()
-        print(
-            "\n[gyro-cal] finish-loop hit=%u num_gyros=%s num_converged=%s converged=%s best_diff=%s best_avg=%s new_offsets=%s"
-            % (
-                count,
-                _safe_str(_safe_frame_var(frame, "num_gyros")),
-                _safe_str(_safe_frame_var(frame, "num_converged")),
-                _fmt_array("converged", 3),
-                _fmt_array("best_diff", 3),
-                _fmt_vec_array("best_avg", 3),
-                _fmt_vec_array("new_gyro_offset", 3),
-            )
-        )
-        return False
-
-
 class RuntimeCounterBreakpoint(gdb.Breakpoint):
     def __init__(self, symbol, label, counter_name, first=8, every=50):
         super(RuntimeCounterBreakpoint, self).__init__(symbol, internal=False)
@@ -1175,7 +776,7 @@ class InvensensePollBreakpoint(gdb.Breakpoint):
 
     def stop(self):
         count = _inc_counter("inv_poll_events")
-        if count > 40:
+        if count > 120:
             self.enabled = False
             print("[imu] disabling Invensense::_poll_data breakpoint after %u hits" % count)
             return False
@@ -1203,7 +804,7 @@ class InvensenseReadFifoBreakpoint(gdb.Breakpoint):
 
     def stop(self):
         count = _inc_counter("inv_fifo_events")
-        if count > 40:
+        if count > 120:
             self.enabled = False
             print("[imu] disabling Invensense::_read_fifo breakpoint after %u hits" % count)
             return False
@@ -1231,7 +832,7 @@ class InvensenseFifoCountBreakpoint(gdb.Breakpoint):
 
     def stop(self):
         count = _inc_counter("inv_fifo_count_events")
-        if count > 60:
+        if count > 160:
             self.enabled = False
             print("[imu] disabling fifo_count breakpoint after %u hits" % count)
             return False
@@ -1259,119 +860,7 @@ class InvensenseAccumulateBreakpoint(gdb.Breakpoint):
 
     def stop(self):
         count = _inc_counter("inv_accum_events")
-        if count > 40:
-            self.enabled = False
-            print("[imu] disabling %s breakpoint after %u hits" % (self.label, count))
-            return False
-        frame = gdb.selected_frame()
-        samples = _safe_frame_var(frame, "samples")
-        n_samples = _safe_int(_safe_frame_var(frame, "n_samples"))
-        if _maybe_print(count, first=12, every=100):
-            print(
-                "[imu] %s hit=%u n_samples=%s sample_bytes=%s"
-                % (
-                    self.label,
-                    count,
-                    n_samples if n_samples is not None else "<unavailable>",
-                    _read_bytes(samples, 16, 16),
-                )
-            )
-        return False
-
-
-class InvensenseV2PollBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(InvensenseV2PollBreakpoint, self).__init__("AP_InertialSensor_Invensensev2::_poll_data", internal=False)
-
-    def stop(self):
-        count = _inc_counter("inv2_poll_events")
-        if count > 40:
-            self.enabled = False
-            print("[imu] disabling Invensensev2::_poll_data breakpoint after %u hits" % count)
-            return False
-        this = _safe_frame_var(gdb.selected_frame(), "this")
-        this_addr = _safe_int(this)
-        if _maybe_print(count, first=10, every=100):
-            print(
-                "\n[imu] Invensensev2::_poll_data hit=%u this=%s type=%s accel_instance=%s gyro_instance=%s fast_sampling=%s raw_temp=%s"
-                % (
-                    count,
-                    _safe_str(this),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "_inv2_type")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "accel_instance")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "gyro_instance")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "_fast_sampling")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "_raw_temp")),
-                )
-            )
-        return False
-
-
-class InvensenseV2ReadFifoBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(InvensenseV2ReadFifoBreakpoint, self).__init__("AP_InertialSensor_Invensensev2::_read_fifo", internal=False)
-
-    def stop(self):
-        count = _inc_counter("inv2_fifo_events")
-        if count > 40:
-            self.enabled = False
-            print("[imu] disabling Invensensev2::_read_fifo breakpoint after %u hits" % count)
-            return False
-        this = _safe_frame_var(gdb.selected_frame(), "this")
-        this_addr = _safe_int(this)
-        if _maybe_print(count, first=10, every=100):
-            print(
-                "[imu] Invensensev2::_read_fifo enter hit=%u this=%s type=%s fast_sampling=%s"
-                % (
-                    count,
-                    _safe_str(this),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "_inv2_type")),
-                    _safe_str(_eval_at("AP_InertialSensor_Invensensev2", this_addr, "_fast_sampling")),
-                )
-            )
-        return False
-
-
-class InvensenseV2FifoCountBreakpoint(gdb.Breakpoint):
-    def __init__(self):
-        super(InvensenseV2FifoCountBreakpoint, self).__init__(
-            "/scratch/Fastdyn/ardurover_rehosting_fastdyn/ardupilot/libraries/AP_InertialSensor/AP_InertialSensor_Invensensev2.cpp:520",
-            internal=False,
-        )
-
-    def stop(self):
-        count = _inc_counter("inv2_fifo_count_events")
-        if count > 60:
-            self.enabled = False
-            print("[imu] disabling inv2 fifo_count breakpoint after %u hits" % count)
-            return False
-        frame = gdb.selected_frame()
-        bytes_read = _safe_int(_safe_frame_var(frame, "bytes_read"))
-        n_samples = _safe_int(_safe_frame_var(frame, "n_samples"))
-        n = _safe_int(_safe_frame_var(frame, "n"))
-        rx = _safe_frame_var(frame, "rx")
-        if _maybe_print(count, first=20, every=100):
-            print(
-                "[imu] inv2 fifo_count hit=%u bytes_read=%s n_samples=%s n=%s rx=%s"
-                % (
-                    count,
-                    bytes_read if bytes_read is not None else "<unavailable>",
-                    n_samples if n_samples is not None else "<unavailable>",
-                    n if n is not None else "<unavailable>",
-                    _read_bytes(rx, 16, 16),
-                )
-            )
-        return False
-
-
-class InvensenseV2AccumulateBreakpoint(gdb.Breakpoint):
-    def __init__(self, symbol, label):
-        super(InvensenseV2AccumulateBreakpoint, self).__init__(symbol, internal=False)
-        self.label = label
-
-    def stop(self):
-        count = _inc_counter("inv2_accum_events")
-        if count > 40:
+        if count > 80:
             self.enabled = False
             print("[imu] disabling %s breakpoint after %u hits" % (self.label, count))
             return False
@@ -1399,7 +888,7 @@ class SampleNotifyBreakpoint(gdb.Breakpoint):
 
     def stop(self):
         count = _inc_counter(self.counter_name)
-        if count > 24:
+        if count > 40:
             self.enabled = False
             print("[imu] disabling %s breakpoint after %u hits" % (self.label, count))
             return False
@@ -1443,19 +932,6 @@ install(SchedulerLoopBreakpoint)
 install(SchedulerAfterSampleBreakpoint)
 install(SchedulerRunBreakpoint)
 install(WaitForSampleBreakpoint)
-install(INSInitBreakpoint)
-install(BackendStartBreakpoint)
-install(BackendLoopBreakpoint)
-install(RegisterSensorBreakpoint, "AP_InertialSensor::register_gyro", "register_gyro", "register_gyro_events")
-install(RegisterSensorBreakpoint, "AP_InertialSensor::register_accel", "register_accel", "register_accel_events")
-install(InvensenseStartBreakpoint)
-install(InvensenseV2StartBreakpoint)
-install(GyroInitEntryBreakpoint)
-install(GyroInitOuterLoopBreakpoint)
-install(GyroInitCollectBreakpoint)
-install(GyroInitEvalBreakpoint)
-install(GyroInitConvergedBreakpoint)
-install(GyroInitFinishBreakpoint)
 install(RuntimeCounterBreakpoint, "Rover::ahrs_update", "Rover::ahrs_update", "ahrs_events", 8, 50)
 install(RuntimeCounterBreakpoint, "Rover::read_radio", "Rover::read_radio", "read_radio_events", 8, 50)
 install(RuntimeCounterBreakpoint, "Rover::one_second_loop", "Rover::one_second_loop", "one_second_events", 4, 1)
@@ -1465,11 +941,6 @@ install(InvensenseReadFifoBreakpoint)
 install(InvensenseFifoCountBreakpoint)
 install(InvensenseAccumulateBreakpoint, "AP_InertialSensor_Invensense::_accumulate_sensor_rate_sampling", "Invensense::_accumulate_sensor_rate_sampling")
 install(InvensenseAccumulateBreakpoint, "AP_InertialSensor_Invensense::_accumulate", "Invensense::_accumulate")
-install(InvensenseV2PollBreakpoint)
-install(InvensenseV2ReadFifoBreakpoint)
-install(InvensenseV2FifoCountBreakpoint)
-install(InvensenseV2AccumulateBreakpoint, "AP_InertialSensor_Invensensev2::_accumulate_sensor_rate_sampling", "Invensensev2::_accumulate_sensor_rate_sampling")
-install(InvensenseV2AccumulateBreakpoint, "AP_InertialSensor_Invensensev2::_accumulate", "Invensensev2::_accumulate")
 install(SampleNotifyBreakpoint, "AP_InertialSensor_Backend::_notify_new_accel_raw_sample", "accel_raw_sample", "accel_notify_events")
 install(SampleNotifyBreakpoint, "AP_InertialSensor_Backend::_notify_new_gyro_raw_sample", "gyro_raw_sample", "gyro_notify_events")
 

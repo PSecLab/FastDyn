@@ -2,6 +2,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include <device.h>
+#include <boardrunner/dma.h>
+#include <boardrunner/signals.h>
 #include <boardrunner/vio.h>
 #include <boardrunner/spi.h>
 
@@ -26,7 +28,6 @@
 
 #define SPI1_CS_PD7_SIGNAL_ID   55
 #define SPI1_CS_PC2_SIGNAL_ID   34
-#define SPI1_CS_PC14_SIGNAL_ID  46
 
 #define SPI1_CS_MS5611_ID       3
 #define SPI1_CS_MPU9250_ID      4
@@ -46,6 +47,7 @@ typedef struct {
     int fallback_cs_id;
     bool cs_selected;
     bool fallback_selected;
+    bool explicit_cs_active;
 } SPI1State;
 
 static SPI1State g_spi1;
@@ -96,7 +98,6 @@ static int spi1_signal_to_cs_id(SPI1State *s, int signal_id) {
         }
         break;
     case SPI1_CS_PC2_SIGNAL_ID:
-    case SPI1_CS_PC14_SIGNAL_ID:
         if (spi1_has_cs_id(s, SPI1_CS_MPU9250_ID)) {
             return SPI1_CS_MPU9250_ID;
         }
@@ -116,12 +117,13 @@ static void spi1_set_all_cs_inactive(SPI1State *s) {
     }
 
     for (i = 0; i < s->bus.Slaves.num_slaves; i++) {
-        api_spi_set_cs(&s->bus, s->bus.Slaves.slave[i].cs_id, 1);
+        api_spi_deselect(&s->bus, s->bus.Slaves.slave[i].cs_id);
     }
 
     s->selected_cs_id = -1;
     s->cs_selected = false;
     s->fallback_selected = false;
+    s->explicit_cs_active = false;
 }
 
 static void spi1_select_cs(SPI1State *s, int cs_id) {
@@ -133,8 +135,10 @@ static void spi1_select_cs(SPI1State *s, int cs_id) {
         return;
     }
 
-    spi1_set_all_cs_inactive(s);
-    api_spi_set_cs(&s->bus, cs_id, 0);
+    if (!api_spi_select(&s->bus, cs_id)) {
+        return;
+    }
+
     s->selected_cs_id = cs_id;
     s->cs_selected = true;
 }
@@ -144,10 +148,19 @@ static void spi1_deselect_if_needed(SPI1State *s) {
         return;
     }
 
-    api_spi_set_cs(&s->bus, s->selected_cs_id, 1);
+    api_spi_deselect(&s->bus, s->selected_cs_id);
     s->selected_cs_id = -1;
     s->cs_selected = false;
     s->fallback_selected = false;
+    s->explicit_cs_active = false;
+}
+
+static void spi1_deselect_fallback_if_needed(SPI1State *s) {
+    if (s == NULL || !s->fallback_selected || s->explicit_cs_active) {
+        return;
+    }
+
+    spi1_deselect_if_needed(s);
 }
 
 static void spi1_select_if_needed(SPI1State *s) {
@@ -181,14 +194,16 @@ static void spi1_cs_signal(void *opaque, int signal_id, bool level) {
     if (!level) {
         spi1_select_cs(s, cs_id);
         s->fallback_selected = false;
+        s->explicit_cs_active = true;
         return;
     }
 
-    api_spi_set_cs(&s->bus, cs_id, 1);
+    api_spi_deselect(&s->bus, cs_id);
     if (s->cs_selected && s->selected_cs_id == cs_id) {
         s->selected_cs_id = -1;
         s->cs_selected = false;
         s->fallback_selected = false;
+        s->explicit_cs_active = false;
     }
 }
 
@@ -201,7 +216,7 @@ static uint8_t spi1_transfer_byte(SPI1State *s, uint8_t tx) {
 
     spi1_select_if_needed(s);
     if (s->cs_selected) {
-        rx = (uint8_t)(api_spi_transfer(&s->bus, tx) & 0xFFU);
+        rx = api_spi_transfer_byte(&s->bus, tx);
     }
 
     if ((s->cr2 & SPI_CR2_RXDMAEN) != 0U) {
@@ -241,18 +256,15 @@ void* spi1_init(ConfigSection* model_info) {
     g_spi1.selected_cs_id = -1;
     g_spi1.fallback_cs_id = -1;
 
-    if (spi1_has_cs_id(&g_spi1, SPI1_CS_MS5611_ID)) {
-        g_spi1.fallback_cs_id = SPI1_CS_MS5611_ID;
-    } else if (g_spi1.bus.Slaves.num_slaves > 0) {
+    if (g_spi1.bus.Slaves.num_slaves == 1) {
         g_spi1.fallback_cs_id = g_spi1.bus.Slaves.slave[0].cs_id;
-    } else {
+    } else if (g_spi1.bus.Slaves.num_slaves == 0) {
         dev_debug("spi1: initialized without attached SPI slaves");
     }
 
     spi1_set_all_cs_inactive(&g_spi1);
     api_signal_register(SPI1_CS_PD7_SIGNAL_ID, spi1_cs_signal, &g_spi1);
     api_signal_register(SPI1_CS_PC2_SIGNAL_ID, spi1_cs_signal, &g_spi1);
-    api_signal_register(SPI1_CS_PC14_SIGNAL_ID, spi1_cs_signal, &g_spi1);
     api_dma_register_stream_data(2, DMA2_STREAM_SPI1_TX, spi1_dma_tx_handler, &g_spi1);
     dev_debug("spi1: initialized with CS routing for PD7->cs3 and PC2->cs4\n");
     return &g_spi1;
@@ -302,7 +314,7 @@ void spi1_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
     case SPI1_CR1_OFF:
         s->cr1 = (uint16_t)value;
         if ((s->cr1 & SPI_CR1_SPE) == 0U) {
-            spi1_deselect_if_needed(s);
+            spi1_deselect_fallback_if_needed(s);
         }
         return;
     case SPI1_CR2_OFF:

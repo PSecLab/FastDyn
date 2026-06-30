@@ -64,11 +64,17 @@ static void mpu9250_update_sample(MPU9250State *s) {
 
     s->sample_counter++;
 
-    ax = 24;
+    /*
+     * Keep the emulated sensor nearly perfectly stationary so ArduPilot's
+     * startup gyro/INS calibration converges quickly and consistently.
+     * The register snapshot and FIFO payload are both sourced from this
+     * single coherent sample image.
+     */
+    ax = 0;
     ay = 0;
     az = 16384;
-    temp = (int16_t)(320 + (s->sample_counter & 0x1FU));
-    gx = (int16_t)(4 + (s->sample_counter & 0x0FU));
+    temp = 340;
+    gx = 0;
     gy = 0;
     gz = 0;
 
@@ -104,6 +110,29 @@ static bool mpu9250_fifo_enabled(MPU9250State *s) {
            ((s->regs[MPU9250_REG_USER_CTRL] & MPU9250_USER_FIFO_EN) != 0U);
 }
 
+static bool mpu9250_reg_autoincrement(uint8_t reg) {
+    uint8_t addr = reg & 0x7FU;
+
+    if (addr == MPU9250_REG_FIFO_R_W) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool mpu9250_reg_refreshes_sample(uint8_t reg) {
+    uint8_t addr = reg & 0x7FU;
+
+    switch (addr) {
+    case MPU9250_REG_ACCEL_XOUT_H:
+    case MPU9250_REG_TEMP_OUT_H:
+    case MPU9250_REG_GYRO_XOUT_H:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static uint8_t mpu9250_read_reg(MPU9250State *s, uint8_t reg) {
     uint8_t addr = reg & 0x7FU;
 
@@ -133,24 +162,10 @@ static uint8_t mpu9250_read_reg(MPU9250State *s, uint8_t reg) {
         }
         return s->fifo_sample[s->fifo_pos++];
 
-    case MPU9250_REG_ACCEL_XOUT_H:
-    case MPU9250_REG_ACCEL_XOUT_H + 1:
-    case MPU9250_REG_ACCEL_XOUT_H + 2:
-    case MPU9250_REG_ACCEL_XOUT_H + 3:
-    case MPU9250_REG_ACCEL_XOUT_H + 4:
-    case MPU9250_REG_ACCEL_XOUT_H + 5:
-    case MPU9250_REG_TEMP_OUT_H:
-    case MPU9250_REG_TEMP_OUT_H + 1:
-    case MPU9250_REG_GYRO_XOUT_H:
-    case MPU9250_REG_GYRO_XOUT_H + 1:
-    case MPU9250_REG_GYRO_XOUT_H + 2:
-    case MPU9250_REG_GYRO_XOUT_H + 3:
-    case MPU9250_REG_GYRO_XOUT_H + 4:
-    case MPU9250_REG_GYRO_XOUT_H + 5:
-        mpu9250_update_sample(s);
-        return s->regs[addr];
-
     default:
+        if (mpu9250_reg_refreshes_sample(addr)) {
+            mpu9250_update_sample(s);
+        }
         return s->regs[addr];
     }
 }
@@ -174,6 +189,7 @@ static void mpu9250_write_reg(MPU9250State *s, uint8_t reg, uint8_t value) {
     if (addr == MPU9250_REG_USER_CTRL &&
         (value & MPU9250_USER_FIFO_RESET) != 0U) {
         s->fifo_pos = 0U;
+        mpu9250_update_sample(s);
     }
 }
 
@@ -197,12 +213,18 @@ uint32_t slave_spi_transfer(uint32_t value) {
 
     if (s->read_phase) {
         uint8_t ret = mpu9250_read_reg(s, s->current_reg);
-        s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+
+        if (mpu9250_reg_autoincrement(s->current_reg)) {
+            s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+        }
+
         return ret;
     }
 
     mpu9250_write_reg(s, s->current_reg, byte);
-    s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+    if (mpu9250_reg_autoincrement(s->current_reg)) {
+        s->current_reg = (uint8_t)((s->current_reg + 1U) & 0x7FU);
+    }
     return 0xFFU;
 }
 
