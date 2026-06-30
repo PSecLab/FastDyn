@@ -1,0 +1,52 @@
+{
+    "veto_pipeline_guess": true,
+    "reasoning": "The current failure is still Board Validation failure on internal mpu9250: spi_check_register(dev=mpu9250, reg=0x75, expected=0x71) returns false. The mpu9250_spi.c slave already implements WHOAMI 0x71 and the TOML attaches it to SPI1 CS4, so the likely bug is not the slave model. The generated SPI1/GPIOC infrastructure is wrong: spi1.c maps CS4 to GPIOC14/signal_id 46, while this binary uses GPIOC2/signal_id 34 for SPI1 CS4. gpioc.c also only publishes PC13/PC14/PC15 and does not publish PC2. Fix the CS signal routing instead of rewriting the MPU9250 slave.",
+    "request_existing_models": [
+        {
+            "name": "spi2.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Use as reference for api_signal_register() and api_spi_set_cs() patterns if needed."
+        },
+        {
+            "name": "gpiod.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Use as reference for GPIO output signal publishing via api_signal_set(). Preserve the existing GPIOD7/signal_id 55 behavior for SPI1 CS3."
+        },
+        {
+            "name": "gpioc.c",
+            "intent": "update",
+            "reference_functions_needed": [],
+            "details": "Generalize GPIOC signal publishing for all 16 output pins, not only PC13/PC14/PC15. On ODR and BSRR output changes, call api_signal_set(signal_id, level) for each pin whose output level may have changed. GPIOC is port_index 2, so signal_id = (2 * 16) + pin. The critical required signal is PC2 -> signal_id 34 for SPI1 CS4 / internal mpu9250. Preserve existing GPIOC13/signal_id 45 and GPIOC14/signal_id 46 behavior used by SPI4."
+        },
+        {
+            "name": "spi1.c",
+            "intent": "update",
+            "reference_functions_needed": [],
+            "details": "Fix SPI1 chip-select routing. The binary uses GPIOD7/signal_id 55 for SPI1 CS3 ms5611 and GPIOC2/signal_id 34 for SPI1 CS4 mpu9250. Remove the incorrect GPIOC14/signal_id 46 mapping from SPI1 CS4. Register api_signal_register(55, ...) and api_signal_register(34, ...). Map signal 55 -> cs_id 3 and signal 34 -> cs_id 4. Treat CS as active-low: level=false selects the slave with api_spi_set_cs(..., cs_id, 0), level=true deselects it with api_spi_set_cs(..., cs_id, 1). Avoid fallback behavior that silently selects ms5611 when multiple SPI1 slaves are attached; transfers should go to the currently asserted CS. Preserve SPI1 register behavior, DMA2 stream5 TX handling, DMA2 stream2 RX data requests, and RX FIFO behavior."
+        },
+        {
+            "name": "ms5611_spi1.c",
+            "intent": "context_only",
+            "reference_functions_needed": [
+                "AP_BoardConfig::check_ms5611"
+            ],
+            "details": "Context only. This SPI1 CS3 slave already passes BARO0 and should not be changed except as needed to remain compatible with corrected SPI1 CS routing."
+        },
+        {
+            "name": "mpu9250_spi.c",
+            "intent": "context_only",
+            "reference_functions_needed": [
+                "AP_BoardConfig::spi_check_register",
+                "AP_InertialSensor_Invensense::probe",
+                "AP_InertialSensor_Invensense::_hardware_init",
+                "AP_InertialSensor_Invensense::_init",
+                "AP_Compass_AK8963::probe_mpu9250"
+            ],
+            "details": "Do not rewrite this slave unless a direct bug is found. It already returns WHOAMI 0x71 at register 0x75 when CS is active. The current failure is expected to be CS routing, not the slave register model."
+        }
+    ],
+    "create_new_models": [],
+    "handled": true
+}

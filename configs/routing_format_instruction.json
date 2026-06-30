@@ -1,0 +1,149 @@
+{
+  "name": "FastDyn routing.json instruction",
+  "purpose": "Use this file as the canonical format guide when an LLM needs to produce or edit FastDyn routing.json. The routing file tells trace-analyze which existing models to pass into the next implementation prompt and which new models should be materialized.",
+  "output_location": "FastDyn/fastdyn_work/routing.json unless the command explicitly passes --routing-json.",
+  "top_level_schema": {
+    "veto_pipeline_guess": {
+      "type": "boolean",
+      "required": true,
+      "meaning": "Set true when the pipeline's automatic peripheral/model guess should be overridden or redirected."
+    },
+    "reasoning": {
+      "type": "string",
+      "required": true,
+      "meaning": "One or two concrete sentences explaining the routing decision and the current blocker."
+    },
+    "request_existing_models": {
+      "type": "array",
+      "required": true,
+      "meaning": "Existing model files that should be included in the next prompt. Use intent=context_only for reference files and intent=update for files the LLM should modify."
+    },
+    "create_new_models": {
+      "type": "array",
+      "required": true,
+      "meaning": "New model files that should be created/materialized by the routing pipeline."
+    },
+    "handled": {
+      "type": "boolean",
+      "required": true,
+      "meaning": "Set false when the routing should be consumed by trace-analyze. The pipeline sets this true after it uses the routing. Use the key name handled, not handle."
+    }
+  },
+  "request_existing_models_item": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "meaning": "Filename of an existing model, for example spi1.c, gpiod.c, or ap_iomcu_uart_endpoint.py."
+    },
+    "intent": {
+      "type": "string",
+      "required": true,
+      "allowed_values": [
+        "context_only",
+        "update"
+      ],
+      "meaning": "context_only means include the file for reference only. update means the next implementation LLM should edit this model."
+    },
+    "reference_functions_needed": {
+      "type": "array of strings",
+      "required": false,
+      "meaning": "Firmware function names whose source should be extracted into the next prompt. For bus slaves, explicitly list functions because there is no direct MMIO range to infer them."
+    },
+    "details": {
+      "type": "string",
+      "required": false,
+      "meaning": "Precise implementation guidance for this existing model. Include confirmed GDB facts, signal IDs, CS IDs, and constraints."
+    }
+  },
+  "create_new_models_item": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "meaning": "Filename to create, for example icm20602_spi.c or ap_iomcu_uart_endpoint.py."
+    },
+    "category": {
+      "type": "string",
+      "required": true,
+      "allowed_values": [
+        "peripheral",
+        "slave",
+        "endpoint"
+      ],
+      "meaning": "peripheral is an MMIO model, slave is attached to a bus such as SPI/I2C, endpoint is a host-side script/plugin."
+    },
+    "bus_type": {
+      "type": "string or null",
+      "required": true,
+      "allowed_values": [
+        "SPI",
+        "I2C",
+        "UART",
+        null
+      ],
+      "meaning": "Set for slave models. Use null for peripheral or endpoint models."
+    },
+    "mmio_range": {
+      "type": "string or null",
+      "required": true,
+      "meaning": "Required for category=peripheral as 0xSTART-0xEND. Use null for slave or endpoint models."
+    },
+    "attach_to_peripheral": {
+      "type": "string or null",
+      "required": true,
+      "meaning": "Parent bus/peripheral for slave or endpoint models, for example spi4 or usart1. Use null for standalone peripherals."
+    },
+    "connection_id": {
+      "type": "string or null",
+      "required": true,
+      "meaning": "Connection discriminator such as CS: device=4, Addr: 0x77, or Baud: 115200. This is also useful documentation for the implementation LLM."
+    },
+    "reference_functions_needed": {
+      "type": "array of strings",
+      "required": false,
+      "meaning": "Firmware functions whose source must be included. For slave models, this is critical because the pipeline cannot infer references from MMIO access."
+    },
+    "details": {
+      "type": "string",
+      "required": false,
+      "meaning": "Precise behavior the new model must implement."
+    }
+  },
+  "scope_policy": {
+    "goal": "Route to the smallest durable subsystem fix, not the smallest possible bypass.",
+    "meaning": "The current failure is useful evidence, but routing should identify the root mechanism that explains it. If the failure is caused by shared infrastructure such as SPI chip-select routing, GPIO signal publication, DMA completion, UART transport, or bus slave dispatch, request that infrastructure model rather than only forcing the first failing sensor/check to pass.",
+    "balance": "Keep each pass narrow enough for the implementation LLM to complete correctly, but broad enough that the fix remains valid for the next execution step. Do not widen scope into unrelated future subsystems."
+  },
+  "rules": [
+    "Always emit valid JSON, not JSON with comments.",
+    "Always include handled:false when the routing is meant to be consumed on the next trace-analyze run.",
+    "Keep each routing pass focused, but do not route only for a one-line bypass of the current failure. Target the smallest coherent subsystem fix that explains the failure and is likely to remain valid for the next execution step.",
+    "Use context_only for reference models and update only for files that should be modified.",
+    "Do not request multiple alternative hardware populations at the same time unless the current failure requires it.",
+    "Do not request hardcoded shortcuts such as forcing a board check to pass, returning a single constant without modeling the transaction, or editing unrelated code to skip validation.",
+    "When a failing sensor check is caused by bus infrastructure, route the bus/GPIO/DMA infrastructure model(s), not only the sensor/slave model that happened to fail first.",
+    "For SPI slaves, put the CS information in connection_id and details. If the TOML also needs cs_id, state it explicitly in details because the routing materializer does not automatically write cs_id.",
+    "Use exact names observed in GDB or generated hwdef.h for device names, bus numbers, CS IDs, signal IDs, and firmware functions."
+  ],
+  "minimal_example": {
+    "veto_pipeline_guess": true,
+    "reasoning": "GDB confirms the current failure is caused by spi1.c selecting the wrong CS line for ms5611.",
+    "request_existing_models": [
+      {
+        "name": "spi2.c",
+        "intent": "context_only",
+        "reference_functions_needed": [],
+        "details": "Reference for signal-driven SPI CS routing."
+      },
+      {
+        "name": "spi1.c",
+        "intent": "update",
+        "reference_functions_needed": [
+          "AP_BoardConfig::check_ms5611"
+        ],
+        "details": "Update SPI1 to listen for GPIOD7/signal_id=55 and map it to CS3."
+      }
+    ],
+    "create_new_models": [],
+    "handled": false
+  }
+}

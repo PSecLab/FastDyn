@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <device.h>
+#include <boardrunner/vio.h>
 
 #define GPIOD_BASE_ADDR 0x40020C00ULL
 
@@ -16,7 +17,9 @@
 #define GPIO_AFRL_OFF    0x20
 #define GPIO_AFRH_OFF    0x24
 
+#define GPIOD_PD7_SIGNAL_ID  55
 #define GPIOD_PD10_SIGNAL_ID 58
+#define GPIOD_PD7_MASK       (1U << 7)
 #define GPIOD_PD10_MASK      (1U << 10)
 
 typedef struct {
@@ -75,11 +78,18 @@ static uint32_t gpiod_subwrite_to_u32(uint64_t suboff, uint64_t value, unsigned 
     return (((uint32_t)value) & mask) << shift;
 }
 
-static void gpiod_publish_pd10(GPIODState *s) {
-    bool level;
+static void gpiod_publish_outputs(GPIODState *s) {
+    bool pd7_level;
+    bool pd10_level;
 
     if (s == NULL) {
         return;
+    }
+
+    if ((s->odr & GPIOD_PD7_MASK) != 0) {
+        s->idr |= GPIOD_PD7_MASK;
+    } else {
+        s->idr &= ~GPIOD_PD7_MASK;
     }
 
     if ((s->odr & GPIOD_PD10_MASK) != 0) {
@@ -88,8 +98,11 @@ static void gpiod_publish_pd10(GPIODState *s) {
         s->idr &= ~GPIOD_PD10_MASK;
     }
 
-    level = (s->odr & GPIOD_PD10_MASK) != 0;
-    api_signal_set(GPIOD_PD10_SIGNAL_ID, level);
+    pd7_level = (s->odr & GPIOD_PD7_MASK) != 0;
+    pd10_level = (s->odr & GPIOD_PD10_MASK) != 0;
+
+    api_signal_set(GPIOD_PD7_SIGNAL_ID, pd7_level);
+    api_signal_set(GPIOD_PD10_SIGNAL_ID, pd10_level);
 }
 
 static void gpiod_apply_bsrr(GPIODState *s, uint32_t bsrr) {
@@ -99,7 +112,7 @@ static void gpiod_apply_bsrr(GPIODState *s, uint32_t bsrr) {
     s->odr |= set_bits;
     s->odr &= ~rst_bits;
     s->odr &= 0xFFFFU;
-    gpiod_publish_pd10(s);
+    gpiod_publish_outputs(s);
 }
 
 void* gpiod_init(ConfigSection* model_info) {
@@ -165,7 +178,7 @@ void gpiod_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
         return;
     case GPIO_ODR_OFF:
         s->odr = gpiod_merge_reg32(s->odr, offset - GPIO_ODR_OFF, value, size) & 0xFFFFU;
-        gpiod_publish_pd10(s);
+        gpiod_publish_outputs(s);
         return;
     case GPIO_BSRR_OFF: {
         uint32_t bsrr = gpiod_subwrite_to_u32(offset - GPIO_BSRR_OFF, value, size);

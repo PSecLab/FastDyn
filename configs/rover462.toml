@@ -48,8 +48,8 @@ prealloc     = false
 platform = "STM32F427"
 # --- Debugging, Control, and Logging ---
 qemu_path = "../qemu/build/qemu-system-arm"
-enable_gdb = true
-stop_on_start = true
+enable_gdb = false
+stop_on_start = false
 launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
@@ -640,6 +640,7 @@ logger_content = """
     name    = "ms5611_spi1.c"
     enabled = true
     connection_id = "CS: device=3"
+    cs_id = 3
     bus = "spi"
     device_scroll = "boardrunner/boardrunner_sdk/build/ms5611_spi.so"
 
@@ -663,4 +664,74 @@ logger_content = """
     enabled = true
     connection_id = "CS: device=2"
     bus = "spi"
+    cs_id = 2
     device_scroll = "boardrunner/boardrunner_sdk/build/ms5611_spi4.so"
+
+[[Device.spi4.connections]]
+    type    = "slave"
+    name    = "icm20602_spi.c"
+    enabled = true
+    connection_id = "CS: device=4"
+    cs_id = 4
+    bus = "spi"
+    device_scroll = "boardrunner/boardrunner_sdk/build/icm20602_spi.so"
+
+[[Device.spi4.connections]]
+    type    = "slave"
+    name    = "icm20948_spi.c"
+    enabled = true
+    connection_id = "CS: device=1"
+    cs_id = 1
+    bus = "spi"
+    device_scroll = "boardrunner/boardrunner_sdk/build/icm20948_spi.so"
+
+[[Device.spi1.connections]]
+    type    = "slave"
+    name    = "mpu9250_spi.c"
+    enabled = true
+    connection_id = "CS: device=4"
+    cs_id = 4
+    bus = "spi"
+    device_scroll = "boardrunner/boardrunner_sdk/build/mpu9250_spi.so"
+
+[Device.i2c2]
+    ranges = [["0x40005800", "0x40005c00"]]
+    irq = [[1, 150]]
+    description = "I2C2"
+    read_priority = "elder"
+    [[Device.i2c2.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/i2c2.so"
+    [[Device.i2c2.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.i2c1]
+    ranges = [["0x40005400", "0x40005800"]]
+    irq = [[1, 150]]
+    description = "I2C1"
+    read_priority = "elder"
+    [[Device.i2c1.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/i2c1.so"
+    [[Device.i2c1.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.tim2]
+    ranges = [["0x40000000", "0x40000400"]]
+    irq = [[1, 150]]
+    description = "TIM2"
+    read_priority = "elder"
+    [[Device.tim2.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/tim2.so"
+    [[Device.tim2.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false

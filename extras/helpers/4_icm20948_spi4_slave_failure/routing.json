@@ -1,0 +1,68 @@
+{
+    "veto_pipeline_guess": true,
+    "reasoning": "Latest GDB run with cs_id=4 confirms both MS5611 barometers pass and CHECK_IMU0_PRESENT now passes through icm20602_ext on SPI4 CS4/GPIOC13/signal_id=45. BOARD_VALIDATE is now blocked at CHECK_IMU1_PRESENT: lsm9ds0_ext_g on CS4 fails as expected for the chosen newer path, and icm20948_ext on SPI4 CS1/GPIOE4/signal_id=68 reads 0x00 instead of WHOAMI 0xEA.",
+    "request_existing_models": [
+        {
+            "name": "spi2.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Reference only. Use this as a known-good pattern for signal-driven SPI chip-select routing and api_spi_set_cs() usage."
+        },
+        {
+            "name": "gpiod.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Reference only. Use as a GPIO model pattern for publishing output pin changes with api_signal_set()."
+        },
+        {
+            "name": "gpioc.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Context only. GDB confirms GPIOC14/signal_id=46 routes SPI4 CS2 to ms5611_ext and GPIOC13/signal_id=45 routes SPI4 CS4 to icm20602_ext. Preserve this behavior."
+        },
+        {
+            "name": "gpioe.c",
+            "intent": "update",
+            "reference_functions_needed": [],
+            "details": "Implement GPIOE output signal publication for all 16 pins, or at minimum PE4. Publish changes on ODR and BSRR writes using api_signal_set(signal_id, level). Use signal_id=(4*16)+pin_number, so GPIOE4 is signal_id=68. Mirror output levels into IDR where appropriate and preserve absolute address handling for GPIOE base 0x40021000."
+        },
+        {
+            "name": "spi4.c",
+            "intent": "update",
+            "reference_functions_needed": [
+                "AP_BoardConfig::spi_check_register",
+                "AP_BoardConfig::spi_check_register_inv2"
+            ],
+            "details": "Extend SPI4 CS routing to handle GPIOE4/signal_id=68 as CS1 for icm20948_ext. Preserve existing working GPIOC14->CS2/ms5611_ext and GPIOC13->CS4/icm20602_ext behavior. Remove or constrain the heuristic fallback that lets CS1 probes accidentally receive CS4/icm20602 responses; device=1 transfers must select CS1, not CS4. Register api_signal_register(68, ...) and call api_spi_set_cs(&state->bus, 1, level) with active-low semantics, where level 0 selects and level 1 deselects. Preserve SPI4 register behavior, DMA2 stream4 TX handling, DMA2 stream3 RX data requests, and RX FIFO behavior."
+        },
+        {
+            "name": "icm20602_spi.c",
+            "intent": "context_only",
+            "reference_functions_needed": [
+                "AP_BoardConfig::spi_check_register",
+                "AP_InertialSensor_Invensense::probe",
+                "AP_InertialSensor_Invensense::_hardware_init",
+                "AP_InertialSensor_Invensense::_init"
+            ],
+            "details": "Context only. This model now passes icm20602_ext WHOAMI on SPI4 CS4 and is a useful style reference for a stateful SPI IMU slave."
+        }
+    ],
+    "create_new_models": [
+        {
+            "name": "icm20948_spi.c",
+            "category": "slave",
+            "bus_type": "SPI",
+            "mmio_range": null,
+            "attach_to_peripheral": "spi4",
+            "connection_id": "CS: device=1",
+            "reference_functions_needed": [
+                "AP_BoardConfig::spi_check_register_inv2",
+                "AP_InertialSensor_Invensensev2::probe",
+                "AP_InertialSensor_Invensensev2::_hardware_init",
+                "AP_InertialSensor_Invensensev2::_init"
+            ],
+            "details": "Create a SPI slave for icm20948_ext on SPI4 CS1/GPIOE4/signal_id=68. GDB shows the firmware reads WHOAMI with tx bytes 80 00, corresponding to INV2 register 0x00 with read_flag 0x80, and expects 0xEA. Return 0xEA for that WHOAMI read and implement a small stateful register/bank map for common ICM20948 initialization reads and writes rather than a one-off board-validation bypass. Ensure the generated TOML connection includes cs_id=1 as well as connection_id='CS: device=1'."
+        }
+    ],
+    "handled": true
+}

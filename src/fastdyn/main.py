@@ -357,7 +357,9 @@ void {p_name}_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) 
               default=None, metavar='PATH', help='Optional path to an SVD file or directory.')
 @click.option('-p', '--persist-work-dir', is_flag=True, default=False,
               help='Optional Flag to persist the existing work directory.')
-def probe_run(config, work_dir, svd, persist_work_dir):
+@click.option('--run-gdb/--no-run-gdb', default=None,
+              help='Override TOML GDB settings for probe-run. --run-gdb enables GDB and stops on start; --no-run-gdb disables GDB.')
+def probe_run(config, work_dir, svd, persist_work_dir, run_gdb):
     work_dir = _prepare_work_dir(work_dir, persist_work_dir)
     svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
 
@@ -373,6 +375,11 @@ def probe_run(config, work_dir, svd, persist_work_dir):
             machine_name = machine.name or f"machine{idx}"
             if not machine.cpus:
                 raise click.ClickException(f"{machine_name} has no CPU configured.")
+
+            if run_gdb is not None:
+                machine.qemu_target_opts.enable_gdb = bool(run_gdb)
+                machine.qemu_target_opts.stop_on_start = bool(run_gdb)
+                machine.qemu_target_opts.launch_gdb = False
 
             from fastdyn.binary.static_analyze import build_static_analyze_config, validate_static_analyze_cache
             analysis_cfg = build_static_analyze_config(

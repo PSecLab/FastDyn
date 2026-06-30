@@ -1,0 +1,47 @@
+{
+  "veto_pipeline_guess": true,
+  "reasoning": "SPI4 is the hanging peripheral, but the pipeline missed that we need to rewrite the spi4.c stub with full DMA support, update dma2.c for the SPI4 streams, AND create a new slave model ms5611_spi4.c for the barometer attached to SPI4.",
+  "request_existing_models": [
+    {
+      "name": "spi4.c",
+      "intent": "update",
+      "reference_functions_needed": [
+        "spi_lld_start",
+        "spi_lld_send",
+        "spi_lld_receive",
+        "spi_lld_ignore",
+        "spi_lld_exchange"
+      ]
+    },
+    {
+      "name": "dma2.c",
+      "intent": "update",
+      "reference_functions_needed": []
+    },
+    {
+      "name": "spi1.c",
+      "intent": "context_only",
+      "reference_functions_needed": []
+    },
+    {
+      "name": "ms5611_spi1.c",
+      "intent": "context_only",
+      "reference_functions_needed": []
+    }
+  ],
+  "create_new_models": [
+    {
+      "name": "ms5611_spi4.c",
+      "category": "slave",
+      "bus_type": "SPI",
+      "mmio_range": null,
+      "attach_to_peripheral": "spi4",
+      "connection_id": "CS: device=2",
+      "reference_functions_needed": [
+        "AP_BoardConfig::check_ms5611"
+      ],
+      "details": "This should be an exact copy/replication of ms5611_spi.c, which models the MS5611 barometer, but attached to SPI4."
+    }
+  ],
+  "handled": true
+}

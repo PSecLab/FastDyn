@@ -1,7 +1,6 @@
 set pagination off
 set confirm off
 set print thread-events off
-set style enabled off
 set breakpoint pending on
 
 file virtuals/physics/flight_controllers/courbet/bin/ardurover_v462
@@ -275,9 +274,6 @@ class SPIDoTransferBreakpoint(gdb.Breakpoint):
         elif bus == 1:
             gdb.execute("set $spi2_events = $spi2_events + 1", to_string=True)
             bus_label = "spi2"
-            spi2_count = _safe_int(_safe_eval("$spi2_events")) or 0
-            if spi2_count > 16:
-                return False
         else:
             gdb.execute("set $spi4_events = $spi4_events + 1", to_string=True)
             bus_label = "spi4"
@@ -336,10 +332,8 @@ class SpiLldStartBreakpoint(gdb.Breakpoint):
             print("\n[spi1] spi_lld_start spip=%s" % _safe_str(spip))
             _bt(6)
         elif spip_i == spid2_i:
-            count = _safe_int(_safe_eval("$spi2_events")) or 0
-            if count <= 4:
-                print("\n[spi2] spi_lld_start spip=%s" % _safe_str(spip))
-                _bt(6)
+            print("\n[spi2] spi_lld_start spip=%s" % _safe_str(spip))
+            _bt(6)
         elif spip_i == spid4_i:
             print("\n[spi4] spi_lld_start spip=%s" % _safe_str(spip))
             _bt(6)
@@ -353,15 +347,11 @@ class StorageOpenBreakpoint(gdb.Breakpoint):
     def stop(self):
         gdb.execute("set $storage_events = $storage_events + 1", to_string=True)
         this = _safe_frame_var(gdb.selected_frame(), "this")
-        this_addr = _safe_int(this)
         initialised = _safe_str(_safe_eval("this->_initialisedType"))
         print("\n[storage] _storage_open enter this=%s initialisedType=%s" % (_safe_str(this), initialised))
 
         def on_return(_ret):
-            if this_addr is None:
-                print("[storage] _storage_open exit initialisedType=<unknown-this>")
-                return
-            print("[storage] _storage_open exit initialisedType=%s" % _safe_str(_safe_eval("((ChibiOS::Storage*)0x%x)->_initialisedType" % this_addr)))
+            print("[storage] _storage_open exit initialisedType=%s" % _safe_str(_safe_eval("this->_initialisedType")))
 
         InspectReturn("ChibiOS::Storage::_storage_open", on_return)
         return False
@@ -379,7 +369,7 @@ class StorageReadBlockBreakpoint(gdb.Breakpoint):
         loc_i = _safe_int(loc)
         n_i = _safe_int(n)
         gdb.execute("set $storage_events = $storage_events + 1", to_string=True)
-        if _safe_int(_safe_eval("$storage_events")) <= 20:
+        if _safe_int(_safe_eval("$storage_events")) <= 120:
             print("\n[storage] read_block loc=%s n=%s dst=%s" % (loc_i, n_i, _safe_str(dst)))
 
             def on_return(_ret):
@@ -408,8 +398,12 @@ class StorageTimerTickBreakpoint(gdb.Breakpoint):
         super(StorageTimerTickBreakpoint, self).__init__("ChibiOS::Storage::_timer_tick", internal=False)
 
     def stop(self):
-        # Disabled by default: this fires constantly while other threads wait
-        # and makes storage diagnostics crawl under GDB.
+        gdb.execute("set $storage_events = $storage_events + 1", to_string=True)
+        count = _safe_int(_safe_eval("$storage_events")) or 0
+        if count <= 40 or count % 100 == 0:
+            print("\n[storage] _timer_tick hit=%s initialisedType=%s" % (count, _safe_str(_safe_eval("this->_initialisedType"))))
+            if count <= 5:
+                _bt(6)
         return False
 
 
@@ -419,15 +413,10 @@ class RamtronInitBreakpoint(gdb.Breakpoint):
 
     def stop(self):
         gdb.execute("set $ramtron_events = $ramtron_events + 1", to_string=True)
-        this = _safe_frame_var(gdb.selected_frame(), "this")
-        this_addr = _safe_int(this)
         print("\n[ramtron] init enter")
 
         def on_return(_ret):
-            if this_addr is None:
-                print("[ramtron] init exit id=<unknown-this>")
-                return
-            print("[ramtron] init exit id=%s" % _safe_str(_safe_eval("((AP_RAMTRON*)0x%x)->id" % this_addr)))
+            print("[ramtron] init exit id=%s" % _safe_str(_safe_eval("this->id")))
 
         InspectReturn("AP_RAMTRON::init", on_return)
         return False
@@ -442,11 +431,8 @@ class RamtronReadBreakpoint(gdb.Breakpoint):
         offset = _safe_frame_var(frame, "offset")
         buf = _safe_frame_var(frame, "buf")
         size = _safe_frame_var(frame, "size")
-        size_i = _safe_int(size)
-        if size_i is not None and size_i < 1024:
-            return False
         gdb.execute("set $ramtron_events = $ramtron_events + 1", to_string=True)
-        print("\n[ramtron] read offset=%s size=%s buf=%s" % (_safe_int(offset), size_i, _safe_str(buf)))
+        print("\n[ramtron] read offset=%s size=%s buf=%s" % (_safe_int(offset), _safe_int(size), _safe_str(buf)))
 
         def on_return(_ret):
             print("[ramtron] read data=%s" % _read_bytes(buf, size, 32))
@@ -515,10 +501,6 @@ class APParamScanBreakpoint(gdb.Breakpoint):
         frame = gdb.selected_frame()
         target = _safe_frame_var(frame, "target")
         pofs = _safe_frame_var(frame, "pofs")
-        gdb.execute("set $param_events = $param_events + 1", to_string=True)
-        count = _safe_int(_safe_eval("$param_events")) or 0
-        if count > 40:
-            return False
         print("\n[param] scan target=%s target_bytes=%s pofs=%s" % (_safe_str(target), _read_bytes(target, 4, 4), _safe_str(pofs)))
 
         def on_return(_ret):
@@ -559,18 +541,6 @@ class HalPanicBreakpoint(gdb.Breakpoint):
         return True
 
 
-class BootProgressBreakpoint(gdb.Breakpoint):
-    def __init__(self, symbol, label):
-        super(BootProgressBreakpoint, self).__init__(symbol, internal=False)
-        self.label = label
-        self.silent = False
-
-    def stop(self):
-        print("\n[progress] %s enter" % self.label)
-        InspectReturn(self.label)
-        return False
-
-
 class SpiLldAbortBreakpoint(gdb.Breakpoint):
     def __init__(self):
         super(SpiLldAbortBreakpoint, self).__init__("spi_lld_abort", internal=False)
@@ -596,19 +566,23 @@ install(BoardValidationFailBreakpoint)
 install(CheckMS5611Breakpoint)
 install(SpiCheckRegisterBreakpoint, "AP_BoardConfig::spi_check_register", "spi_check_register")
 install(SpiCheckRegisterBreakpoint, "AP_BoardConfig::spi_check_register_inv2", "spi_check_register_inv2")
+install(DeviceReadRegistersBreakpoint)
+install(SPIDoTransferBreakpoint)
 install(GetDeviceBreakpoint)
-# Low-level SPI/storage/AP_Param breakpoints are intentionally not installed by
-# default. They fire thousands of times after FRAM comes up and make GDB too slow
-# for idle-starvation triage. Re-enable individual installs only after the broad
-# progress hooks identify the blocked subsystem.
-# Do not install StorageTimerTickBreakpoint unless debugging dirty-line flushes;
-# it fires too often for idle-starvation triage.
+install(SpiLldStartBreakpoint)
+install(StorageOpenBreakpoint)
+install(StorageReadBlockBreakpoint)
+install(StorageWriteBlockBreakpoint)
+install(StorageTimerTickBreakpoint)
 install(RamtronInitBreakpoint)
+install(RamtronReadBreakpoint)
+install(RamtronWriteBreakpoint)
 install(APParamLoadAllBreakpoint)
+install(APParamSaveIoHandlerBreakpoint)
+install(APParamSaveSyncBreakpoint)
+install(APParamScanBreakpoint)
+install(APParamEepromWriteCheckBreakpoint)
 install(HalPanicBreakpoint)
-install(BootProgressBreakpoint, "AP_BoardConfig::init", "AP_BoardConfig::init")
-install(BootProgressBreakpoint, "AP_BoardConfig::board_setup", "AP_BoardConfig::board_setup")
-install(BootProgressBreakpoint, "AP_Vehicle::setup", "AP_Vehicle::setup")
 install(SpiLldAbortBreakpoint)
 
 print("[diag] breakpoints installed; continuing target")

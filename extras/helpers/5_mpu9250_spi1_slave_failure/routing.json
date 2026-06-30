@@ -1,0 +1,70 @@
+{
+    "veto_pipeline_guess": true,
+    "reasoning": "Latest GDB run shows FRAM init and AP_Param::load_all both succeed, both MS5611 barometers pass, CHECK_IMU0_PRESENT passes via icm20602_ext, and CHECK_IMU1_PRESENT passes via icm20948_ext. BOARD_VALIDATE is now blocked at CHECK_IMU2_PRESENT because spi_check_register(\"mpu9250\", reg 0x75, expected 0x71) returns false; the current TOML has no SPI1 CS4 mpu9250 slave and spi1.c only routes GPIOD7/signal_id=55 to the first SPI1 slave.",
+    "request_existing_models": [
+        {
+            "name": "spi2.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Reference only. Use this as a known-good pattern for signal-driven SPI chip-select routing with api_signal_register() and api_spi_set_cs()."
+        },
+        {
+            "name": "gpiod.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Reference only. Existing GPIOD7/signal_id=55 publication is working for ms5611 on SPI1 CS3; preserve this behavior."
+        },
+        {
+            "name": "gpioc.c",
+            "intent": "update",
+            "reference_functions_needed": [],
+            "details": "GPIOC currently publishes only PC13-PC15. Generalize GPIOC output signal publication for all 16 pins, or at minimum add PC2. Publish changes on ODR and BSRR writes using api_signal_set(signal_id, level) and compute signal_id=(2*16)+pin_number, so GPIOC2 is signal_id=34. Preserve existing working GPIOC13/signal_id=45 and GPIOC14/signal_id=46 behavior for SPI4."
+        },
+        {
+            "name": "spi1.c",
+            "intent": "update",
+            "reference_functions_needed": [
+                "AP_BoardConfig::check_ms5611",
+                "AP_BoardConfig::spi_check_register"
+            ],
+            "details": "Update SPI1 CS routing to support multiple slaves. Keep GPIOD7/signal_id=55 mapped to CS3 for ms5611. Add GPIOC2/signal_id=34 mapped to CS4 for mpu9250. Register both signals with api_signal_register(); on level 0 select the corresponding CS with api_spi_set_cs(&state->bus, cs_id, 0), and on level 1 deselect it. Do not always select the first attached slave when multiple slaves exist. Preserve SPI1 register behavior, DMA2 stream5 TX handling, DMA2 stream2 RX data requests, and RX FIFO behavior."
+        },
+        {
+            "name": "ms5611_spi1.c",
+            "intent": "context_only",
+            "reference_functions_needed": [
+                "AP_BoardConfig::check_ms5611"
+            ],
+            "details": "Context only. This SPI1 CS3 slave passes BARO0 and should not be changed except as needed to keep compatibility with the corrected SPI1 CS routing."
+        },
+        {
+            "name": "icm20602_spi.c",
+            "intent": "context_only",
+            "reference_functions_needed": [
+                "AP_InertialSensor_Invensense::probe",
+                "AP_InertialSensor_Invensense::_hardware_init",
+                "AP_InertialSensor_Invensense::_init"
+            ],
+            "details": "Context only. Use as a style reference for a stateful Invensense SPI IMU slave with WHOAMI, configuration registers, FIFO/data-ready behavior, and active-low CS framing."
+        }
+    ],
+    "create_new_models": [
+        {
+            "name": "mpu9250_spi.c",
+            "category": "slave",
+            "bus_type": "SPI",
+            "mmio_range": null,
+            "attach_to_peripheral": "spi1",
+            "connection_id": "CS: device=4",
+            "reference_functions_needed": [
+                "AP_BoardConfig::spi_check_register",
+                "AP_InertialSensor_Invensense::probe",
+                "AP_InertialSensor_Invensense::_hardware_init",
+                "AP_InertialSensor_Invensense::_init",
+                "AP_Compass_AK8963::probe_mpu9250"
+            ],
+            "details": "Create a robust SPI slave for the internal mpu9250 on SPI1 CS4/GPIOC2/signal_id=34. GDB shows board validation calls spi_check_register(\"mpu9250\", reg 0x75, expected 0x71) and it currently returns false. The model must return 0x71 for MPUREG_WHOAMI register 0x75 with read_flag 0x80 and implement a small stateful MPU9250 register map for common initialization reads/writes, reset, data-ready, FIFO/sample reads, and AK8963-related interactions where needed. Ensure the generated TOML connection includes cs_id=4 as well as connection_id=\"CS: device=4\"."
+        }
+    ],
+    "handled": false
+}

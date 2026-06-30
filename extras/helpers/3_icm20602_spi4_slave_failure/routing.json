@@ -1,0 +1,59 @@
+{
+    "veto_pipeline_guess": true,
+    "reasoning": "GDB confirms both barometer checks now pass: check_ms5611('ms5611') and check_ms5611('ms5611_ext') return true. BOARD_VALIDATE is now blocked at CHECK_IMU0_PRESENT because SPI4 WHOAMI reads for mpu9250_ext on CS1/GPIOE4 and icm20602_ext on CS4/GPIOC13 both return 0xff; this phase should implement the chosen Alternative B path by fixing SPI4 GPIOC-based CS routing and adding an icm20602_ext slave on SPI4 CS4.",
+    "request_existing_models": [
+        {
+            "name": "spi2.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Reference only. Use this as the known-good pattern for api_signal_register()-driven SPI chip-select routing and api_spi_set_cs() usage."
+        },
+        {
+            "name": "ms5611_spi4.c",
+            "intent": "context_only",
+            "reference_functions_needed": [
+                "AP_BoardConfig::check_ms5611"
+            ],
+            "details": "Context only. GDB shows ms5611_ext on SPI4 device=2, GPIOC14/signal_id=46 now passes and returns a valid MS5611 PROM. Preserve this behavior while fixing SPI4 CS routing."
+        },
+        {
+            "name": "gpiod.c",
+            "intent": "context_only",
+            "reference_functions_needed": [],
+            "details": "Reference only. Use as a GPIO model pattern for publishing output pin changes with api_signal_set()."
+        },
+        {
+            "name": "gpioc.c",
+            "intent": "update",
+            "reference_functions_needed": [],
+            "details": "Current gpioc.c is effectively a stub. Implement enough GPIOC register behavior to publish output level changes through api_signal_set() for all 16 pins, or at minimum PC14 and PC13. Use signal_id=(2*16)+pin_number, so GPIOC14 is signal_id=46 for SPI4 CS2/ms5611_ext and GPIOC13 is signal_id=45 for SPI4 CS4/icm20602_ext. Publish changes on ODR and BSRR writes, mirror output levels into IDR where appropriate, and preserve absolute address handling for GPIOC base 0x40020800."
+        },
+        {
+            "name": "spi4.c",
+            "intent": "update",
+            "reference_functions_needed": [
+                "AP_BoardConfig::check_ms5611",
+                "AP_BoardConfig::spi_check_register"
+            ],
+            "details": "Replace the current MOSI-byte heuristic/preferred_imu_cs logic with signal-driven CS routing. Register api_signal_register(46, ...) for GPIOC14 -> CS2/ms5611_ext and api_signal_register(45, ...) for GPIOC13 -> CS4/icm20602_ext. In callbacks call api_spi_set_cs(&state->bus, cs_id, level) with active-low semantics: level 0 selects and level 1 deselects. Initialize attached slaves inactive/high. Preserve SPI4 register behavior, absolute address handling, DMA2 stream4 TX handling, DMA2 stream3 RX data requests, and RX FIFO behavior. Do not require mpu9250_ext to pass in this phase; Alternative B uses icm20602_ext for IMU0."
+        }
+    ],
+    "create_new_models": [
+        {
+            "name": "icm20602_spi.c",
+            "category": "slave",
+            "bus_type": "SPI",
+            "mmio_range": null,
+            "attach_to_peripheral": "spi4",
+            "connection_id": "CS: device=4",
+            "reference_functions_needed": [
+                "AP_BoardConfig::spi_check_register",
+                "AP_InertialSensor_Invensense::probe",
+                "AP_InertialSensor_Invensense::_hardware_init",
+                "AP_InertialSensor_Invensense::_init"
+            ],
+            "details": "Create a SPI slave for icm20602_ext on SPI4 CS4. GDB shows the firmware reads WHOAMI with tx bytes f5 00, corresponding to register 0x75 with read_flag 0x80, and expects 0x12. Return 0x12 for that WHOAMI read and implement a small stateful register map for common Invensense initialization reads/writes rather than a one-off board-validation bypass. Ensure the generated TOML connection includes cs_id=4 as well as connection_id='CS: device=4'."
+        }
+    ],
+    "handled": true
+}
