@@ -22,6 +22,7 @@ from . import runtime_config
 from . import swarm as swarm_runner
 from . import timing
 from .fuzzer import fuzzer
+from .machine import VirtualInstruction
 from .utils import parse_config as parse_helper
 from fastdyn.binary.symmap import SymbolResolver
 from fastdyn.binary.symmap.providers.dwarf import DwarfProvider
@@ -210,6 +211,111 @@ def _resolve_probe_addresses(cache_dir, symbols_list):
     return addrs
 
 
+def _parse_symbol_address(value):
+    if isinstance(value, str):
+        addr = int(value, 16) if value.startswith("0x") else int(value)
+    else:
+        addr = int(value)
+    return addr & ~1
+
+
+def _find_thumb_return_hook_addr(binary_path, function_addr, max_scan_bytes=160):
+    from elftools.elf.elffile import ELFFile
+
+    binary_path = Path(binary_path)
+    with open(binary_path, "rb") as f:
+        elf = ELFFile(f)
+        for section in elf.iter_sections():
+            start = int(section["sh_addr"])
+            size = int(section["sh_size"])
+            if not (start <= function_addr < start + size):
+                continue
+
+            offset = function_addr - start
+            data = section.data()
+            scan_end = min(len(data), offset + max_scan_bytes)
+            for pos in range(offset, scan_end - 1, 2):
+                halfword = data[pos] | (data[pos + 1] << 8)
+                if halfword == 0x4770 or (halfword & 0xff00) == 0xbd00:
+                    return start + pos
+            return None
+    return None
+
+
+def _add_rtos_introspection_hooks(cpu, cache_dir):
+    identity_path = os.path.join(cache_dir, "rtos_identity.json")
+    symbols_path = os.path.join(cache_dir, "rtos_symbols.json")
+    if not os.path.exists(identity_path) or not os.path.exists(symbols_path):
+        raise click.ClickException(
+            "RTOS introspection requested but static cache is missing RTOS identity/symbol artifacts."
+        )
+
+    with open(identity_path, "r", encoding="utf-8") as f:
+        identity = json.load(f)
+    with open(symbols_path, "r", encoding="utf-8") as f:
+        symbols = json.load(f)
+
+    if not identity.get("available", False):
+        raise click.ClickException("RTOS introspection requested but static RTOS detection is unavailable.")
+
+    rtos_name = identity.get("rtos")
+    if rtos_name != "ChibiOS":
+        raise click.ClickException(f"RTOS introspection is not supported for detected RTOS: {rtos_name}")
+
+    hooks = []
+    addr_value = symbols.get("__port_switch")
+    if addr_value is not None:
+        hooks.append(
+            VirtualInstruction(
+                at=_parse_symbol_address(addr_value),
+                instruction="__port_switch_Hook",
+                args=[],
+            )
+        )
+
+    addr_value = symbols.get("__trace_switch")
+    if addr_value is not None:
+        hooks.append(
+            VirtualInstruction(
+                at=_parse_symbol_address(addr_value),
+                instruction="__trace_switch_Hook",
+                args=[],
+            )
+        )
+
+    addr_value = symbols.get("__thd_object_init")
+    if addr_value is not None:
+        function_addr = _parse_symbol_address(addr_value)
+        epilogue_addr = _find_thumb_return_hook_addr(_abs_repo_path(cpu.binary), function_addr)
+        if epilogue_addr is None:
+            log.warning("Unable to find __thd_object_init return site; skipping thread-init RTOS hook.")
+        else:
+            hooks.append(
+                VirtualInstruction(
+                    at=epilogue_addr,
+                    instruction="__thd_object_init_Hook",
+                    args=[],
+                )
+            )
+
+    required = {"__port_switch"}
+    missing = sorted(name for name in required if name not in symbols)
+    if missing:
+        raise click.ClickException(
+            "RTOS introspection requested but required ChibiOS hook symbols are missing: "
+            + ", ".join(missing)
+        )
+    if not hooks:
+        raise click.ClickException("RTOS introspection requested but no RTOS virtual hooks were generated.")
+    if not cpu.add_virtual_instruction(hooks):
+        raise click.ClickException("Failed to install RTOS introspection virtual hooks.")
+    log.info(
+        "Installed RTOS introspection hooks: %s",
+        ", ".join(f"{hook.instruction}@0x{hook.at:x}" for hook in hooks),
+    )
+    return hooks
+
+
 def _compile_model(sdk_dir):
     try:
         return compile_model(
@@ -359,7 +465,16 @@ void {p_name}_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) 
               help='Optional Flag to persist the existing work directory.')
 @click.option('--run-gdb/--no-run-gdb', default=None,
               help='Override TOML GDB settings for probe-run. --run-gdb enables GDB and stops on start; --no-run-gdb disables GDB.')
-def probe_run(config, work_dir, svd, persist_work_dir, run_gdb):
+@click.option('--rtos-introspect/--no-rtos-introspect', default=None,
+              help='Override RTOS introspection for this probe-run.')
+@click.option('--rtos-introspect-mode',
+              type=click.Choice(['summary', 'events', 'debug'], case_sensitive=False),
+              default='summary', show_default=True,
+              help='RTOS introspection detail when enabled.')
+@click.option('--rtos-introspection-max-events',
+              type=int, default=4096, show_default=True,
+              help='Maximum recent RTOS context switches retained in runtime summaries.')
+def probe_run(config, work_dir, svd, persist_work_dir, run_gdb, rtos_introspect, rtos_introspect_mode, rtos_introspection_max_events):
     work_dir = _prepare_work_dir(work_dir, persist_work_dir)
     svd_path = svd if svd is not None else "third_party/common/cmsis-svd-data"
 
@@ -395,6 +510,29 @@ def probe_run(config, work_dir, svd, persist_work_dir, run_gdb):
             machine.qemu_target_opts.probe_run = True
             machine.qemu_target_opts.probe_faults = os.path.join(cache_dir, "probe_faults.json")
             machine.qemu_target_opts.probe_out_dir = os.path.abspath(work_dir)
+
+            if rtos_introspect is not None:
+                machine.qemu_target_opts.rtos_introspection = (
+                    rtos_introspect_mode.lower() if rtos_introspect else "off"
+                )
+            if machine.qemu_target_opts.rtos_introspection not in (None, "", "off", "false", "0", "none"):
+                rtos_schema_meta = os.path.join(cache_dir, "rtos_schema.json")
+                rtos_schema_path = os.path.join(cache_dir, "rtos_schema.txt")
+                rtos_available = False
+                if os.path.exists(rtos_schema_meta):
+                    with open(rtos_schema_meta, "r", encoding="utf-8") as f:
+                        rtos_available = bool(json.load(f).get("available", False))
+                if not rtos_available or not os.path.exists(rtos_schema_path):
+                    raise click.ClickException(
+                        "RTOS introspection requested but static cache has no usable RTOS schema. "
+                        "Run `fastdyn static-analyze --force` for this config first."
+                    )
+                with open(rtos_schema_path, "r", encoding="utf-8") as f:
+                    machine.cpus[0].introspect_schema = f.read()
+                machine.cpus[0].introspect = True
+                _add_rtos_introspection_hooks(machine.cpus[0], cache_dir)
+                machine.qemu_target_opts.rtos_introspection_out = os.path.abspath(work_dir)
+                machine.qemu_target_opts.rtos_introspection_max_events = max(1, int(rtos_introspection_max_events))
 
             # Resolve milestones
             if machine.milestones:

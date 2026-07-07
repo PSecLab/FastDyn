@@ -258,6 +258,36 @@ static void dma2_service_tx_stream(DMA2State *s, unsigned stream_id) {
     }
 }
 
+static void dma2_stream4_request_handler(void *opaque) {
+    DMA2State *s = (DMA2State *)opaque;
+
+    if (s == NULL) {
+        return;
+    }
+
+    dma2_service_tx_stream(s, 4U);
+}
+
+static void dma2_stream5_request_handler(void *opaque) {
+    DMA2State *s = (DMA2State *)opaque;
+
+    if (s == NULL) {
+        return;
+    }
+
+    dma2_service_tx_stream(s, 5U);
+}
+
+static void dma2_stream7_request_handler(void *opaque) {
+    DMA2State *s = (DMA2State *)opaque;
+
+    if (s == NULL) {
+        return;
+    }
+
+    dma2_service_tx_stream(s, 7U);
+}
+
 static void dma2_stream1_data_handler(void *opaque, const uint8_t *data, int len) {
     DMA2State *s = (DMA2State *)opaque;
     int i;
@@ -316,7 +346,10 @@ void* dma2_init(ConfigSection* model_info) {
     api_dma_register_stream_data(2, 1, dma2_stream1_data_handler, &g_dma2);
     api_dma_register_stream_data(2, 2, dma2_stream2_data_handler, &g_dma2);
     api_dma_register_stream_data(2, 3, dma2_stream3_data_handler, &g_dma2);
-    dev_debug("dma2: stream1/2/3 RX and stream4/5/7 TX DMA paths ready\n");
+    api_dma_register_stream(2, 4, dma2_stream4_request_handler, &g_dma2);
+    api_dma_register_stream(2, 5, dma2_stream5_request_handler, &g_dma2);
+    api_dma_register_stream(2, 7, dma2_stream7_request_handler, &g_dma2);
+    dev_debug("dma2: stream1/2/3 RX payload and stream4/5/7 TX request handlers ready\n");
     return &g_dma2;
 }
 

@@ -1,6 +1,7 @@
 #include <probe.h>
 
 #include <core.h>
+#include <inspct.h>
 #include <inttypes.h>
 #include <qemu/qemu-plugin.h>
 #include <stdbool.h>
@@ -50,9 +51,15 @@ static uint64_t bbl_trace_pc[BBL_TRACE_SIZE];
 static uint32_t bbl_trace_count[BBL_TRACE_SIZE];
 static int bbl_idx = 0;
 
+static uint64_t total_bbl_executed = 0;
+static uint64_t unique_bbl_executed = 0;
+
+#define BBL_UNIQUE_SET_SIZE 262144
+static uint64_t bbl_unique_set[BBL_UNIQUE_SET_SIZE];
+
 static uint64_t instruction_count = 0;
 static uint64_t last_novel_instruction_count = 0;
-#define NO_NEW_COVERAGE_THRESHOLD 5000000
+#define NO_NEW_COVERAGE_THRESHOLD 50000000
 
 static uint64_t last_mmio_read_addr = 0;
 static uint64_t last_mmio_read_value = 0;
@@ -65,6 +72,28 @@ static bool probe_result_written = false;
 bool probe_is_enabled(void)
 {
     return probe_enabled;
+}
+
+static void probe_track_unique_bbl(uint64_t pc)
+{
+    uint64_t key = pc | 1ULL;
+    uint64_t mixed = key ^ (key >> 33);
+    mixed *= 0xff51afd7ed558ccdULL;
+    mixed ^= (mixed >> 33);
+
+    size_t idx = (size_t)(mixed & (BBL_UNIQUE_SET_SIZE - 1));
+    for (size_t i = 0; i < BBL_UNIQUE_SET_SIZE; i++) {
+        uint64_t existing = bbl_unique_set[idx];
+        if (existing == key) {
+            return;
+        }
+        if (existing == 0) {
+            bbl_unique_set[idx] = key;
+            unique_bbl_executed++;
+            return;
+        }
+        idx = (idx + 1) & (BBL_UNIQUE_SET_SIZE - 1);
+    }
 }
 
 static char *probe_read_entire_file(const char *filename)
@@ -139,14 +168,40 @@ static void probe_write_result(const char *reason, uint64_t pc, uint64_t extra_i
             fprintf(f, "  },\n");
         }
 
-        fprintf(f, "  \"bbl_trace\": [\n");
-        int count = (bbl_idx < BBL_TRACE_SIZE) ? bbl_idx : BBL_TRACE_SIZE;
+        if (inspct_write_probe_json(f, "  ")) {
+            fprintf(f, ",\n");
+        }
+
+        int retained_bbl_trace_entries = (bbl_idx < BBL_TRACE_SIZE) ? bbl_idx : BBL_TRACE_SIZE;
+        uint64_t retained_bbl_trace_executed = 0;
+        int retained_bbl_trace_unique = 0;
         int start = (bbl_idx < BBL_TRACE_SIZE) ? 0 : (bbl_idx % BBL_TRACE_SIZE);
-        for (int i = 0; i < count; i++) {
+        for (int i = 0; i < retained_bbl_trace_entries; i++) {
+            int idx = (start + i) % BBL_TRACE_SIZE;
+            retained_bbl_trace_executed += bbl_trace_count[idx];
+            bool seen = false;
+            for (int j = 0; j < i; j++) {
+                if (bbl_trace_pc[idx] == bbl_trace_pc[(start + j) % BBL_TRACE_SIZE]) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                retained_bbl_trace_unique++;
+            }
+        }
+
+        fprintf(f, "  \"total_bbl_executed\": %" PRIu64 ",\n", total_bbl_executed);
+        fprintf(f, "  \"unique_bbl_executed\": %" PRIu64 ",\n", unique_bbl_executed);
+        fprintf(f, "  \"retained_bbl_trace_entries\": %d,\n", retained_bbl_trace_entries);
+        fprintf(f, "  \"retained_bbl_trace_executed\": %" PRIu64 ",\n", retained_bbl_trace_executed);
+        fprintf(f, "  \"retained_bbl_trace_unique\": %d,\n", retained_bbl_trace_unique);
+        fprintf(f, "  \"bbl_trace\": [\n");
+        for (int i = 0; i < retained_bbl_trace_entries; i++) {
             fprintf(f, "    {\"pc\": \"0x%08" PRIx64 "\", \"count\": %u}%s\n",
                     bbl_trace_pc[(start + i) % BBL_TRACE_SIZE],
                     bbl_trace_count[(start + i) % BBL_TRACE_SIZE],
-                    (i == count - 1) ? "" : ",");
+                    (i == retained_bbl_trace_entries - 1) ? "" : ",");
         }
         fprintf(f, "  ]\n");
         fprintf(f, "}\n");
@@ -173,6 +228,9 @@ static void probe_vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
 {
     (void)vcpu_index;
     uint64_t pc = (uint64_t)userdata;
+
+    total_bbl_executed++;
+    probe_track_unique_bbl(pc);
 
     if (bbl_idx > 0) {
         int last_idx = (bbl_idx - 1) % BBL_TRACE_SIZE;

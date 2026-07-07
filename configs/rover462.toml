@@ -54,6 +54,7 @@ launch_gdb = false
 monitor_port = 5555
 qmp_socket = "/tmp/qmp.sock"
 log_file = "qemu.log"
+icount = { shift = 5, sleep = false, align = false }
 log_options = "in_asm,op"
 semihosting = true
 semihosting_config = "enable=on,target=native"
@@ -732,6 +733,34 @@ logger_content = """
         enabled = true
         scroll = "boardrunner/boardrunner_sdk/build/tim2.so"
     [[Device.tim2.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.iwdg]
+    ranges = [["0x40003000", "0x40003400"]]
+    irq = [[1, 150]]
+    description = "IWDG"
+    read_priority = "elder"
+    [[Device.iwdg.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/iwdg.so"
+    [[Device.iwdg.connections]]
+        type    = "endpoint"
+        name    = "gazebo"
+        enabled = false
+
+[Device.rtc]
+    ranges = [["0x40002800", "0x40002c00"]]
+    irq = [[1, 150]]
+    description = "RTC"
+    read_priority = "elder"
+    [[Device.rtc.handlers]]
+        model   = "elder"
+        enabled = true
+        scroll = "boardrunner/boardrunner_sdk/build/rtc.so"
+    [[Device.rtc.connections]]
         type    = "endpoint"
         name    = "gazebo"
         enabled = false

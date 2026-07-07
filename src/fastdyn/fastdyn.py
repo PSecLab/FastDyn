@@ -121,6 +121,9 @@ class QemuTargetOpts:
         self.probe_milestones: Optional[str] = None
         self.probe_ignores: Optional[str] = None
         self.probe_out_dir: Optional[str] = None
+        self.rtos_introspection: str = "off"
+        self.rtos_introspection_out: Optional[str] = None
+        self.rtos_introspection_max_events: int = 4096
         self.print_command = False
         self.agentic_fuzz: bool = False
         self.agentic_fuzz_python: Optional[str] = None

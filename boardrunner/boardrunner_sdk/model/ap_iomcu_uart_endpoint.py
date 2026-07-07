@@ -113,7 +113,7 @@ def packet_crc_ok(frame):
     return True
 
 
-def build_reply(page, offset, regs):
+def build_read_reply(page, offset, regs):
     count = len(regs)
     reply = bytearray(4 + count * 2)
     reply[0] = make_count_code(CODE_SUCCESS, count)
@@ -122,6 +122,16 @@ def build_reply(page, offset, regs):
     reply[3] = offset & 0xFF
     if count:
         struct.pack_into("<%dH" % count, reply, 4, *regs)
+    reply[1] = crc_crc8(reply)
+    return reply
+
+
+def build_write_ack(page, offset):
+    reply = bytearray(4)
+    reply[0] = make_count_code(CODE_SUCCESS, 0)
+    reply[1] = 0
+    reply[2] = page & 0xFF
+    reply[3] = offset & 0xFF
     reply[1] = crc_crc8(reply)
     return reply
 
@@ -244,9 +254,9 @@ class MockIOMCU:
         ]
         self.bootstrap_index += 1
         print(f"[IOMCU Mock] Received Read Request for PAGE {page} (Offset {offset}, Count {count})", flush=True)
-        if page == 2:  # PAGE_SETUP
+        if page == PAGE_SETUP:
             print("[IOMCU Mock] SUCCESS: The firmware advanced past the initialization timeout and requested PAGE_SETUP!", flush=True)
-        return build_reply(page, offset, self.read_regs(page, offset, count))
+        return build_read_reply(page, offset, self.read_regs(page, offset, count))
 
     def bootstrap_burst(self, repeats=1):
         burst = bytearray()
@@ -316,16 +326,16 @@ def handle_frame(iomcu, frame):
     offset = frame[3]
 
     if code == CODE_READ:
-        return build_reply(page, offset, iomcu.read_regs(page, offset, count))
+        return build_read_reply(page, offset, iomcu.read_regs(page, offset, count))
 
     if code == CODE_WRITE:
         values = []
         if count:
             values = list(struct.unpack("<%dH" % count, frame[4:4 + count * 2]))
         iomcu.write_regs(page, offset, values)
-        return build_reply(page, offset, iomcu.read_regs(page, offset, count))
+        return build_write_ack(page, offset)
 
-    return build_reply(page, offset, [0] * count)
+    return build_read_reply(page, offset, [0] * count)
 
 
 def flush_pending(fd, pending):
@@ -441,7 +451,7 @@ def main():
                 saw_valid_request = True
                 if code == CODE_READ:
                     print(f"[IOMCU Mock] Received Read Request: PAGE {page}, OFFSET {offset}", flush=True)
-                    if page == 2:
+                    if page == PAGE_SETUP:
                         print("[IOMCU Mock] SUCCESS: Firmware requested PAGE_SETUP! Initialization succeeded!", flush=True)
 
                 # Once the guest starts actively talking to us, prioritize

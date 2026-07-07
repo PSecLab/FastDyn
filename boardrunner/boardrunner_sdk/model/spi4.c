@@ -25,6 +25,7 @@
 
 #define SPI4_DR_ADDR          (SPI4_BASE + SPI4_DR_OFF)
 #define SPI4_RX_FIFO_SIZE     64
+#define SPI4_DMA_BURST_SIZE   8
 
 #define SPI4_CS_ICM20948_EXT  1
 #define SPI4_CS_MS5611_EXT    2
@@ -176,6 +177,9 @@ static void spi4_maybe_request_tx_dma(SPI4State *s) {
     if ((s->cr2 & SPI_CR2_TXDMAEN) == 0U) {
         return;
     }
+    if (s->selected_actual_cs_id < 0) {
+        return;
+    }
 
     api_dma_request(2, DMA2_STREAM_SPI4_TX);
 }
@@ -259,6 +263,33 @@ static void spi4_cs_signal(void *opaque, int signal_id, bool level) {
     }
 }
 
+static void spi4_route_rx_data(SPI4State *s, const uint8_t *rx_data, int len) {
+    int pos = 0;
+    int chunk;
+
+    if (s == NULL || rx_data == NULL || len <= 0) {
+        return;
+    }
+
+    if ((s->cr2 & SPI_CR2_RXDMAEN) != 0U) {
+        while (pos < len) {
+            chunk = len - pos;
+            if (chunk > SPI4_DMA_BURST_SIZE) {
+                chunk = SPI4_DMA_BURST_SIZE;
+            }
+            if (api_dma_request_data(2, DMA2_STREAM_SPI4_RX, SPI4_DR_ADDR, &rx_data[pos], chunk) < 0) {
+                break;
+            }
+            pos += chunk;
+        }
+    }
+
+    while (pos < len) {
+        spi4_rx_push(s, rx_data[pos]);
+        pos++;
+    }
+}
+
 static uint8_t spi4_transfer_byte(SPI4State *s, uint8_t tx) {
     uint8_t rx = 0xFFU;
 
@@ -266,20 +297,16 @@ static uint8_t spi4_transfer_byte(SPI4State *s, uint8_t tx) {
         rx = api_spi_transfer_byte(&s->bus, tx);
     }
 
-    if ((s->cr2 & SPI_CR2_RXDMAEN) != 0U) {
-        if (api_dma_request_data(2, DMA2_STREAM_SPI4_RX, SPI4_DR_ADDR, &rx, 1) < 0) {
-            spi4_rx_push(s, rx);
-        }
-    } else {
-        spi4_rx_push(s, rx);
-    }
-
+    spi4_route_rx_data(s, &rx, 1);
     return rx;
 }
 
 static void spi4_dma_tx_handler(void *opaque, const uint8_t *data, int len) {
     SPI4State *s = (SPI4State *)opaque;
-    int i;
+    uint8_t rxbuf[SPI4_DMA_BURST_SIZE];
+    int pos;
+    int chunk;
+    int transferred;
 
     if (s == NULL) {
         s = &g_spi4;
@@ -291,8 +318,26 @@ static void spi4_dma_tx_handler(void *opaque, const uint8_t *data, int len) {
         return;
     }
 
-    for (i = 0; i < len; i++) {
-        spi4_transfer_byte(s, data[i]);
+    pos = 0;
+    while (pos < len) {
+        chunk = len - pos;
+        if (chunk > SPI4_DMA_BURST_SIZE) {
+            chunk = SPI4_DMA_BURST_SIZE;
+        }
+
+        memset(rxbuf, 0xFF, (size_t)chunk);
+        if (s->selected_actual_cs_id >= 0) {
+            transferred = api_spi_transfer_buf(&s->bus, &data[pos], rxbuf, (size_t)chunk);
+            if (transferred < 0) {
+                transferred = 0;
+            }
+            if (transferred < chunk) {
+                memset(&rxbuf[transferred], 0xFF, (size_t)(chunk - transferred));
+            }
+        }
+
+        spi4_route_rx_data(s, rxbuf, chunk);
+        pos += chunk;
     }
 }
 

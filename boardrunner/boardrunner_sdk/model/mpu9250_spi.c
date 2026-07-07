@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <device.h>
+#include <boardrunner/imu_sample.h>
 #include <boardrunner/vio.h>
 #include <boardrunner/spi.h>
 
@@ -54,37 +55,18 @@ static void mpu9250_store_be16(uint8_t *dst, int16_t v) {
 }
 
 static void mpu9250_update_sample(MPU9250State *s) {
-    int16_t ax;
-    int16_t ay;
-    int16_t az;
-    int16_t temp;
-    int16_t gx;
-    int16_t gy;
-    int16_t gz;
+    BoardrunnerImuSample sample;
 
     s->sample_counter++;
+    boardrunner_imu_get_sample("mpu9250", &sample);
 
-    /*
-     * Keep the emulated sensor nearly perfectly stationary so ArduPilot's
-     * startup gyro/INS calibration converges quickly and consistently.
-     * The register snapshot and FIFO payload are both sourced from this
-     * single coherent sample image.
-     */
-    ax = 0;
-    ay = 0;
-    az = 16384;
-    temp = 340;
-    gx = 0;
-    gy = 0;
-    gz = 0;
-
-    mpu9250_store_be16(&s->regs[MPU9250_REG_ACCEL_XOUT_H + 0], ax);
-    mpu9250_store_be16(&s->regs[MPU9250_REG_ACCEL_XOUT_H + 2], ay);
-    mpu9250_store_be16(&s->regs[MPU9250_REG_ACCEL_XOUT_H + 4], az);
-    mpu9250_store_be16(&s->regs[MPU9250_REG_TEMP_OUT_H], temp);
-    mpu9250_store_be16(&s->regs[MPU9250_REG_GYRO_XOUT_H + 0], gx);
-    mpu9250_store_be16(&s->regs[MPU9250_REG_GYRO_XOUT_H + 2], gy);
-    mpu9250_store_be16(&s->regs[MPU9250_REG_GYRO_XOUT_H + 4], gz);
+    mpu9250_store_be16(&s->regs[MPU9250_REG_ACCEL_XOUT_H + 0], sample.ax_lsb);
+    mpu9250_store_be16(&s->regs[MPU9250_REG_ACCEL_XOUT_H + 2], sample.ay_lsb);
+    mpu9250_store_be16(&s->regs[MPU9250_REG_ACCEL_XOUT_H + 4], sample.az_lsb);
+    mpu9250_store_be16(&s->regs[MPU9250_REG_TEMP_OUT_H], sample.temp_lsb);
+    mpu9250_store_be16(&s->regs[MPU9250_REG_GYRO_XOUT_H + 0], sample.gx_lsb);
+    mpu9250_store_be16(&s->regs[MPU9250_REG_GYRO_XOUT_H + 2], sample.gy_lsb);
+    mpu9250_store_be16(&s->regs[MPU9250_REG_GYRO_XOUT_H + 4], sample.gz_lsb);
 
     memcpy(s->fifo_sample, &s->regs[MPU9250_REG_ACCEL_XOUT_H], sizeof(s->fifo_sample));
 }

@@ -140,6 +140,83 @@ def _build_execution_trace_block(exec_trace: ExecTraceContext) -> list[str]:
     return parts
 
 
+def _format_rtos_thread(thread: Any) -> str:
+    if not isinstance(thread, dict):
+        return "unavailable"
+    name = thread.get("name") or "(unnamed)"
+    addr = thread.get("addr") or "unknown"
+    priority = thread.get("priority", "?")
+    state = thread.get("state", "?")
+    scheduled_count = thread.get("scheduled_count")
+    suffix = ""
+    if scheduled_count is not None:
+        suffix = f", scheduled={scheduled_count}"
+    return f"{name} addr={addr} prio={priority} state={state}{suffix}"
+
+
+def _build_rtos_context_block(context: TraceAnalysisContext) -> list[str]:
+    parts: list[str] = []
+    probe_rtos = context.run_artifacts.probe_result.get("rtos")
+    if not isinstance(probe_rtos, dict):
+        probe_rtos = {}
+    summary_rtos = context.run_artifacts.rtos_summary or {}
+    identity = context.static_artifacts.rtos_identity or {}
+    schema = context.static_artifacts.rtos_schema or {}
+
+    if not probe_rtos and not summary_rtos and not identity.get("available"):
+        return parts
+
+    runtime = summary_rtos if summary_rtos else probe_rtos
+    parts.append("## RTOS Introspection Context")
+
+    rtos_name = runtime.get("name") or identity.get("rtos") or "unknown"
+    available = identity.get("available")
+    parts.append(f"**Detected RTOS:** {rtos_name}")
+    if available is not None:
+        parts.append(f"**Static Introspection Available:** {available}")
+    if schema.get("schema_path"):
+        parts.append(f"**Schema Artifact:** `{schema.get('schema_path')}`")
+
+    if runtime:
+        parts.append(f"**Runtime Mode:** {runtime.get('mode', 'unknown')}")
+        parts.append(f"**Context Switches Observed:** {runtime.get('switch_count', 0)}")
+        parts.append(f"**Stored Recent Switches:** {runtime.get('stored_switch_count', 0)}")
+        parts.append(f"**Current Thread:** {_format_rtos_thread(runtime.get('current_thread'))}")
+
+        if context.run_artifacts.rtos_summary_path:
+            parts.append(f"**RTOS Summary File:** `{context.run_artifacts.rtos_summary_path}`")
+        recent_path = context.run_artifacts.rtos_recent_switches_path
+        if recent_path:
+            parts.append(f"**Recent Switch Log:** `{recent_path}`")
+
+        threads = runtime.get("threads")
+        if isinstance(threads, list) and threads:
+            sorted_threads = sorted(
+                [t for t in threads if isinstance(t, dict)],
+                key=lambda item: int(item.get("scheduled_count") or 0),
+                reverse=True,
+            )
+            parts.append("### Top Known Threads")
+            for thread in sorted_threads[:8]:
+                parts.append(f"- {_format_rtos_thread(thread)}")
+
+        recent = runtime.get("recent_switches")
+        if isinstance(recent, list) and recent:
+            parts.append("### Recent Context Switches")
+            for event in recent[-8:]:
+                if not isinstance(event, dict):
+                    continue
+                out_thread = _format_rtos_thread(event.get("out"))
+                in_thread = _format_rtos_thread(event.get("in"))
+                parts.append(
+                    f"- seq={event.get('seq', '?')} icount={event.get('icount', '?')}: "
+                    f"{out_thread} -> {in_thread}"
+                )
+
+    parts.append("")
+    return parts
+
+
 def _build_source_block(source_contexts: list[SourceContext]) -> list[str]:
     parts: list[str] = []
     parts.append("## Source Code Context\n")
@@ -431,6 +508,9 @@ def _build_known_peripheral_prompt(
     parts.append(f"**Final Function:** {exec_trace.final_function or exec_trace.final_pc}")
     parts.append("")
 
+    # RTOS context
+    parts.extend(_build_rtos_context_block(context))
+
     # IO trace
     parts.extend(_build_io_trace_block(io_trace))
     parts.extend(_build_memory_trace_block(context, io_trace))
@@ -550,6 +630,9 @@ def _build_implementation_prompt(
     parts.append(f"**Final Function:** {exec_trace.final_function or exec_trace.final_pc}")
     parts.append("")
 
+    # RTOS context
+    parts.extend(_build_rtos_context_block(context))
+
     # IO trace
     parts.extend(_build_io_trace_block(io_trace))
     parts.extend(_build_memory_trace_block(context, io_trace))
@@ -662,6 +745,9 @@ def _build_unknown_peripheral_prompt(
         "on *why* it stopped — the MMIO trace and execution path below provide the evidence."
     )
     parts.append("")
+
+    # RTOS context
+    parts.extend(_build_rtos_context_block(context))
 
     # IO trace
     parts.extend(_build_io_trace_block(io_trace))

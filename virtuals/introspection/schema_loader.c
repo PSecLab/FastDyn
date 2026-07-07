@@ -47,6 +47,7 @@ size_t g_num_symbols = 0;
 /* The Runtime Schema Loader                                              */
 /* ========================================================================= */
 bool load_fastdyn_schemas(const char* filepath) {
+    if (!filepath || filepath[0] == '\0') return false;
     FILE* file = fopen(filepath, "r");
     if (!file) return false;
 

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <device.h>
+#include <boardrunner/imu_sample.h>
 #include <boardrunner/vio.h>
 #include <boardrunner/spi.h>
 
@@ -55,31 +56,18 @@ static void icm20948_store_be16(uint8_t *dst, int16_t v) {
 }
 
 static void icm20948_update_sample(ICM20948State *s) {
-    int16_t ax;
-    int16_t ay;
-    int16_t az;
-    int16_t temp;
-    int16_t gx;
-    int16_t gy;
-    int16_t gz;
+    BoardrunnerImuSample sample;
 
     s->sample_counter++;
+    boardrunner_imu_get_sample("icm20948", &sample);
 
-    ax = 0;
-    ay = 0;
-    az = 16384;
-    temp = 300;
-    gx = 0;
-    gy = 0;
-    gz = 0;
-
-    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_ACCEL_XOUT_H + 0], ax);
-    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_ACCEL_XOUT_H + 2], ay);
-    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_ACCEL_XOUT_H + 4], az);
-    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_TEMP_OUT_H], temp);
-    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_GYRO_XOUT_H + 0], gx);
-    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_GYRO_XOUT_H + 2], gy);
-    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_GYRO_XOUT_H + 4], gz);
+    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_ACCEL_XOUT_H + 0], sample.ax_lsb);
+    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_ACCEL_XOUT_H + 2], sample.ay_lsb);
+    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_ACCEL_XOUT_H + 4], sample.az_lsb);
+    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_TEMP_OUT_H], sample.temp_lsb);
+    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_GYRO_XOUT_H + 0], sample.gx_lsb);
+    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_GYRO_XOUT_H + 2], sample.gy_lsb);
+    icm20948_store_be16(&s->regs[0][ICM20948_BANK0_GYRO_XOUT_H + 4], sample.gz_lsb);
 
     memcpy(s->fifo_sample,
            &s->regs[0][ICM20948_BANK0_ACCEL_XOUT_H],

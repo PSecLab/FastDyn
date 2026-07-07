@@ -161,6 +161,18 @@ def _load_run_artifacts(*, request: TraceAnalyzeRequest, run_dir: Path, work_dir
         run_dir / "virtuals",
         work_dir / "virtuals",
     ])
+    rtos_summary_path = first_existing_path([
+        run_dir / "rtos_summary.json",
+        work_dir / "rtos_summary.json",
+    ])
+    rtos_recent_switches_path = first_existing_path([
+        run_dir / "rtos_recent_switches.jsonl",
+        work_dir / "rtos_recent_switches.jsonl",
+    ])
+    rtos_summary = {}
+    if rtos_summary_path is not None:
+        loaded_rtos_summary = load_optional_json(rtos_summary_path) or {}
+        rtos_summary = _expect_dict(loaded_rtos_summary, "RTOS summary")
 
     return RunArtifacts(
         run_id=run_id,
@@ -171,8 +183,11 @@ def _load_run_artifacts(*, request: TraceAnalyzeRequest, run_dir: Path, work_dir
         qemu_log_path=qemu_log_path,
         dev_config_path=dev_config_path,
         virtuals_dir=virtuals_dir,
+        rtos_summary_path=rtos_summary_path,
+        rtos_recent_switches_path=rtos_recent_switches_path,
         probe_result=probe_result,
         manifest=manifest,
+        rtos_summary=rtos_summary,
     )
 
 
@@ -263,6 +278,12 @@ def _load_static_artifacts(
     macros_index_path = cache_dir / "macros" / "index.json"
     macro_context = load_optional_json(macro_context_path) or {}
     macros_index = load_optional_json(macros_index_path) or {}
+    rtos_identity_path = cache_dir / "rtos_identity.json"
+    rtos_symbols_path = cache_dir / "rtos_symbols.json"
+    rtos_schema_meta_path = cache_dir / "rtos_schema.json"
+    rtos_identity = load_optional_json(rtos_identity_path) or {}
+    rtos_symbols = load_optional_json(rtos_symbols_path) or {}
+    rtos_schema = load_optional_json(rtos_schema_meta_path) or {}
 
     return StaticArtifacts(
         cache_dir=cache_dir,
@@ -274,6 +295,9 @@ def _load_static_artifacts(
         svd_map_path=svd_map_path,
         macro_context_path=macro_context_path if macro_context_path.exists() else None,
         macros_index_path=macros_index_path if macros_index_path.exists() else None,
+        rtos_identity_path=rtos_identity_path if rtos_identity_path.exists() else None,
+        rtos_symbols_path=rtos_symbols_path if rtos_symbols_path.exists() else None,
+        rtos_schema_meta_path=rtos_schema_meta_path if rtos_schema_meta_path.exists() else None,
         symbols=_load_list(symbols_path, "symbols"),
         functions=_load_list(functions_path, "functions"),
         source_map=_load_list(source_map_path, "source map"),
@@ -282,6 +306,9 @@ def _load_static_artifacts(
         svd_map=_load_dict(svd_map_path, "SVD map"),
         macro_context=_expect_dict(macro_context, "macro context"),
         macros_index=_expect_dict(macros_index, "macros index"),
+        rtos_identity=_expect_dict(rtos_identity, "RTOS identity"),
+        rtos_symbols=_expect_dict(rtos_symbols, "RTOS symbols"),
+        rtos_schema=_expect_dict(rtos_schema, "RTOS schema"),
     ), machine, svd_device
 
 

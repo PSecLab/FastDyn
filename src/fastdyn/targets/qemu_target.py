@@ -591,6 +591,17 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     if opts.probe_out_dir:
         plugin_kv.append(f"probe_out_dir={opts.probe_out_dir}")
 
+    rtos_introspection = str(
+        getattr(opts, "rtos_introspection", "off") or "off"
+    ).strip().lower()
+    if rtos_introspection not in ("off", "false", "0", "none"):
+        plugin_kv.append(f"rtos_introspection={rtos_introspection}")
+        rtos_out = getattr(opts, "rtos_introspection_out", None) or out_path
+        plugin_kv.append(f"rtos_introspection_out={rtos_out}")
+        plugin_kv.append(
+            f"rtos_introspection_max_events={int(getattr(opts, 'rtos_introspection_max_events', 4096) or 4096)}"
+        )
+
     timer_irq_period_ns = os.environ.get(
         "FASTDYN_TIMER_IRQ_PERIOD_NS",
         getattr(opts, "timer_irq_period_ns", None),

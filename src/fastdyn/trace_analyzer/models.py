@@ -57,8 +57,11 @@ class RunArtifacts(SerializableModel):
     qemu_log_path: Path | None = None
     dev_config_path: Path | None = None
     virtuals_dir: Path | None = None
+    rtos_summary_path: Path | None = None
+    rtos_recent_switches_path: Path | None = None
     probe_result: dict[str, Any] = field(default_factory=dict)
     manifest: dict[str, Any] = field(default_factory=dict)
+    rtos_summary: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -72,6 +75,9 @@ class StaticArtifacts(SerializableModel):
     svd_map_path: Path
     macro_context_path: Path | None = None
     macros_index_path: Path | None = None
+    rtos_identity_path: Path | None = None
+    rtos_symbols_path: Path | None = None
+    rtos_schema_meta_path: Path | None = None
     symbols: list[dict[str, Any]] = field(default_factory=list)
     functions: list[dict[str, Any]] = field(default_factory=list)
     source_map: list[dict[str, Any]] = field(default_factory=list)
@@ -80,6 +86,9 @@ class StaticArtifacts(SerializableModel):
     svd_map: dict[str, Any] = field(default_factory=dict)
     macro_context: dict[str, Any] = field(default_factory=dict)
     macros_index: dict[str, Any] = field(default_factory=dict)
+    rtos_identity: dict[str, Any] = field(default_factory=dict)
+    rtos_symbols: dict[str, Any] = field(default_factory=dict)
+    rtos_schema: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

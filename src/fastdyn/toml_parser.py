@@ -167,6 +167,13 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
     q.finline            = toml_parser.machine_info.get("finline", None)
     q.print_command       = toml_parser.machine_info.get("print_command", False)
     q.reset_memory_files  = toml_parser.machine_info.get("reset_memory_files", False)
+    q.rtos_introspection = str(
+        toml_parser.machine_info.get("rtos_introspection", "off")
+    ).strip().lower()
+    q.rtos_introspection_out = toml_parser.machine_info.get("rtos_introspection_out", None)
+    q.rtos_introspection_max_events = int(
+        toml_parser.machine_info.get("rtos_introspection_max_events", 4096)
+    )
 
     machine0.ignore_functions = toml_parser.machine_info.get("ignore_functions", [])
     machine0.milestones = toml_parser.machine_info.get("milestones", [])

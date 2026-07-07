@@ -25,6 +25,7 @@
 
 #define SPI1_DR_ADDR            (SPI1_BASE + SPI1_DR_OFF)
 #define SPI1_RX_FIFO_SIZE       64
+#define SPI1_DMA_BURST_SIZE     8
 
 #define SPI1_CS_PD7_SIGNAL_ID   55
 #define SPI1_CS_PC2_SIGNAL_ID   34
@@ -37,8 +38,8 @@
 
 typedef struct {
     SPIBus bus;
-    uint16_t cr1;
-    uint16_t cr2;
+    uint32_t cr1;
+    uint32_t cr2;
     uint8_t rx_fifo[SPI1_RX_FIFO_SIZE];
     unsigned rx_head;
     unsigned rx_tail;
@@ -51,6 +52,38 @@ typedef struct {
 } SPI1State;
 
 static SPI1State g_spi1;
+
+static uint32_t spi1_mask_for_size(unsigned size) {
+    switch (size) {
+    case 1:
+        return 0xFFU;
+    case 2:
+        return 0xFFFFU;
+    default:
+        return 0xFFFFFFFFU;
+    }
+}
+
+static uint32_t spi1_extract_reg32(uint32_t reg, uint64_t suboff, unsigned size) {
+    uint32_t mask = spi1_mask_for_size(size);
+    unsigned shift = (unsigned)(suboff * 8U);
+
+    if (size >= 4) {
+        return reg;
+    }
+    return (reg >> shift) & mask;
+}
+
+static uint32_t spi1_merge_reg32(uint32_t oldv, uint64_t suboff, uint64_t value, unsigned size) {
+    uint32_t mask = spi1_mask_for_size(size);
+    unsigned shift = (unsigned)(suboff * 8U);
+    uint32_t fullmask = (size >= 4) ? 0xFFFFFFFFU : (mask << shift);
+
+    if (size >= 4) {
+        return (uint32_t)value;
+    }
+    return (oldv & ~fullmask) | ((((uint32_t)value) & mask) << shift);
+}
 
 static bool spi1_rx_push(SPI1State *s, uint8_t v) {
     if (s->rx_count >= SPI1_RX_FIFO_SIZE) {
@@ -178,6 +211,25 @@ static void spi1_select_if_needed(SPI1State *s) {
     }
 }
 
+static void spi1_maybe_request_tx_dma(SPI1State *s) {
+    if (s == NULL) {
+        return;
+    }
+    if ((s->cr1 & SPI_CR1_SPE) == 0U) {
+        return;
+    }
+    if ((s->cr2 & SPI_CR2_TXDMAEN) == 0U) {
+        return;
+    }
+
+    spi1_select_if_needed(s);
+    if (!s->cs_selected || s->selected_cs_id < 0) {
+        return;
+    }
+
+    api_dma_request(2, DMA2_STREAM_SPI1_TX);
+}
+
 static void spi1_cs_signal(void *opaque, int signal_id, bool level) {
     SPI1State *s = (SPI1State *)opaque;
     int cs_id;
@@ -195,6 +247,7 @@ static void spi1_cs_signal(void *opaque, int signal_id, bool level) {
         spi1_select_cs(s, cs_id);
         s->fallback_selected = false;
         s->explicit_cs_active = true;
+        spi1_maybe_request_tx_dma(s);
         return;
     }
 
@@ -204,6 +257,33 @@ static void spi1_cs_signal(void *opaque, int signal_id, bool level) {
         s->cs_selected = false;
         s->fallback_selected = false;
         s->explicit_cs_active = false;
+    }
+}
+
+static void spi1_route_rx_data(SPI1State *s, const uint8_t *rx_data, int len) {
+    int pos = 0;
+    int chunk;
+
+    if (s == NULL || rx_data == NULL || len <= 0) {
+        return;
+    }
+
+    if ((s->cr2 & SPI_CR2_RXDMAEN) != 0U) {
+        while (pos < len) {
+            chunk = len - pos;
+            if (chunk > SPI1_DMA_BURST_SIZE) {
+                chunk = SPI1_DMA_BURST_SIZE;
+            }
+            if (api_dma_request_data(2, DMA2_STREAM_SPI1_RX, SPI1_DR_ADDR, &rx_data[pos], chunk) < 0) {
+                break;
+            }
+            pos += chunk;
+        }
+    }
+
+    while (pos < len) {
+        spi1_rx_push(s, rx_data[pos]);
+        pos++;
     }
 }
 
@@ -219,20 +299,16 @@ static uint8_t spi1_transfer_byte(SPI1State *s, uint8_t tx) {
         rx = api_spi_transfer_byte(&s->bus, tx);
     }
 
-    if ((s->cr2 & SPI_CR2_RXDMAEN) != 0U) {
-        if (api_dma_request_data(2, DMA2_STREAM_SPI1_RX, SPI1_DR_ADDR, &rx, 1) < 0) {
-            spi1_rx_push(s, rx);
-        }
-    } else {
-        spi1_rx_push(s, rx);
-    }
-
+    spi1_route_rx_data(s, &rx, 1);
     return rx;
 }
 
 static void spi1_dma_tx_handler(void *opaque, const uint8_t *data, int len) {
     SPI1State *s = (SPI1State *)opaque;
-    int i;
+    uint8_t rxbuf[SPI1_DMA_BURST_SIZE];
+    int pos;
+    int chunk;
+    int transferred;
 
     if (s == NULL) {
         s = &g_spi1;
@@ -240,13 +316,32 @@ static void spi1_dma_tx_handler(void *opaque, const uint8_t *data, int len) {
     if (data == NULL || len <= 0) {
         return;
     }
-
     if ((s->cr1 & SPI_CR1_SPE) == 0U) {
         return;
     }
 
-    for (i = 0; i < len; i++) {
-        spi1_transfer_byte(s, data[i]);
+    spi1_select_if_needed(s);
+
+    pos = 0;
+    while (pos < len) {
+        chunk = len - pos;
+        if (chunk > SPI1_DMA_BURST_SIZE) {
+            chunk = SPI1_DMA_BURST_SIZE;
+        }
+
+        memset(rxbuf, 0xFF, (size_t)chunk);
+        if (s->cs_selected) {
+            transferred = api_spi_transfer_buf(&s->bus, &data[pos], rxbuf, (size_t)chunk);
+            if (transferred < 0) {
+                transferred = 0;
+            }
+            if (transferred < chunk) {
+                memset(&rxbuf[transferred], 0xFF, (size_t)(chunk - transferred));
+            }
+        }
+
+        spi1_route_rx_data(s, rxbuf, chunk);
+        pos += chunk;
     }
 }
 
@@ -274,27 +369,27 @@ uint64_t spi1_read(void *opaque, uint64_t addr, unsigned size) {
     SPI1State *s = (SPI1State *)opaque;
     uint64_t offset = addr - SPI1_BASE;
     uint8_t rx = 0xFFU;
+    uint32_t sr;
 
     if (s == NULL) {
         s = &g_spi1;
     }
 
-    (void)size;
-
-    switch (offset) {
+    switch (offset & ~0x3ULL) {
     case SPI1_CR1_OFF:
-        return s->cr1;
+        return spi1_extract_reg32(s->cr1, offset - SPI1_CR1_OFF, size);
     case SPI1_CR2_OFF:
-        return s->cr2;
+        return spi1_extract_reg32(s->cr2, offset - SPI1_CR2_OFF, size);
     case SPI1_SR_OFF:
-        return SPI_SR_TXE |
-               ((s->cs_selected && (s->cr1 & SPI_CR1_SPE) != 0U) ? SPI_SR_BSY : 0U) |
-               ((s->rx_count > 0U) ? SPI_SR_RXNE : 0U);
+        sr = SPI_SR_TXE |
+             ((s->cs_selected && (s->cr1 & SPI_CR1_SPE) != 0U) ? SPI_SR_BSY : 0U) |
+             ((s->rx_count > 0U) ? SPI_SR_RXNE : 0U);
+        return spi1_extract_reg32(sr, offset - SPI1_SR_OFF, size);
     case SPI1_DR_OFF:
         if (spi1_rx_pop(s, &rx)) {
-            return rx;
+            return spi1_extract_reg32((uint32_t)rx, offset - SPI1_DR_OFF, size);
         }
-        return 0xFFU;
+        return spi1_extract_reg32(0xFFU, offset - SPI1_DR_OFF, size);
     default:
         return 0;
     }
@@ -308,23 +403,38 @@ void spi1_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
         s = &g_spi1;
     }
 
-    (void)size;
-
-    switch (offset) {
+    switch (offset & ~0x3ULL) {
     case SPI1_CR1_OFF:
-        s->cr1 = (uint16_t)value;
+        s->cr1 = spi1_merge_reg32(s->cr1, offset - SPI1_CR1_OFF, value, size);
         if ((s->cr1 & SPI_CR1_SPE) == 0U) {
             spi1_deselect_fallback_if_needed(s);
+        } else {
+            spi1_maybe_request_tx_dma(s);
         }
         return;
     case SPI1_CR2_OFF:
-        s->cr2 = (uint16_t)value;
+        s->cr2 = spi1_merge_reg32(s->cr2, offset - SPI1_CR2_OFF, value, size);
+        spi1_maybe_request_tx_dma(s);
         return;
-    case SPI1_DR_OFF:
-        if ((s->cr1 & SPI_CR1_SPE) != 0U) {
-            spi1_transfer_byte(s, (uint8_t)value);
+    case SPI1_DR_OFF: {
+        unsigned i;
+        unsigned bytes = size;
+
+        if (bytes == 0U) {
+            bytes = 1U;
+        }
+        if (bytes > 4U) {
+            bytes = 4U;
+        }
+        if ((s->cr1 & SPI_CR1_SPE) == 0U) {
+            return;
+        }
+
+        for (i = 0; i < bytes; i++) {
+            spi1_transfer_byte(s, (uint8_t)((value >> (i * 8U)) & 0xFFU));
         }
         return;
+    }
     default:
         return;
     }

@@ -23,13 +23,14 @@ from .passes import (
     unresolved_source_summary,
     vector_table,
     probe_faults,
+    rtos_introspection,
 )
 from .. import fastdyn_log as fastdyn_log_conf
 
 
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 REQUIRED_ARTIFACTS = [
     "binary.json",
     "sections.json",
@@ -53,6 +54,10 @@ REQUIRED_ARTIFACTS = [
     "peripheral_hint_summary.json",
     "unresolved_source_summary.json",
     "probe_faults.json",
+    "rtos_identity.json",
+    "rtos_symbols.json",
+    "rtos_schema.json",
+    "rtos_schema.txt",
     "macro_context.json",
 ]
 
@@ -72,6 +77,7 @@ STATIC_ANALYSIS_PASSES: list[tuple[str, str, Callable[[AnalysisContext], None]]]
     ("constants", "Constants", constants.run),
     ("unresolved_source_summary", "Unresolved source summary", unresolved_source_summary.run),
     ("probe_faults", "Probe faults", probe_faults.run),
+    ("rtos_introspection", "RTOS introspection metadata", rtos_introspection.run),
 ]
 
 
