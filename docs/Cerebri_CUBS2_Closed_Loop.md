@@ -46,6 +46,28 @@ Expected ELF:
 /scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2/build-mr_vmu_tropic/zephyr/zephyr.elf
 ```
 
+## Apply SVD Patch
+
+Patch the local CMSIS SVD before building the static cache or running FastDyn.
+
+```bash
+cd /scratch/Fastdyn/zephyr_rehosting/FastDyn
+
+git -C third_party/common/cmsis-svd-data \
+  apply ../../../patches/MIMXRT1064_snvs_size.patch
+```
+
+If the patch is already applied, verify that SNVS uses the corrected `0xC00`
+size:
+
+```bash
+rg -n -C 4 '<name>SNVS|<baseAddress>0x400D4000|<size>0xC00' \
+  third_party/common/cmsis-svd-data/data/NXP/MIMXRT1064.svd
+```
+
+This avoids the bad upstream `SNVS` range from swallowing nearby MIMXRT1064
+peripherals during SVD-based range detection.
+
 ## Build FastDyn Runtime
 
 Run this if `build/libfastdyn.so` or BoardRunner model `.so` files are missing
@@ -54,7 +76,9 @@ or stale.
 ```bash
 cd /scratch/Fastdyn/zephyr_rehosting/FastDyn
 
-make qemu_path=../qemu libhw_path=../libhw LIBHW=true
+source ./setup.sh --build-qemu --build-gazebo --skip-optifuzz
+
+make PROBE=true DEV=true LIBHW=true LIBGZ=true FLIGHT_CONTROLLERS=true DEBUG_PRINT=true LIBFUZZ=true
 
 export LD_LIBRARY_PATH=/scratch/Fastdyn/zephyr_rehosting/libhw/out:$PWD/build:${LD_LIBRARY_PATH:-}
 

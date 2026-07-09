@@ -43,6 +43,29 @@ FastDyn TOML:
 configs/cerebri_cubs2_mr_vmu_tropic.toml
 ```
 
+## Apply SVD Patch
+
+Patch the local CMSIS SVD before running `static-analyze`, `probe-run`, or
+`trace-analyze`.
+
+```bash
+cd /scratch/Fastdyn/zephyr_rehosting/FastDyn
+
+git -C third_party/common/cmsis-svd-data \
+  apply ../../../patches/MIMXRT1064_snvs_size.patch
+```
+
+If the patch is already applied, the command may fail. Verify the expected SNVS
+range with:
+
+```bash
+rg -n -C 4 '<name>SNVS|<baseAddress>0x400D4000|<size>0xC00' \
+  third_party/common/cmsis-svd-data/data/NXP/MIMXRT1064.svd
+```
+
+The fix changes the `SNVS` address block from `0x10000` bytes to `0xC00` bytes,
+so FastDyn does not treat SNVS as covering adjacent MIMXRT1064 peripherals.
+
 ## Build Firmware
 
 ```bash

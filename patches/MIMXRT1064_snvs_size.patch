@@ -1,0 +1,13 @@
+diff --git a/data/NXP/MIMXRT1064.svd b/data/NXP/MIMXRT1064.svd
+index 91a6c63..9a2dfa2 100644
+--- a/data/NXP/MIMXRT1064.svd
++++ b/data/NXP/MIMXRT1064.svd
+@@ -13381,7 +13381,7 @@ SPDX-License-Identifier: BSD-3-Clause
+       <baseAddress>0x400D4000</baseAddress>
+       <addressBlock>
+         <offset>0</offset>
+-        <size>0x10000</size>
++        <size>0xC00</size>
+         <usage>registers</usage>
+       </addressBlock>
+       <interrupt>
