@@ -479,7 +479,10 @@ def _infer_board_from_compile_units(compile_units) -> str | None:
 def _find_project_root(options, source_roots) -> Path | None:
     candidates: list[Path] = []
     if options.source_project_root:
-        candidates.append(Path(options.source_project_root).expanduser())
+        candidate = Path(options.source_project_root).expanduser().resolve()
+        if candidate.exists():
+            return candidate
+        candidates.append(candidate)
     for source_root in source_roots:
         root = Path(source_root).expanduser()
         candidates.extend([
@@ -489,7 +492,12 @@ def _find_project_root(options, source_roots) -> Path | None:
         if len(root.parents) >= 2:
             candidates.append(root.parents[1] / "ardupilot")
     for candidate in candidates:
-        if (candidate / "waf").is_file() or (candidate / "wscript").is_file():
+        if (
+            (candidate / "waf").is_file()
+            or (candidate / "wscript").is_file()
+            or (candidate / "west.yml").is_file()
+            or (candidate / "zephyr" / "CMakeLists.txt").is_file()
+        ):
             return candidate.resolve()
     return None
 

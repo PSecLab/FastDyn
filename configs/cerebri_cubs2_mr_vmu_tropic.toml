@@ -1,0 +1,505 @@
+# ==============================================================================
+#                      Cerebri CUBS2 / MR-VMU-Tropic Rehosting
+# ==============================================================================
+[Rehosting]
+[Rehosting.directories]
+static_analysis_cache_dir = "./fastdyn_static_analysis_cerebri_cubs2"
+firmware_source_roots = ["/scratch/Fastdyn/zephyr_rehosting"]
+firmware_build_roots = [
+    "/scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2/build-mr_vmu_tropic",
+]
+modeling_dir = "boardrunner/boardrunner_sdk/model"
+
+[Rehosting.static_analysis.macros]
+enabled = true
+strategy = "rebuild"
+source_project_root = "/scratch/Fastdyn/zephyr_rehosting"
+build_dir = "/scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2/build-mr_vmu_tropic"
+reuse_existing_build = true
+allow_build = false
+
+# ==============================================================================
+#                              Memory Configuration
+# ==============================================================================
+[Memory]
+
+# Zephyr chosen SRAM is OCRAM2. Keep this as the main QEMU RAM bank.
+[Memory.main]
+id = "ocram2"
+base_address = "0x20200000"
+memory_size = "512K"
+memory_type = "SRAM"
+backend = "file"
+memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_ocram2.bin"
+share = true
+prealloc = false
+
+# DTCM is used by the linked image for Zephyr data/BSS and ENET DMA buffers.
+[[Memory.dtcm]]
+id = "dtcm"
+index = 1
+base_address = "0x20000000"
+memory_size = "256K"
+memory_type = "SRAM"
+backend = "file"
+memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_dtcm.bin"
+share = true
+prealloc = false
+
+# ITCM is part of the link layout; the ELF has an ITCM relocation segment.
+[[Memory.itcm]]
+id = "itcm"
+index = 2
+base_address = "0x00000000"
+memory_size = "256K"
+memory_type = "SRAM"
+backend = "file"
+memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_itcm.bin"
+share = true
+prealloc = false
+
+# XIP flash window used by MIMXRT1064/FlexSPI2. The ELF text and vector table
+# live here, with _vector_table at 0x70002000.
+[[Memory.xip_flash]]
+id = "xip_flash"
+index = 3
+base_address = "0x70000000"
+memory_size = "4M"
+memory_type = "FLASH"
+backend = "file"
+memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_xip_flash.bin"
+share = true
+prealloc = false
+
+# ==============================================================================
+#                                CPU Configuration
+# ==============================================================================
+[Machine]
+platform = "MIMXRT1064"
+qemu_path = "../qemu/build/qemu-system-arm"
+enable_gdb = false
+stop_on_start = false
+launch_gdb = false
+monitor_port = 5555
+qmp_socket = "/tmp/cubs2_qmp.sock"
+log_file = "qemu.log"
+log_options = "in_asm,op"
+icount = { shift = 5, sleep = false, align = false }
+semihosting = true
+semihosting_config = "enable=on,target=native"
+coverage = false
+finline = "None"
+print_command = true
+reset_memory_files = true
+ignore_functions = [
+    "idle",
+    "z_arm_cpu_idle",
+    "arch_cpu_idle",
+    "arch_cpu_atomic_idle",
+]
+
+[CPU]
+[[CPU.cpu0]]
+arch = "arm"
+machine = "cortexm"
+cpu = "cortex-m7"
+plugin_library = "build/libfastdyn.so"
+monitor_elf = "../qemu/ws/monitor.elf"
+binary = "/scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2/build-mr_vmu_tropic/zephyr/zephyr.elf"
+symbol_file = "/scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2/build-mr_vmu_tropic/zephyr/zephyr.elf"
+init_nsvtor = "0x70002000"
+twintrace = "None"
+hardware_trace = "hardware_log/io.log"
+introspect = false
+optifuzz = false
+
+logger_content = """
+# --- Plugin Logger Configuration ---
+# level = DEBUG
+# output = stderr
+"""
+
+# ==============================================================================
+#                              Device Configuration
+# ==============================================================================
+
+[Device.Models.elder]
+
+[Device.Models.passthrough]
+backend = "stlink"
+
+[Device.Models.classic]
+
+[Device.Models.twintrace]
+backend = "stlink"
+
+[Device.Models.unhandled]
+
+# Peripheral entries are intentionally not pre-populated in this initial config.
+# The first probe-run should use MIMXRT1064.svd to identify unhandled MMIO and
+# append [Device.<peripheral>] blocks as the firmware reaches each dependency.
+
+
+[Device.systemcontrol]
+ranges = [["0xe000e000", "0xe000efac"]]
+irq = [[1, 150]]
+description = "SystemControl"
+read_priority = "elder"
+[[Device.systemcontrol.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/systemcontrol.so"
+[[Device.systemcontrol.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.wdog1]
+ranges = [["0x400b8000", "0x400b800a"]]
+irq = [[1, 150]]
+description = "WDOG1"
+read_priority = "elder"
+[[Device.wdog1.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/wdog1.so"
+[[Device.wdog1.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.wdog2]
+ranges = [["0x400d0000", "0x400d000a"]]
+irq = [[1, 150]]
+description = "WDOG2"
+read_priority = "elder"
+[[Device.wdog2.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/wdog2.so"
+[[Device.wdog2.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.rtwdog]
+ranges = [["0x400bc000", "0x400bc010"]]
+irq = [[1, 150]]
+description = "RTWDOG"
+read_priority = "elder"
+[[Device.rtwdog.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/rtwdog.so"
+[[Device.rtwdog.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.iomuxc_gpr]
+ranges = [["0x400ac000", "0x400ac08c"]]
+irq = [[1, 150]]
+description = "IOMUXC_GPR"
+read_priority = "elder"
+[[Device.iomuxc_gpr.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/iomuxc_gpr.so"
+[[Device.iomuxc_gpr.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.ccm]
+ranges = [["0x400fc000", "0x400fc08c"]]
+irq = [[1, 150]]
+description = "CCM"
+read_priority = "elder"
+[[Device.ccm.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/ccm.so"
+[[Device.ccm.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.dcdc]
+ranges = [["0x40080000", "0x40080010"]]
+irq = [[1, 150]]
+description = "DCDC"
+read_priority = "elder"
+[[Device.dcdc.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/dcdc.so"
+[[Device.dcdc.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.snvs]
+ranges = [["0x400d4000", "0x400d4c00"]]
+irq = [[1, 150]]
+description = "SNVS"
+read_priority = "elder"
+[[Device.snvs.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/snvs.so"
+[[Device.snvs.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.ccm_analog]
+ranges = [["0x400d8000", "0x400d8180"]]
+irq = [[1, 150]]
+description = "CCM_ANALOG"
+read_priority = "elder"
+[[Device.ccm_analog.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/ccm_analog.so"
+[[Device.ccm_analog.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.iomuxc]
+ranges = [["0x401f8000", "0x401f8790"]]
+irq = [[1, 150]]
+description = "IOMUXC"
+read_priority = "elder"
+[[Device.iomuxc.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/iomuxc.so"
+[[Device.iomuxc.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.gpio2]
+ranges = [["0x401bc000", "0x401bc090"]]
+irq = [[1, 150]]
+description = "GPIO2"
+read_priority = "elder"
+[[Device.gpio2.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/gpio2.so"
+[[Device.gpio2.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.dwt]
+ranges = [["0xe0001000", "0xe0002000"]]
+irq = [[1, 150]]
+description = "DWT"
+read_priority = "elder"
+[[Device.dwt.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/dwt.so"
+[[Device.dwt.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.dma0]
+ranges = [["0x400e8000", "0x400e9400"]]
+irq = [[1, 150]]
+description = "DMA0"
+read_priority = "elder"
+[[Device.dma0.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/dma0.so"
+[[Device.dma0.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.trng]
+ranges = [["0x400cc000", "0x400cc0f8"]]
+irq = [[1, 150]]
+description = "TRNG"
+read_priority = "elder"
+[[Device.trng.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/trng.so"
+[[Device.trng.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.lpuart2]
+ranges = [["0x40188000", "0x40188030"]]
+irq = [[1, 150]]
+description = "LPUART2"
+read_priority = "elder"
+[[Device.lpuart2.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/lpuart2.so"
+[[Device.lpuart2.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.lpuart3]
+ranges = [["0x4018c000", "0x4018c030"]]
+irq = [[1, 150]]
+description = "LPUART3"
+read_priority = "elder"
+[[Device.lpuart3.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/lpuart3.so"
+[[Device.lpuart3.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.lpuart4]
+ranges = [["0x40190000", "0x40190030"]]
+irq = [[1, 150]]
+description = "LPUART4"
+read_priority = "elder"
+[[Device.lpuart4.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/lpuart4.so"
+[[Device.lpuart4.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.lpuart5]
+ranges = [["0x40194000", "0x40194030"]]
+irq = [[1, 150]]
+description = "LPUART5"
+read_priority = "elder"
+[[Device.lpuart5.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/lpuart5.so"
+[[Device.lpuart5.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.lpuart6]
+ranges = [["0x40198000", "0x40198030"]]
+irq = [[1, 150]]
+description = "LPUART6"
+read_priority = "elder"
+[[Device.lpuart6.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/lpuart6.so"
+[[Device.lpuart6.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.lpuart7]
+ranges = [["0x4019c000", "0x4019c030"]]
+irq = [[1, 150]]
+description = "LPUART7"
+read_priority = "elder"
+[[Device.lpuart7.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/lpuart7.so"
+[[Device.lpuart7.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.lpuart8]
+ranges = [["0x401a0000", "0x401a0030"]]
+irq = [[1, 150]]
+description = "LPUART8"
+read_priority = "elder"
+[[Device.lpuart8.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/lpuart8.so"
+[[Device.lpuart8.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.enet]
+ranges = [["0x402d8000", "0x402d8628"]]
+irq = [[1, 150]]
+description = "ENET"
+read_priority = "elder"
+[[Device.enet.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/enet.so"
+[[Device.enet.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.enet2]
+ranges = [["0x402d4000", "0x402d4628"]]
+irq = [[1, 150]]
+description = "ENET2"
+read_priority = "elder"
+[[Device.enet2.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/enet2.so"
+[[Device.enet2.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.pwm1]
+ranges = [["0x403dc000", "0x403dc196"]]
+irq = [[1, 150]]
+description = "PWM1"
+read_priority = "elder"
+[[Device.pwm1.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/pwm1.so"
+[[Device.pwm1.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.pwm3]
+ranges = [["0x403e4000", "0x403e4196"]]
+irq = [[1, 150]]
+description = "PWM3"
+read_priority = "elder"
+[[Device.pwm3.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/pwm3.so"
+[[Device.pwm3.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false
+
+[Device.tempmon]
+ranges = [["0x400d8000", "0x400d82a0"]]
+irq = [[1, 150]]
+description = "TEMPMON"
+read_priority = "elder"
+[[Device.tempmon.handlers]]
+model = "elder"
+enabled = true
+scroll = "boardrunner/boardrunner_sdk/build/tempmon.so"
+[[Device.tempmon.connections]]
+type = "endpoint"
+name = "gazebo"
+enabled = false

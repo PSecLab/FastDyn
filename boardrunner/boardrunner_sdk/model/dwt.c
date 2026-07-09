@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <device.h>
-#include <core.h>
+#include <boardrunner/vio.h>
 
 #define DWT_BASE                0xE0001000ULL
 #define DWT_CTRL_OFF            0x000
@@ -10,15 +10,13 @@
 #define DWT_CTRL_CYCCNTENA      (1u << 0)
 
 /*
- * The trace shows firmware spinning in chSysPolledDelayX() on CYCCNT reads.
- * qemu_plugin_get_virtual_timer() may not advance enough during tight MMIO polling,
- * so the counter must also make synchronous forward progress on every read.
- *
- * 500000 matches the observed step size in the trace and exits busy-wait delays
- * quickly while remaining monotonic and stateful.
+ * The firmware is polling CYCCNT in a tight MMIO loop during early boot.
+ * QEMU virtual time may not advance between those back-to-back accesses, so
+ * we also inject a small synthetic step on each CYCCNT read while enabled to
+ * guarantee forward progress.
  */
-#define DWT_MIN_READ_ADVANCE    500000u
-#define DWT_CYCCNT_HZ           168000000ULL
+#define DWT_NOMINAL_HZ          600000000ULL
+#define DWT_SYNTHETIC_READ_STEP 1024u
 
 typedef struct {
     uint32_t ctrl;
@@ -28,19 +26,27 @@ typedef struct {
 
 static DWTState g_dwt;
 
-static uint64_t dwt_size_mask(unsigned size) {
-    switch (size) {
-    case 1:
-        return 0xffu;
-    case 2:
-        return 0xffffu;
-    case 4:
-    default:
-        return 0xffffffffu;
+static uint32_t dwt_extract_access(uint32_t reg, uint64_t addr, unsigned size) {
+    if (size >= 4) {
+        return reg;
     }
+
+    unsigned shift = (unsigned)(addr & 0x3ULL) * 8u;
+    uint32_t mask = (1u << (size * 8u)) - 1u;
+    return (reg >> shift) & mask;
 }
 
-static void dwt_sync_cyccnt(DWTState *s) {
+static uint32_t dwt_merge_access(uint32_t old_reg, uint64_t addr, uint64_t value, unsigned size) {
+    if (size >= 4) {
+        return (uint32_t)value;
+    }
+
+    unsigned shift = (unsigned)(addr & 0x3ULL) * 8u;
+    uint32_t mask = ((1u << (size * 8u)) - 1u) << shift;
+    return (old_reg & ~mask) | ((((uint32_t)value) << shift) & mask);
+}
+
+static void dwt_sync_cyccnt(DWTState *s, int force_progress) {
     int64_t now = qemu_plugin_get_virtual_timer();
 
     if ((s->ctrl & DWT_CTRL_CYCCNTENA) == 0) {
@@ -48,88 +54,72 @@ static void dwt_sync_cyccnt(DWTState *s) {
         return;
     }
 
-    uint64_t advance = 0;
-    if (now > s->last_vtime_ns) {
+    uint32_t before = s->cyccnt;
+
+    if (s->last_vtime_ns >= 0 && now > s->last_vtime_ns) {
         uint64_t delta_ns = (uint64_t)(now - s->last_vtime_ns);
-        advance = (delta_ns * DWT_CYCCNT_HZ) / 1000000000ULL;
+        uint64_t add = (delta_ns * DWT_NOMINAL_HZ) / 1000000000ULL;
+        s->cyccnt += (uint32_t)add;
     }
 
-    if (advance < DWT_MIN_READ_ADVANCE) {
-        advance = DWT_MIN_READ_ADVANCE;
-    }
-
-    s->cyccnt += (uint32_t)advance;
     s->last_vtime_ns = now;
+
+    if (force_progress && s->cyccnt == before) {
+        s->cyccnt += DWT_SYNTHETIC_READ_STEP;
+    }
 }
 
 void* dwt_init(ConfigSection* model_info) {
     (void)model_info;
 
     memset(&g_dwt, 0, sizeof(g_dwt));
-
-    /*
-     * Trace evidence:
-     *   READ 0xE0001000 -> 0x1
-     * before firmware writes 0x1 back.
-     * So expose CYCCNTENA as already set at reset for this target.
-     */
-    g_dwt.ctrl = DWT_CTRL_CYCCNTENA;
-    g_dwt.last_vtime_ns = qemu_plugin_get_virtual_timer();
-
+    g_dwt.last_vtime_ns = -1;
     return &g_dwt;
 }
 
 uint64_t dwt_read(void *opaque, uint64_t addr, unsigned size) {
     DWTState *s = (DWTState *)opaque;
     uint64_t offset = addr - DWT_BASE;
-    uint64_t value = 0;
+    uint32_t reg = 0;
 
-    switch (offset) {
-    case DWT_CTRL_OFF:
-        value = s->ctrl;
-        break;
+    switch (offset & ~0x3ULL) {
+        case DWT_CTRL_OFF:
+            reg = s->ctrl;
+            break;
 
-    case DWT_CYCCNT_OFF:
-        dwt_sync_cyccnt(s);
-        value = s->cyccnt;
-        break;
+        case DWT_CYCCNT_OFF:
+            dwt_sync_cyccnt(s, 1);
+            reg = s->cyccnt;
+            break;
 
-    default:
-        value = 0;
-        break;
+        default:
+            reg = 0;
+            break;
     }
 
-    return value & dwt_size_mask(size);
+    return (uint64_t)dwt_extract_access(reg, addr, size);
 }
 
 void dwt_write(void *opaque, uint64_t addr, uint64_t value, unsigned size) {
     DWTState *s = (DWTState *)opaque;
     uint64_t offset = addr - DWT_BASE;
-    uint64_t mask = dwt_size_mask(size);
 
-    value &= mask;
+    switch (offset & ~0x3ULL) {
+        case DWT_CTRL_OFF: {
+            uint32_t merged = dwt_merge_access(s->ctrl, addr, value, size);
+            s->ctrl = merged & DWT_CTRL_CYCCNTENA;
+            s->last_vtime_ns = qemu_plugin_get_virtual_timer();
+            break;
+        }
 
-    switch (offset) {
-    case DWT_CTRL_OFF:
-        /*
-         * Preserve elapsed count up to the write, then apply the new enable bit.
-         * Only CYCCNTENA is modeled because it is the only bit evidenced by trace.
-         */
-        dwt_sync_cyccnt(s);
-        s->ctrl = (s->ctrl & ~DWT_CTRL_CYCCNTENA) |
-                  ((uint32_t)value & DWT_CTRL_CYCCNTENA);
-        s->last_vtime_ns = qemu_plugin_get_virtual_timer();
-        break;
+        case DWT_CYCCNT_OFF: {
+            dwt_sync_cyccnt(s, 0);
+            s->cyccnt = dwt_merge_access(s->cyccnt, addr, value, size);
+            s->last_vtime_ns = qemu_plugin_get_virtual_timer();
+            break;
+        }
 
-    case DWT_CYCCNT_OFF:
-        /*
-         * DWT_CYCCNT is writable on Cortex-M; support direct seed/reset.
-         */
-        s->cyccnt = (uint32_t)value;
-        s->last_vtime_ns = qemu_plugin_get_virtual_timer();
-        break;
-
-    default:
-        break;
+        default:
+            break;
     }
 }

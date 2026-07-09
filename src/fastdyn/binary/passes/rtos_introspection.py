@@ -10,7 +10,7 @@ from fastdyn.binary.symmap.providers import DwarfProvider, ElfSymtabProvider
 
 RTOS_SIGNATURES: dict[str, set[str]] = {
     "FreeRTOS": {"pxCurrentTCB", "vTaskSwitchContext"},
-    "Zephyr": {"_kernel", "z_swap"},
+    "Zephyr": {"_kernel", "z_thread_mark_switched_in"},
     "ThreadX": {"_tx_thread_current_ptr", "tx_thread_create"},
     "RT-Thread": {"rt_current_thread", "rt_thread_create"},
     "MicroC/OS-III": {"OSTCBCurPtr", "OSTaskCreate"},
@@ -36,6 +36,26 @@ CHIBIOS_SYMBOLS = [
     "chSchReadyI",
     "chSemWaitS",
     "chSchGoSleepS",
+]
+
+ZEPHYR_STRUCTS = [
+    "z_kernel",
+    "_cpu",
+    "k_thread",
+    "_thread_base",
+    "_timeout",
+    "_callee_saved",
+    "_thread_stack_info",
+    "_thread_arch",
+]
+
+ZEPHYR_SYMBOLS = [
+    "_kernel",
+    "z_thread_mark_switched_in",
+    "z_thread_mark_switched_out",
+    "z_impl_k_thread_name_set",
+    "z_impl_k_sleep",
+    "arch_cpu_idle",
 ]
 
 
@@ -95,6 +115,66 @@ def run(context) -> None:
     ])
     symbols = resolver.resolve(context.config.binary_path)
     rtos_name, matches = _detect_rtos(symbols)
+
+    if rtos_name == "Zephyr":
+        symbol_entries, missing_symbols = _symbol_entries(symbols, ZEPHYR_SYMBOLS)
+        required_missing = [
+            name for name in ("_kernel", "z_thread_mark_switched_in")
+            if name in missing_symbols
+        ]
+        if required_missing:
+            _write_empty_artifacts(
+                context,
+                rtos_name=rtos_name,
+                matches=matches,
+                reason="missing required Zephyr symbols: " + ", ".join(required_missing),
+            )
+            write_json_artifact(context.cache_dir, "rtos_symbols.json", symbol_entries)
+            return
+
+        schema_path = context.cache_dir / "rtos_schema.txt"
+        try:
+            schema_text = SchemaGenerator(context.config.binary_path).generate_schema(
+                ZEPHYR_STRUCTS,
+                {
+                    name: int(addr, 16)
+                    for name, addr in symbol_entries.items()
+                    if name == "_kernel"
+                },
+            )
+        except Exception as exc:
+            _write_empty_artifacts(
+                context,
+                rtos_name=rtos_name,
+                matches=matches,
+                reason=f"schema generation failed: {exc}",
+            )
+            write_json_artifact(context.cache_dir, "rtos_symbols.json", symbol_entries)
+            return
+
+        schema_path.write_text(schema_text, encoding="utf-8")
+
+        identity = {
+            "available": True,
+            "rtos": "Zephyr",
+            "matched_symbols": matches,
+            "schema_path": str(schema_path),
+        }
+        schema_meta = {
+            "available": True,
+            "schema_path": str(schema_path),
+            "structs": ZEPHYR_STRUCTS,
+            "symbols": sorted(symbol_entries),
+            "missing_optional_symbols": sorted(
+                name for name in missing_symbols
+                if name not in {"_kernel", "z_thread_mark_switched_in"}
+            ),
+        }
+
+        write_json_artifact(context.cache_dir, "rtos_identity.json", identity)
+        write_json_artifact(context.cache_dir, "rtos_symbols.json", symbol_entries)
+        write_json_artifact(context.cache_dir, "rtos_schema.json", schema_meta)
+        return
 
     if rtos_name != "ChibiOS":
         _write_empty_artifacts(

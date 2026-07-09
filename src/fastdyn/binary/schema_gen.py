@@ -65,6 +65,8 @@ class SchemaGenerator:
 
         for child in struct_die.iter_children():
             if child.tag == 'DW_TAG_member':
+                if 'DW_AT_name' not in child.attributes:
+                    continue
                 field_name = child.attributes['DW_AT_name'].value.decode('utf-8')
                 full_name = f"{prefix}{field_name}"
 

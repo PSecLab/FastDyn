@@ -12,8 +12,11 @@
 //TODO: Fix this and make it modular
 extern int inspct_freertos_init(int, char**);
 extern int inspct_chibios_init(int, char**);
+extern int inspct_zephyr_init(int, char**);
 extern bool inspct_chibios_write_probe_json(FILE *f, const char *indent);
 extern void inspct_chibios_write_summary_file(void);
+extern bool inspct_zephyr_write_probe_json(FILE *f, const char *indent);
+extern void inspct_zephyr_write_summary_file(void);
 
 static int g_inspct_enabled = 0;
 static char g_inspct_mode[16] = "off";
@@ -51,11 +54,18 @@ bool inspct_write_probe_json(FILE *f, const char *indent) {
     if (!g_inspct_enabled || !f) {
         return false;
     }
+    if (inspct_get_symbol("_kernel") != 0) {
+        return inspct_zephyr_write_probe_json(f, indent ? indent : "");
+    }
     return inspct_chibios_write_probe_json(f, indent ? indent : "");
 }
 
 void inspct_write_summary_file(void) {
     if (!g_inspct_enabled) {
+        return;
+    }
+    if (inspct_get_symbol("_kernel") != 0) {
+        inspct_zephyr_write_summary_file();
         return;
     }
     inspct_chibios_write_summary_file();
@@ -105,6 +115,8 @@ int inspct_init(int argc, char ** argv, const char *schema_path) {
 		inspct_freertos_init(argc, argv);
 
 		inspct_chibios_init(argc, argv);
+
+        inspct_zephyr_init(argc, argv);
 
 		return 0;
 }

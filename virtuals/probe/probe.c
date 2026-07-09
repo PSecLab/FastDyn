@@ -273,12 +273,14 @@ static void probe_vcpu_tb_exec(unsigned int vcpu_index, void *userdata)
     }
 }
 
+#if 0
 static void probe_wfi_exec(unsigned int vcpu_index, void *userdata)
 {
     (void)vcpu_index;
     uint64_t pc = (uint64_t)userdata;
     probe_exit_with_result("wfi_idle_starvation", pc, 0);
 }
+#endif
 
 static void probe_vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
@@ -289,6 +291,7 @@ static void probe_vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
     last_novel_instruction_count = instruction_count;
 
+#if 0
     size_t n = qemu_plugin_tb_n_insns(tb);
     for (size_t i = 0; i < n; i++) {
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
@@ -305,6 +308,7 @@ static void probe_vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
             }
         }
     }
+#endif
 
     for (int i = 0; i < num_milestones; i++) {
         if (pc == milestone_addrs[i]) {

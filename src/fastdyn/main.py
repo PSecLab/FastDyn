@@ -259,6 +259,46 @@ def _add_rtos_introspection_hooks(cpu, cache_dir):
         raise click.ClickException("RTOS introspection requested but static RTOS detection is unavailable.")
 
     rtos_name = identity.get("rtos")
+
+    if rtos_name == "Zephyr":
+        hooks = []
+        addr_value = symbols.get("z_thread_mark_switched_in")
+        if addr_value is not None:
+            hooks.append(
+                VirtualInstruction(
+                    at=_parse_symbol_address(addr_value),
+                    instruction="zephyr_thread_switched_in_Hook",
+                    args=[],
+                )
+            )
+
+        addr_value = symbols.get("z_thread_mark_switched_out")
+        if addr_value is not None:
+            hooks.append(
+                VirtualInstruction(
+                    at=_parse_symbol_address(addr_value),
+                    instruction="zephyr_thread_switched_out_Hook",
+                    args=[],
+                )
+            )
+
+        required = {"z_thread_mark_switched_in"}
+        missing = sorted(name for name in required if name not in symbols)
+        if missing:
+            raise click.ClickException(
+                "RTOS introspection requested but required Zephyr hook symbols are missing: "
+                + ", ".join(missing)
+            )
+        if not hooks:
+            raise click.ClickException("RTOS introspection requested but no RTOS virtual hooks were generated.")
+        if not cpu.add_virtual_instruction(hooks):
+            raise click.ClickException("Failed to install RTOS introspection virtual hooks.")
+        log.info(
+            "Installed RTOS introspection hooks: %s",
+            ", ".join(f"{hook.instruction}@0x{hook.at:x}" for hook in hooks),
+        )
+        return hooks
+
     if rtos_name != "ChibiOS":
         raise click.ClickException(f"RTOS introspection is not supported for detected RTOS: {rtos_name}")
 
@@ -340,6 +380,9 @@ def _abs_repo_path(path):
     path = Path(path).expanduser()
     if path.is_absolute():
         return path
+    cwd_path = Path.cwd() / path
+    if cwd_path.exists():
+        return cwd_path
     return _repo_root() / path
 
 

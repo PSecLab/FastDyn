@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -224,6 +225,19 @@ def validate_static_analyze_cache(config: StaticAnalyzeConfig) -> tuple[bool, st
     cache_inputs = build_cache_inputs(config, REQUIRED_ARTIFACTS, PIPELINE_VERSION)
     cache_key = build_cache_key(cache_inputs)
     valid, reason = cache_is_valid(cache_dir, cache_key, REQUIRED_ARTIFACTS)
+    if (
+        not valid
+        and reason == "cache key mismatch"
+        and os.environ.get("FASTDYN_SKIP_STATIC_CACHE_KEY_VALIDATION", "").lower()
+        in {"1", "true", "yes", "on"}
+    ):
+        fastdyn_log.warning(
+            "Skipping static cache key validation due to "
+            "FASTDYN_SKIP_STATIC_CACHE_KEY_VALIDATION=%s. Cache may be stale: %s",
+            os.environ.get("FASTDYN_SKIP_STATIC_CACHE_KEY_VALIDATION"),
+            cache_dir,
+        )
+        return True, "cache key validation skipped", str(cache_dir)
     return valid, reason, str(cache_dir)
 
 

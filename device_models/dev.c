@@ -44,6 +44,15 @@ static inline unsigned dev_addr_to_slot(hwaddr addr, hwaddr REGION_BASE)
     return (addr - REGION_BASE) / SLOT_SIZE;
 }
 
+static bool dev_is_internal_local_offset(const char *handler, hwaddr address)
+{
+    if (!handler || address >= 0x1000) {
+        return false;
+    }
+
+    return strcmp(handler, "systick") == 0;
+}
+
 //Interrupt LUT: each slot is the head of a singly-linked list of DeviceModel
 //handlers registered for that IRQ number. List semantics mirror device_lut
 //(MMIO) registration so that multiple device-model backends (e.g. passthrough
@@ -76,6 +85,9 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
 #endif
     DeviceNode **lut = dev_select_lut(address);
     if (!lut) {
+        if (dev_is_internal_local_offset(handler, address)) {
+            return 1;
+        }
 
 #ifdef DEV_LOGGER
         utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled (Unknown Region): \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
@@ -146,6 +158,9 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
     DeviceNode **lut = dev_select_lut(address);
 
     if (!lut) {
+        if (dev_is_internal_local_offset(handler, address)) {
+            return 1;
+        }
 #ifdef DEV_LOGGER
         utils_log_to_file(io_logger,
             "[%5ld.%06ld] IO Read Access NOT Handled (Unknown Region): \t address=0x%08" PRIx64 ", size=%u bytes, pc=0x%08" PRIx64 "\n",
