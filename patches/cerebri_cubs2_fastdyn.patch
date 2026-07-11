@@ -1,0 +1,185 @@
+diff --git a/Kconfig b/Kconfig
+index 9d79b81..4b5ce8d 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -2,6 +2,14 @@ source "Kconfig.zephyr"
+ 
+ menu "CUBS2"
+ 
++config CUBS2_FASTDYN
++	bool "Enable FastDyn hardware-target adapters"
++	default n
++	help
++	  Retain the mr_vmu_tropic Cortex-M7 image, linker layout, Zephyr kernel,
++	  Ethernet driver, and CUBS2 application while bypassing physical-only
++	  board sequencing and analog clock setup during FastDyn/QEMU rehosting.
++
+ config CUBS2_MANUAL_OVERRIDE
+ 	bool "Select manual or autonomous RC output from incoming RC switch"
+ 	default y
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index d73c5d8..22225b9 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -5,6 +5,14 @@ target_sources(app PRIVATE
+   native_sil_transport.c
+ )
+ 
++target_sources_ifdef(CONFIG_CUBS2_FASTDYN app PRIVATE fastdyn_board.c)
++
++if(CONFIG_CUBS2_FASTDYN)
++  # app/libapp.a is linked before the board and SDK archives, so the FastDyn
++  # implementations below replace hardware-only weak/board hooks.
++  zephyr_link_libraries(-Wl,--allow-multiple-definition)
++endif()
++
+ if(CONFIG_CODE_DATA_RELOCATION AND CONFIG_BOARD_MR_VMU_TROPIC_MIMXRT1064)
+   zephyr_code_relocate(
+     FILES
+diff --git a/src/fastdyn_board.c b/src/fastdyn_board.c
+new file mode 100644
+index 0000000..bfc99a1
+--- /dev/null
++++ b/src/fastdyn_board.c
+@@ -0,0 +1,40 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++
++#include <fsl_clock.h>
++
++/* Physical strap/reset sequencing uses DWT delays and is unnecessary when the
++ * firmware communicates exclusively through the FastDyn ENET model. */
++void board_early_init_hook(void)
++{
++}
++
++/* QEMU owns CPU time. Keep MCUX clock queries internally consistent without
++ * polling analog DCDC/PLL status registers that do not exist in rehosting. */
++void clock_init(void)
++{
++	CLOCK_SetXtalFreq(24000000U);
++	CLOCK_SetRtcXtalFreq(32768U);
++	CLOCK_SetMux(kCLOCK_PeriphClk2Mux, 1U);
++	CLOCK_SetMux(kCLOCK_PeriphMux, 1U);
++	SystemCoreClock = 24000000U;
++}
++
++uint32_t CLOCK_GetAhbFreq(void)
++{
++	return 24000000U;
++}
++
++uint32_t CLOCK_GetIpgFreq(void)
++{
++	return 24000000U;
++}
++
++uint32_t CLOCK_GetPerClkFreq(void)
++{
++	return 24000000U;
++}
++
++uint32_t CLOCK_GetFreq(clock_name_t name)
++{
++	return name == kCLOCK_RtcClk ? 32768U : 24000000U;
++}
+diff --git a/src/main.c b/src/main.c
+index cf8e8c0..664137d 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -2,6 +2,7 @@
+  * SPDX-License-Identifier: Apache-2.0
+  */
+ 
++#include <csyn/csyn.h>
+ #include <csyn/csyn_codec.h>
+ #include <csyn/csyn_zros.h>
+ 
+@@ -50,6 +51,10 @@ static struct zros_pub g_attitude_command_pub;
+ static struct zros_pub g_control_loop_metrics_pub;
+ static struct zros_sub g_external_odometry_sub;
+ static struct zros_sub g_manual_sub;
++#if defined(CONFIG_CUBS2_FASTDYN)
++static struct csyn_topic *g_fastdyn_pwm_outputs_topic;
++static struct csyn_topic *g_fastdyn_attitude_command_topic;
++#endif
+ 
+ static bool read_external_odometry_if_updated(struct control_context *ctx)
+ {
+@@ -199,12 +204,23 @@ static int control_pubs_init(void)
+ 		return rc;
+ 	}
+ 
++#if defined(CONFIG_CUBS2_FASTDYN)
++	/* Keep the hardware lockstep response on the direct csyn path. The
++	 * general zros bridge deliberately runs at the application's lowest
++	 * priority and can add unbounded host latency under accelerated QEMU. */
++	g_fastdyn_pwm_outputs_topic = csyn_topic_find("pwm_signal_outputs");
++	g_fastdyn_attitude_command_topic = csyn_topic_find("attitude_command");
++	if (g_fastdyn_pwm_outputs_topic == NULL || g_fastdyn_attitude_command_topic == NULL) {
++		return -ENODEV;
++	}
++#endif
++
+ 	return 0;
+ }
+ 
+ static uint64_t control_timestamp_us(const struct control_context *ctx)
+ {
+-#if defined(CONFIG_BOARD_NATIVE_SIM)
++#if defined(CONFIG_BOARD_NATIVE_SIM) || defined(CONFIG_CUBS2_FASTDYN)
+ 	if (ctx->lockstep_time_valid) {
+ 		return ctx->lockstep_time_us;
+ 	}
+@@ -217,7 +233,7 @@ static uint64_t control_timestamp_us(const struct control_context *ctx)
+ 
+ static bool control_step_due(struct control_context *ctx)
+ {
+-#if defined(CONFIG_BOARD_NATIVE_SIM)
++#if defined(CONFIG_BOARD_NATIVE_SIM) || defined(CONFIG_CUBS2_FASTDYN)
+ 	if (ctx->lockstep_time_us < ctx->next_control_time_us) {
+ 		return false;
+ 	}
+@@ -280,6 +296,14 @@ static void publish_outputs(struct control_context *ctx, bool auto_mode)
+ 	csyn_pwm_outputs_from_rc(&ctx->control_rc, &ctx->pwm_outputs, (int64_t)timestamp_us);
+ 	(void)zros_pub_update(&g_pwm_outputs_pub);
+ 	update_telemetry(ctx, auto_mode, timestamp_us);
++#if defined(CONFIG_CUBS2_FASTDYN)
++	/* These structs are the generated synapse_fbs wire payloads, so this is
++	 * one bounded lock-free copy per response with no serialization step. */
++	(void)csyn_topic_publish(g_fastdyn_pwm_outputs_topic, &ctx->pwm_outputs,
++				 sizeof(ctx->pwm_outputs));
++	(void)csyn_topic_publish(g_fastdyn_attitude_command_topic, &ctx->attitude_command,
++				 sizeof(ctx->attitude_command));
++#endif
+ }
+ 
+ int main(void)
+@@ -326,6 +350,17 @@ int main(void)
+ 		if (!odometry_updated) {
+ 			continue;
+ 		}
++#elif defined(CONFIG_CUBS2_FASTDYN)
++		/* FastDyn advances the hardware image from external odometry events,
++		 * just like native direct lockstep. A free-running QEMU-time loop can
++		 * otherwise overwhelm the real host transport with stale outputs. */
++		if (zros_sub_wait(&g_external_odometry_sub, K_FOREVER) != 0) {
++			continue;
++		}
++		odometry_updated = read_external_odometry_if_updated(ctx);
++		if (!odometry_updated) {
++			continue;
++		}
+ #else
+ 		odometry_updated = read_external_odometry_if_updated(ctx);
+ #endif
+@@ -364,6 +399,10 @@ int main(void)
+ 		} else {
+ 			k_yield();
+ 		}
++#elif defined(CONFIG_CUBS2_FASTDYN)
++		/* Block the control thread briefly so the lower-priority Zenoh worker
++		 * can put the response on the emulated ENET device immediately. */
++		k_sleep(K_MSEC(1));
+ #else
+ 		k_sleep(K_NSEC(CUBS2_FIXED_WING_OUTER_LOOP_PERIOD_NS));
+ #endif

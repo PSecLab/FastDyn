@@ -64,7 +64,7 @@ clean:
 fetch:
 	git submodule update --init third_party/common/cmsis-svd-data;
 	@# Only fetch submodules that are required for the selected features.
-	@if [ "$(DEV)" = "true" ] && [ "$(LIBHW)" = "true" ]; then \
+	@if [ "$(DEV)" = "true" ]; then \
 		git submodule update --init device_models/elder/inih third_party/common/cmsis-svd-data; \
 	fi
 	@if [ "$(LIBGZ)" = "true" ] || [ "$(FLIGHT_CONTROLLERS)" = "true" ]; then \

@@ -1,0 +1,117 @@
+name: Cerebri CUBS2 FMI3 Mission
+
+on:
+  pull_request:
+  push:
+    branches: [main, cerebi_cubs2_rehosting]
+  workflow_dispatch:
+
+env:
+  CUBS2_REF: main
+
+jobs:
+  fastdyn-cubs2-mission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out FastDyn
+        uses: actions/checkout@v4
+
+      - name: Check out latest cerebri_cubs2
+        uses: actions/checkout@v4
+        with:
+          repository: cognipilot/cerebri_cubs2
+          ref: ${{ env.CUBS2_REF }}
+          path: cerebri_cubs2
+
+      - name: Apply FastDyn hardware-lockstep adapter
+        working-directory: cerebri_cubs2
+        run: git apply ../patches/cerebri_cubs2_fastdyn.patch
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake device-tree-compiler git iproute2 jq \
+            libexpat1-dev libfdt-dev libglib2.0-dev libprotobuf-dev \
+            libpixman-1-dev libssl-dev meson ninja-build pkg-config \
+            protobuf-compiler python3-venv zlib1g-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Cache Cargo, CUBS2 west modules, and QEMU
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            modules
+            zephyr
+            utils/cerebri_cubs2_fmi3_bridge/target
+            ../qemu
+          key: ${{ runner.os }}-cubs2-${{ hashFiles('utils/cerebri_cubs2_fmi3_bridge/Cargo.lock', 'cerebri_cubs2/west.yml', 'setup.sh', 'patches/qemu-fastdyn-plugin-icount.patch', 'patches/cerebri_cubs2_fastdyn.patch') }}
+          restore-keys: ${{ runner.os }}-cubs2-
+
+      - name: Initialize and build cerebri_cubs2 FastDyn firmware
+        working-directory: cerebri_cubs2
+        env:
+          CUBS2_WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          nix run .#west-update
+          extra_conf="$(realpath ../tests/integration/cerebri_cubs2_fastdyn.conf)"
+          overlay="$(realpath ../tests/integration/cerebri_cubs2_fastdyn.overlay)"
+          CUBS2_BUILD_DIR="$PWD/build-mr_vmu_tropic-fastdyn" nix run .#build -- -p always -- \
+            -DEXTRA_CONF_FILE="$extra_conf" \
+            -DDTC_OVERLAY_FILE="$overlay"
+
+      - name: Build FastDyn, QEMU, device models, and Rust bridge
+        run: |
+          source ./setup.sh --build-qemu
+          export PKG_CONFIG_PATH="$PWD/out/deps/cjson/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          export LD_LIBRARY_PATH="$PWD/out/deps/cjson/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          make qemu_path=../qemu DEV=true PHY=true FLIGHT_CONTROLLERS=true FMU=true
+          cmake -S boardrunner/boardrunner_sdk \
+            -B boardrunner/boardrunner_sdk/build \
+            -DFASTDYN_INCLUDE_DIR="$PWD/include" \
+            -DQEMU_INCLUDE_DIR="$(realpath ../qemu/include)"
+          cmake --build boardrunner/boardrunner_sdk/build -j2
+          cargo test --release --locked --manifest-path utils/cerebri_cubs2_fmi3_bridge/Cargo.toml
+          cargo build --release --locked --manifest-path utils/cerebri_cubs2_fmi3_bridge/Cargo.toml
+
+      - name: Analyze CUBS2 Cortex-M7 image
+        env:
+          CEREBRI_CUBS2_ROOT: ${{ github.workspace }}/cerebri_cubs2
+          CUBS2_FASTDYN_BUILD_DIR: ${{ github.workspace }}/cerebri_cubs2/build-mr_vmu_tropic-fastdyn
+          CUBS2_WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          source fastdyn-env/bin/activate
+          if ! git -C third_party/common/cmsis-svd-data apply --reverse --check \
+              ../../../patches/MIMXRT1064_snvs_size.patch >/dev/null 2>&1; then
+            git -C third_party/common/cmsis-svd-data apply \
+              ../../../patches/MIMXRT1064_snvs_size.patch
+          fi
+          fastdyn static-analyze -c configs/cerebri_cubs2_mr_vmu_tropic.toml
+
+      - name: Fly CUBS2 FMI3 mission and measure speedup
+        env:
+          CEREBRI_CUBS2_ROOT: ${{ github.workspace }}/cerebri_cubs2
+          CUBS2_FASTDYN_BUILD_DIR: ${{ github.workspace }}/cerebri_cubs2/build-mr_vmu_tropic-fastdyn
+          CUBS2_WORKSPACE_ROOT: ${{ github.workspace }}
+          CUBS2_FASTDYN_T_END: '40'
+          FASTDYN_CUBS2_TIMEOUT_SEC: '300'
+        run: tests/integration/cerebri_cubs2_mission_smoke.sh
+
+      - name: Upload CUBS2 mission artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebri-cubs2-fmi3-mission
+          path: |
+            out/ci/cerebri_cubs2_mission.log
+            out/ci/cerebri_cubs2_work/**
+          if-no-files-found: ignore

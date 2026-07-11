@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/* CUBS2's FastDyn path consumes state over Ethernet; physical flight sensors,
+ * receivers, motor outputs, and hardware entropy must not initialize. */
+&trng { status = "disabled"; };
+&icm45686 { status = "disabled"; };
+&bmi08x_accel { status = "disabled"; };
+&bmi08x_gyro { status = "disabled"; };
+&ist8310 { status = "disabled"; };
+&bmm350 { status = "disabled"; };
+&bmp390 { status = "disabled"; };
+&sbus0 { status = "disabled"; };
+&flexio1 { status = "disabled"; };

@@ -1,11 +1,16 @@
 import sys
-import tomli
 import logging
 import os
 from pathlib import Path
 
+try:
+    import tomllib as tomli
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback.
+    import tomli
+
 from fastdyn.fastdyn import *
 from . import fmu_build
+from .config_env import expand_env_defaults
 from . import fastdyn_log as fastdyn_log_conf
 
 log = logging.getLogger(__name__)
@@ -98,7 +103,7 @@ def _format_icount_option(value):
 def load_toml_config(config_path):
     try:
         with open(config_path, "rb") as f:
-            return tomli.load(f)
+            return expand_env_defaults(tomli.load(f))
     except FileNotFoundError:
         fastdyn_log.error(f"The file '{config_path}' was not found.")
         raise
@@ -108,7 +113,22 @@ def load_toml_config(config_path):
 
 
 #parse a single toml per machine, use as many instances as you want in future to parse multiple machines
-def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu=True):
+def _load_svd_enabled(machine_info, override):
+    value = machine_info.get("load_svd", True) if override is None else override
+    if not isinstance(value, bool):
+        raise TypeError("[Machine].load_svd must be true or false")
+    return value
+
+
+def parser(
+    out_dir,
+    machine_name,
+    toml_config,
+    svd_path,
+    fmu_name=None,
+    load_fmu=True,
+    load_svd=None,
+):
     #parse the toml configuration
     fastdyn_log.info(f"Parsing Config file: {toml_config}")
 
@@ -186,7 +206,8 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
     q.agentic_fuzz_taint   = toml_parser.machine_info.get("agentic_fuzz_taint", True)
 
     #add cmsis svd if Platform name provided by the user
-    if toml_parser.machine_info.get("platform") is not None:
+    if (toml_parser.machine_info.get("platform") is not None and
+            _load_svd_enabled(toml_parser.machine_info, load_svd)):
         machine0.add_cmsis_svd(cmsis_svd=svd_path)
 
 

@@ -1,0 +1,61 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/ {
+	aliases {
+		rc = &fastdyn_lockstep_rc;
+		imu0 = &fastdyn_lockstep_imu;
+		motors = &fastdyn_lockstep_dshot;
+	};
+
+	fastdyn_lockstep_rc: fastdyn_lockstep_rc {
+		compatible = "cognipilot,lockstep-rc";
+		status = "okay";
+	};
+
+	fastdyn_lockstep_imu: fastdyn_lockstep_imu {
+		compatible = "cognipilot,lockstep-imu";
+		status = "okay";
+	};
+
+	fastdyn_lockstep_dshot: fastdyn_lockstep_dshot {
+		compatible = "cognipilot,lockstep-dshot";
+		channel-count = <4>;
+		status = "okay";
+	};
+};
+
+&trng {
+	status = "disabled";
+};
+
+&icm45686 {
+	status = "disabled";
+};
+
+&bmi08x_accel {
+	status = "disabled";
+};
+
+&bmi08x_gyro {
+	status = "disabled";
+};
+
+&ist8310 {
+	status = "disabled";
+};
+
+&bmm350 {
+	status = "disabled";
+};
+
+&bmp390 {
+	status = "disabled";
+};
+
+&sbus0 {
+	status = "disabled";
+};
+
+&flexio1 {
+	status = "disabled";
+};

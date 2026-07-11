@@ -1,5 +1,5 @@
 #include <device.h>
-#include <hw.h>
+#include <config.h>
 #include <utils.h>
 #include "device_config.h"
 #include <stdio.h>
@@ -23,10 +23,9 @@ static int device_count = 0;
 
 static uint64_t elder_read(void *opaque, hwaddr address, unsigned size, uint64_t pc) {
 	for (int i = 0; i < device_count; i++) {
-		Range ranges[MAX_DEVICES];
-		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
 		for (int j=0; j<devices[i].config->range_count; j++) {
-			if (address >= ranges[j].start && address < ranges[j].end) {
+			const AddrRange *range = &devices[i].config->ranges[j];
+			if (address >= range->start && address < range->end) {
 				// Good case, my scroll worked
 				return devices[i].model.read(devices[i].model.opaque, address, size, pc);
 			}
@@ -43,10 +42,9 @@ static uint64_t elder_read(void *opaque, hwaddr address, unsigned size, uint64_t
 
 static void elder_write(void *opaque, hwaddr address, uint64_t value, unsigned size, uint64_t pc) {
 	for (int i = 0; i < device_count; i++) {
-		Range ranges[MAX_DEVICES];
-		utils_parse_ranges(devices[i].config->range_count,devices[i].config->ranges, ranges);
 		for (int j=0; j<devices[i].config->range_count; j++) {
-			if (address >= ranges[j].start && address < ranges[j].end) {
+			const AddrRange *range = &devices[i].config->ranges[j];
+			if (address >= range->start && address < range->end) {
 				// Good case, my scroll worked
 				devices[i].model.write(devices[i].model.opaque, address, value, size, pc);
 				return;
@@ -97,7 +95,9 @@ static void* elder_init(ConfigSection* model_info) {
 	for (int i=0; i < model_info->device_count; i++) {
 		devices[i].config = &model_info->devices[i];
 		devices[i].model.name = devices[i].config->name;
+#if DEBUG_PRINT
 		printf("Loading device [%s] from %s\n", devices[i].config->name, devices[i].config->scroll_path);
+#endif
 
 	    devices[i].handle = dlopen(devices[i].config->scroll_path, RTLD_NOW);
 	    if (!devices[i].handle) {
@@ -129,7 +129,8 @@ static void* elder_init(ConfigSection* model_info) {
 		devices[i].model.opaque = devices[i].model.init(model_info);
 
         // Register IRQs for this device based on config
-        if (devices[i].config->irq_count > 0 && devices[i].config->irqs) {
+        if ((devices[i].model.serve || devices[i].model.interrupt) &&
+            devices[i].config->irq_count > 0 && devices[i].config->irqs) {
             for (int j = 0; j < devices[i].config->irq_count; j++) {
                 dev_register_interrupt_device_model((int)devices[i].config->irqs[j], &elder_model_def);
             }

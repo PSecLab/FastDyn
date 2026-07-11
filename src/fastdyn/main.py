@@ -2209,6 +2209,7 @@ def static_analyze(config, binary, svd, force, format):
         toml_config=config,
         svd_path=svd_path,
         load_fmu=False,
+        load_svd=True,
     )
 
     machine = fastdyn_handle.machines.get("machine0")

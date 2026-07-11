@@ -1,0 +1,118 @@
+name: Cerebri RDD2 Mission
+
+on:
+  pull_request:
+  push:
+    branches: [main, cerebi_cubs2_rehosting]
+  workflow_dispatch:
+
+env:
+  # This branch contains the recovered Rumoca commit plus the restored
+  # CUBS2-style hardware-target lockstep configuration. Replace with a merge SHA
+  # when the coordinated cerebri_rdd2 change lands on main.
+  RDD2_REF: fix/fastdyn-lockstep
+
+jobs:
+  fastdyn-rdd2-mission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out FastDyn
+        uses: actions/checkout@v4
+
+      - name: Check out cerebri_rdd2
+        uses: actions/checkout@v4
+        with:
+          repository: cognipilot/cerebri_rdd2
+          ref: ${{ env.RDD2_REF }}
+          path: cerebri_rdd2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake device-tree-compiler git iproute2 jq \
+            libexpat1-dev libfdt-dev libglib2.0-dev libprotobuf-dev \
+            libpixman-1-dev libssl-dev meson ninja-build pkg-config \
+            protobuf-compiler python3-venv zlib1g-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Cache Cargo and QEMU
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/zenohd
+            ~/.cargo/git
+            ~/.cargo/registry
+            utils/cerebri_rdd2_mission/target
+            ../qemu
+          key: ${{ runner.os }}-rdd2-${{ hashFiles('utils/cerebri_rdd2_mission/Cargo.lock', 'setup.sh', 'patches/qemu-fastdyn-plugin-icount.patch', 'patches/csyn_inertial_sample.patch') }}
+          restore-keys: ${{ runner.os }}-rdd2-
+
+      - name: Initialize and build cerebri_rdd2 FastDyn firmware
+        working-directory: cerebri_rdd2
+        run: |
+          nix run .#west-update
+          csyn_patch="$(realpath ../patches/csyn_inertial_sample.patch)"
+          if ! git -C ../modules/lib/csyn apply --reverse --check "$csyn_patch" >/dev/null 2>&1; then
+            git -C ../modules/lib/csyn apply "$csyn_patch"
+          fi
+          extra_conf="$(realpath ../tests/integration/cerebri_rdd2_fastdyn.conf)"
+          overlay="$(realpath ../tests/integration/cerebri_rdd2_fastdyn.overlay)"
+          RDD2_BUILD_DIR="$PWD/build-mr_vmu_tropic" nix run .#build -- -p always -- \
+            -DEXTRA_CONF_FILE="$extra_conf" \
+            -DDTC_OVERLAY_FILE="$overlay"
+
+      - name: Build FastDyn, QEMU, Zenoh, and native mission runner
+        run: |
+          source ./setup.sh --build-qemu
+          export PKG_CONFIG_PATH="$PWD/out/deps/cjson/install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          export LD_LIBRARY_PATH="$PWD/out/deps/cjson/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          make qemu_path=../qemu DEV=true PHY=true FLIGHT_CONTROLLERS=true FMU=true
+          cmake -S boardrunner/boardrunner_sdk \
+            -B boardrunner/boardrunner_sdk/build \
+            -DFASTDYN_INCLUDE_DIR="$PWD/include" \
+            -DQEMU_INCLUDE_DIR="$(realpath ../qemu/include)"
+          cmake --build boardrunner/boardrunner_sdk/build -j2
+          cargo test --locked --manifest-path utils/cerebri_rdd2_mission/Cargo.toml
+          cargo build --release --locked --manifest-path utils/cerebri_rdd2_mission/Cargo.toml
+          command -v zenohd >/dev/null || cargo install zenohd --version 1.9.0 --locked
+
+      - name: Analyze RDD2 Cortex-M7 image
+        env:
+          CEREBRI_RDD2_ROOT: ${{ github.workspace }}/cerebri_rdd2
+          RDD2_WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          source fastdyn-env/bin/activate
+          if ! git -C third_party/common/cmsis-svd-data apply --reverse --check \
+              ../../../patches/MIMXRT1064_snvs_size.patch >/dev/null 2>&1; then
+            git -C third_party/common/cmsis-svd-data apply \
+              ../../../patches/MIMXRT1064_snvs_size.patch
+          fi
+          fastdyn static-analyze \
+            -c configs/cerebri_rdd2_mr_vmu_tropic.toml \
+            -s third_party/common/cmsis-svd-data --force
+
+      - name: Fly RDD2 mission and measure speedup
+        env:
+          CEREBRI_RDD2_ROOT: ${{ github.workspace }}/cerebri_rdd2
+          RDD2_WORKSPACE_ROOT: ${{ github.workspace }}
+          FASTDYN_RDD2_TIMEOUT_SEC: '300'
+          FASTDYN_RDD2_NETWORK_SETUP: 'false'
+        run: tests/integration/cerebri_rdd2_mission_smoke.sh
+
+      - name: Upload RDD2 mission artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerebri-rdd2-mission
+          path: |
+            out/ci/cerebri_rdd2_mission.log
+            out/ci/cerebri_rdd2_work/**
+          if-no-files-found: ignore

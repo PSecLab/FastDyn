@@ -1,0 +1,18 @@
+[package]
+name = "cerebri-cubs2-fmi3-bridge"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+memmap2 = "0.9"
+zenoh = { version = "=1.9.0", default-features = false, features = ["transport_udp"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+panic = "abort"
+strip = true

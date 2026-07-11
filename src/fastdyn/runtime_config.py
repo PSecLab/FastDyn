@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 import logging
 import os
 from pathlib import Path
-import re
 import shlex
 import signal
 import subprocess
@@ -28,35 +27,13 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback.
     import tomli as tomllib
 
 from . import fmu_build, profiling, timing
+from .config_env import expand_env_defaults
 
 log = logging.getLogger(__name__)
 
 
 class RuntimeConfigError(RuntimeError):
     pass
-
-
-_ENV_PATTERN = re.compile(
-    r"\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}"
-)
-
-
-def expand_env_defaults(value: str, env: dict[str, str] | None = None) -> str:
-    """Expand ${VAR} and ${VAR:-default} in TOML strings."""
-
-    merged = os.environ if env is None else env
-
-    def replace(match: re.Match[str]) -> str:
-        name = match.group("braced")
-        default = match.group("default")
-        current = merged.get(name)
-        if current not in (None, ""):
-            return current
-        if default is not None:
-            return default
-        return ""
-
-    return _ENV_PATTERN.sub(replace, value)
 
 
 def _expand_value(value: object, env: dict[str, str]) -> object:
@@ -478,6 +455,7 @@ def configure_run_environment(config_path: str | Path, work_dir: str | Path) -> 
 
     env = {
         "FASTDYN_CONFIG": str(config_path),
+        "FASTDYN_REPO_ROOT": str(fmu_build.find_repo_root(config_path)),
         "FASTDYN_WORK_DIR": str(work_dir_path),
         **_profiling_env(run_table, work_dir_path),
     }
@@ -537,6 +515,7 @@ class RuntimeProcessManager:
         env.update(
             {
                 "FASTDYN_CONFIG": str(self.config_path),
+                "FASTDYN_REPO_ROOT": str(fmu_build.find_repo_root(self.config_path)),
                 "FASTDYN_WORK_DIR": str(self.work_dir),
                 "FASTDYN_TIMING_FILE": str(self.work_dir / "fastdyn_timing.jsonl"),
                 "FASTDYN_TIMING_PROCESS": process.name,

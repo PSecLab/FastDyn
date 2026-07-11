@@ -3,10 +3,12 @@
 This is the command runbook for rehosting the Zephyr `cerebri_cubs2` firmware
 for `mr_vmu_tropic/mimxrt1064`.
 
-Use the FastDyn checkout under:
+Use the FastDyn checkout and configure the firmware/workspace locations:
 
 ```bash
-cd /scratch/Fastdyn/zephyr_rehosting/FastDyn
+cd /path/to/FastDyn
+export CEREBRI_CUBS2_ROOT=/path/to/cerebri_cubs2
+export CUBS2_WORKSPACE_ROOT=/path/to/cerebri-west-workspace
 ```
 
 Use the repo-local FastDyn entrypoint. A global `fastdyn` may point at a
@@ -20,21 +22,22 @@ SVD=third_party/common/cmsis-svd-data
 
 ## Inputs
 
-Required sibling repositories:
+The default TOML supports sibling repositories, or the environment overrides
+above for another layout:
 
 ```text
-/scratch/Fastdyn/zephyr_rehosting/FastDyn
-/scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2
-/scratch/Fastdyn/zephyr_rehosting/qemu
-/scratch/Fastdyn/zephyr_rehosting/libhw
-/scratch/Fastdyn/zephyr_rehosting/zephyr
-/scratch/Fastdyn/zephyr_rehosting/modules
+workspace/FastDyn
+workspace/cerebri_cubs2
+workspace/qemu
+workspace/libhw
+workspace/zephyr
+workspace/modules
 ```
 
 Firmware ELF:
 
 ```text
-/scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2/build-mr_vmu_tropic/zephyr/zephyr.elf
+$CEREBRI_CUBS2_ROOT/build-mr_vmu_tropic/zephyr/zephyr.elf
 ```
 
 FastDyn TOML:
@@ -69,7 +72,7 @@ so FastDyn does not treat SNVS as covering adjacent MIMXRT1064 peripherals.
 ## Build Firmware
 
 ```bash
-cd /scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2
+cd "$CEREBRI_CUBS2_ROOT"
 nix run .#west-update
 nix run .#build -- -p always
 ```
@@ -77,7 +80,7 @@ nix run .#build -- -p always
 The expected board build directory is:
 
 ```text
-/scratch/Fastdyn/zephyr_rehosting/cerebri_cubs2/build-mr_vmu_tropic
+$CEREBRI_CUBS2_ROOT/build-mr_vmu_tropic
 ```
 
 ## Static Analysis

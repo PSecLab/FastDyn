@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 #include <device.h>
 #include <boardrunner/vio.h>
@@ -1043,6 +1044,7 @@ void* enet_init(ConfigSection* model_info)
 {
     unsigned idx = g_enet_count;
     EnetState *s;
+    const char *tap_name;
 
     (void)model_info;
 
@@ -1055,7 +1057,11 @@ void* enet_init(ConfigSection* model_info)
     s = &g_enet[idx];
     memset(s, 0, sizeof(*s));
     s->common_irq = g_enet_common_irqs[idx];
-    s->tap_fd = api_tap_init(g_enet_tap_names[idx]);
+    tap_name = getenv("FASTDYN_ENET_TAP");
+    if (tap_name == NULL || tap_name[0] == '\0') {
+        tap_name = g_enet_tap_names[idx];
+    }
+    s->tap_fd = api_tap_init(tap_name);
     s->rx_timer = qemu_plugin_timer_new_period_ns(enet_rx_timer_cb, s, ENET_RX_TIMER_PERIOD_NS);
 
     enet_init_phy(s);

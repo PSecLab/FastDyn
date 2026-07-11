@@ -51,6 +51,12 @@ static void dwt_sync_cyccnt(DWTState *s, int force_progress) {
 
     if ((s->ctrl & DWT_CTRL_CYCCNTENA) == 0) {
         s->last_vtime_ns = now;
+        /* Some Cortex-M QEMU builds consume the CTRL write internally while
+         * still forwarding CYCCNT reads to the plugin. Preserve progress for
+         * firmware polling loops in that split-routing case. */
+        if (force_progress) {
+            s->cyccnt += DWT_SYNTHETIC_READ_STEP;
+        }
         return;
     }
 

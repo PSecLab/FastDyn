@@ -1,20 +1,20 @@
 # ==============================================================================
-#                      Cerebri CUBS2 / MR-VMU-Tropic Rehosting
+#                      Cerebri RDD2 / MR-VMU-Tropic Rehosting
 # ==============================================================================
 [Rehosting]
 [Rehosting.directories]
-static_analysis_cache_dir = "./fastdyn_static_analysis_cerebri_cubs2"
-firmware_source_roots = ["${CUBS2_WORKSPACE_ROOT:-..}"]
+static_analysis_cache_dir = "./fastdyn_static_analysis_cerebri_rdd2"
+firmware_source_roots = ["${RDD2_WORKSPACE_ROOT:-..}"]
 firmware_build_roots = [
-    "${CUBS2_FASTDYN_BUILD_DIR:-../cerebri_cubs2/build-mr_vmu_tropic-fastdyn}",
+    "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic",
 ]
 modeling_dir = "boardrunner/boardrunner_sdk/model"
 
 [Rehosting.static_analysis.macros]
 enabled = false
 strategy = "rebuild"
-source_project_root = "${CUBS2_WORKSPACE_ROOT:-..}"
-build_dir = "${CUBS2_FASTDYN_BUILD_DIR:-../cerebri_cubs2/build-mr_vmu_tropic-fastdyn}"
+source_project_root = "${RDD2_WORKSPACE_ROOT:-..}"
+build_dir = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic"
 reuse_existing_build = true
 allow_build = false
 
@@ -30,7 +30,7 @@ base_address = "0x20200000"
 memory_size = "512K"
 memory_type = "SRAM"
 backend = "file"
-memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_ocram2.bin"
+memory_file = "./fastdyn_qemu_memory/cerebri_rdd2_ocram2.bin"
 share = true
 prealloc = false
 
@@ -42,7 +42,7 @@ base_address = "0x20000000"
 memory_size = "256K"
 memory_type = "SRAM"
 backend = "file"
-memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_dtcm.bin"
+memory_file = "./fastdyn_qemu_memory/cerebri_rdd2_dtcm.bin"
 share = true
 prealloc = false
 
@@ -54,7 +54,7 @@ base_address = "0x00000000"
 memory_size = "256K"
 memory_type = "SRAM"
 backend = "file"
-memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_itcm.bin"
+memory_file = "./fastdyn_qemu_memory/cerebri_rdd2_itcm.bin"
 share = true
 prealloc = false
 
@@ -67,7 +67,7 @@ base_address = "0x70000000"
 memory_size = "4M"
 memory_type = "FLASH"
 backend = "file"
-memory_file = "./fastdyn_qemu_memory/cerebri_cubs2_xip_flash.bin"
+memory_file = "./fastdyn_qemu_memory/cerebri_rdd2_xip_flash.bin"
 share = true
 prealloc = false
 
@@ -76,14 +76,15 @@ prealloc = false
 # ==============================================================================
 [Machine]
 platform = "MIMXRT1064"
-# Runtime IRQs are numeric; static-analyze explicitly overrides this setting.
+# All runtime IRQs below are numeric. Static analysis explicitly loads the SVD,
+# while mission runs skip its multi-second XML parse.
 load_svd = false
 qemu_path = "${FASTDYN_QEMU_PATH:-../qemu/build/qemu-system-arm}"
 enable_gdb = false
 stop_on_start = false
 launch_gdb = false
 monitor_port = 5555
-qmp_socket = "/tmp/cubs2_qmp.sock"
+qmp_socket = "/tmp/rdd2_qmp.sock"
 log_file = "qemu.log"
 log_options = "none"
 icount = { shift = 6, sleep = false, align = false }
@@ -107,8 +108,8 @@ machine = "cortexm"
 cpu = "cortex-m7"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../qemu/ws/monitor.elf"
-binary = "${CUBS2_FASTDYN_BUILD_DIR:-../cerebri_cubs2/build-mr_vmu_tropic-fastdyn}/zephyr/zephyr.elf"
-symbol_file = "${CUBS2_FASTDYN_BUILD_DIR:-../cerebri_cubs2/build-mr_vmu_tropic-fastdyn}/zephyr/zephyr.elf"
+binary = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic/zephyr/zephyr.elf"
+symbol_file = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic/zephyr/zephyr.elf"
 init_nsvtor = "0x70002000"
 twintrace = "None"
 hardware_trace = "hardware_log/io.log"
@@ -507,34 +508,26 @@ name = "gazebo"
 enabled = false
 
 # ==============================================================================
-#                   FMI3 / Firmware Lockstep Orchestration
+#                      Firmware Lockstep Mission
 # ==============================================================================
-# The upstream CUBS2 SIL runner still owns FMU generation, execution, traces,
-# reports, and lockstep checks. This FastDyn bridge replaces native_sim with the
-# rehosted mr_vmu_tropic firmware connected through Zenoh over the ENET TAP.
-[Run.processes.cerebri_cubs2_fmi3]
+# The plant/mission runner is compiled Rust. Python is not in the controller,
+# physics, Synapse, or transport hot path.
+[Run.processes.cerebri_rdd2_mission]
 command = [
-    "${FASTDYN_REPO_ROOT}/utils/cerebri_cubs2_fmi3_bridge.py",
-    "--launch",
-    "--cubs2-root",
-    "${CEREBRI_CUBS2_ROOT:-../cerebri_cubs2}",
-    "--cubs2-build-dir",
-    "${CUBS2_FASTDYN_BUILD_DIR:-../cerebri_cubs2/build-mr_vmu_tropic-fastdyn}",
-    "--artifacts",
-    "${FASTDYN_WORK_DIR}/cerebri_cubs2_fmi3",
+    "${FASTDYN_REPO_ROOT}/utils/cerebri_rdd2_mission/target/release/cerebri-rdd2-mission",
     "--locator",
-    "${CUBS2_FASTDYN_LOCATOR:-udp/192.0.2.2:7447}",
-    "--t-end",
-    "${CUBS2_FASTDYN_T_END:-40}",
-    "--startup-timeout-s",
-    "${CUBS2_FASTDYN_STARTUP_TIMEOUT_S:-60}",
-    "--sim-speed",
-    "${CUBS2_FASTDYN_SIM_SPEED:-1000}",
+    "${RDD2_FASTDYN_LOCATOR:-udp/192.0.2.2:7447}",
+    "--duration",
+    "${RDD2_FASTDYN_MISSION_DURATION_S:-20}",
+    "--report",
+    "${RDD2_FASTDYN_REPORT:-out/cerebri_rdd2_mission.json}",
 ]
-ready_message = "CUBS2 FMI3 lockstep runner starting"
+ready_message = "RDD2 mission runner connected"
 terminate_run_on_exit = true
 
-[Run.processes.cerebri_cubs2_fmi3.env]
-CUBS2_FASTDYN_LOCATOR = "${CUBS2_FASTDYN_LOCATOR:-udp/192.0.2.2:7447}"
-CUBS2_FASTDYN_REPUBLISH_S = "${CUBS2_FASTDYN_REPUBLISH_S:-0.02}"
-CUBS2_FASTDYN_STARTUP_TIMEOUT_S = "${CUBS2_FASTDYN_STARTUP_TIMEOUT_S:-60}"
+[Run.processes.cerebri_rdd2_mission.env]
+RDD2_FASTDYN_LOCATOR = "${RDD2_FASTDYN_LOCATOR:-udp/192.0.2.2:7447}"
+RDD2_FASTDYN_SHARED_MEMORY = "${FASTDYN_QEMU_MEMORY_DIR:-./fastdyn_qemu_memory}/machine0_main_ocram2.bin"
+RDD2_FASTDYN_FIRMWARE_ELF = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic/zephyr/zephyr.elf"
+RDD2_FASTDYN_PLANT_DT_S = "${RDD2_FASTDYN_PLANT_DT_S:-0.020}"
+RDD2_FASTDYN_MIN_SPEEDUP = "${RDD2_FASTDYN_MIN_SPEEDUP:-10.0}"
