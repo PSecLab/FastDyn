@@ -20,15 +20,16 @@ pub struct LockstepInputs {
 }
 
 pub fn lockstep_inputs(
-    gyro_frd: [f32; 3],
-    accel_frd: [f32; 3],
+    gyro_flu: [f32; 3],
+    accel_flu: [f32; 3],
     channels: [i32; 16],
     target_boot_time_ns: u64,
 ) -> LockstepInputs {
     let timestamp_us = target_boot_time_ns / 1_000;
-    // synapse_fbs v0.5 standardizes inertial vectors as FLU.
-    let gyro_flu = Vec3f::new(gyro_frd[0], -gyro_frd[1], -gyro_frd[2]);
-    let accel_flu = Vec3f::new(accel_frd[0], -accel_frd[1], -accel_frd[2]);
+    // synapse_fbs v0.5 standardizes inertial vectors as FLU, matching the
+    // plant's body frame, so the sample passes through unconverted.
+    let gyro_flu = Vec3f::new(gyro_flu[0], gyro_flu[1], gyro_flu[2]);
+    let accel_flu = Vec3f::new(accel_flu[0], accel_flu[1], accel_flu[2]);
     let zero = Vec3f::new(0.0, 0.0, 0.0);
     let inertial_flags =
         (topic::InertialFieldFlags::Accel | topic::InertialFieldFlags::Gyro).bits();
@@ -122,7 +123,7 @@ mod tests {
         channels[5] = 2000;
         let inputs = lockstep_inputs([1.0, 2.0, 3.0], [4.0, 5.0, -9.8], channels, 5_000_000);
         assert_eq!(inputs.inertial_sample.timestamp_us(), 5_000);
-        assert_eq!(inputs.inertial_sample.gyro_flu_rad_s().y(), -2.0);
+        assert_eq!(inputs.inertial_sample.gyro_flu_rad_s().y(), 2.0);
         assert_eq!(inputs.manual_control.throttle_milli(), 250);
         assert!(
             topic::ManualControlFlags::from_bits_retain(inputs.manual_control.flags())

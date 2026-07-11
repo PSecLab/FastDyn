@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
 
 env:
-  # This branch contains the recovered Rumoca commit plus the restored
-  # CUBS2-style hardware-target lockstep configuration. Replace with a merge SHA
-  # when the coordinated cerebri_rdd2 change lands on main.
-  RDD2_REF: fix/fastdyn-lockstep
+  # cerebri_rdd2 main after CogniPilot/cerebri_rdd2#1 (Rumoca eFMI control +
+  # shared lockstep simulation) and #2 (cerebri_modules rename) landed. Bump
+  # deliberately when coordinating firmware and FastDyn changes.
+  RDD2_REF: 75264399a2c6b9cb9c341a44fffc09af3569acb1
 
 jobs:
   fastdyn-rdd2-mission:
@@ -52,17 +52,13 @@ jobs:
             ~/.cargo/registry
             utils/cerebri_rdd2_mission/target
             ../qemu
-          key: ${{ runner.os }}-rdd2-${{ hashFiles('utils/cerebri_rdd2_mission/Cargo.lock', 'setup.sh', 'patches/qemu-fastdyn-plugin-icount.patch', 'patches/csyn_inertial_sample.patch') }}
+          key: ${{ runner.os }}-rdd2-${{ hashFiles('utils/cerebri_rdd2_mission/Cargo.lock', 'setup.sh', 'patches/qemu-fastdyn-plugin-icount.patch') }}
           restore-keys: ${{ runner.os }}-rdd2-
 
       - name: Initialize and build cerebri_rdd2 FastDyn firmware
         working-directory: cerebri_rdd2
         run: |
           nix run .#west-update
-          csyn_patch="$(realpath ../patches/csyn_inertial_sample.patch)"
-          if ! git -C ../modules/lib/csyn apply --reverse --check "$csyn_patch" >/dev/null 2>&1; then
-            git -C ../modules/lib/csyn apply "$csyn_patch"
-          fi
           extra_conf="$(realpath ../tests/integration/cerebri_rdd2_fastdyn.conf)"
           overlay="$(realpath ../tests/integration/cerebri_rdd2_fastdyn.overlay)"
           RDD2_BUILD_DIR="$PWD/build-mr_vmu_tropic" nix run .#build -- -p always -- \

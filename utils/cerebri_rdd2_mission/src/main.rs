@@ -19,6 +19,8 @@ type Subscriber =
     zenoh::pubsub::Subscriber<zenoh::handlers::FifoChannelHandler<zenoh::sample::Sample>>;
 
 const DEFAULT_PLANT_DT: f64 = 0.005;
+/// RDD2's fixed 1600 Hz firmware control-loop period.
+const CONTROLLER_DT: f64 = 0.000_625;
 
 #[derive(Debug)]
 struct Options {
@@ -41,7 +43,7 @@ struct Report {
     speedup_over_realtime: f64,
     minimum_speedup_required: f64,
     plant_step_seconds: f64,
-    controller_ticks: u64,
+    controller_ticks_expected: u64,
     plant_steps: u64,
     motor_messages: u64,
     flight_state_messages: u64,
@@ -106,7 +108,7 @@ fn options() -> Result<Options> {
     if !duration.is_finite() || duration < 18.0 {
         bail!("--duration must be finite and at least 18 seconds");
     }
-    if !plant_dt.is_finite() || !(0.000_625..=0.020).contains(&plant_dt) {
+    if !plant_dt.is_finite() || !(CONTROLLER_DT..=0.020).contains(&plant_dt) {
         bail!("--plant-dt must be finite and between 0.000625 and 0.020 seconds");
     }
     if !minimum_speedup.is_finite() || minimum_speedup < 0.0 {
@@ -323,7 +325,7 @@ where
         bail!("--controller-benchmark must be a positive finite duration");
     }
     let plant = Quadrotor::default();
-    let (gyro, accel) = plant.imu_frd();
+    let (gyro, accel) = plant.imu_flu();
     let mut channels = [1500; 16];
     channels[2] = 1000;
     channels[4] = 1000;
@@ -369,7 +371,7 @@ where
     let mission_steps = (options.duration / options.plant_dt).round() as u64;
     while report.plant_steps < mission_steps {
         let channels = rc_channels(simulated_time, &plant);
-        let (gyro, accel) = plant.imu_frd();
+        let (gyro, accel) = plant.imu_flu();
         let target_time = ((simulated_time + options.plant_dt) * 1.0e9).round() as u64;
         let inputs = protocol::lockstep_inputs(gyro, accel, channels, target_time);
         let (motor, state, state_count) = match exchange(&inputs, options.response_timeout) {
@@ -435,7 +437,9 @@ where
     report.speedup_over_realtime = report.simulated_seconds / report.wall_seconds;
     report.minimum_speedup_required = options.minimum_speedup;
     report.plant_step_seconds = options.plant_dt;
-    report.controller_ticks = (report.simulated_seconds / 0.000_625).round() as u64;
+    // Derived from the simulated duration at the 1600 Hz control rate, not
+    // counted from firmware telemetry.
+    report.controller_ticks_expected = (report.simulated_seconds / CONTROLLER_DT).round() as u64;
     report.final_altitude_m = plant.altitude();
     report.final_vertical_speed_m_s = plant.vertical_speed();
     evaluate(&mut report);
@@ -539,5 +543,49 @@ fn main() -> Result<()> {
         run_shared_memory(&options, memory_path)
     } else {
         run_zenoh(&options)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nominal_report() -> Report {
+        Report {
+            speedup_over_realtime: 12.0,
+            minimum_speedup_required: 10.0,
+            firmware_armed_observed: true,
+            firmware_disarmed_after_flight: true,
+            firmware_rc_and_imu_healthy: true,
+            firmware_auto_level_observed: true,
+            flight_state_messages: 100,
+            max_altitude_m: 2.0,
+            max_roll_response_deg: 5.0,
+            max_pitch_response_deg: 5.0,
+            max_tilt_deg: 20.0,
+            final_altitude_m: 0.05,
+            final_vertical_speed_m_s: 0.0,
+            ..Report::default()
+        }
+    }
+
+    #[test]
+    fn evaluate_passes_a_nominal_mission() {
+        let mut report = nominal_report();
+        evaluate(&mut report);
+        assert!(report.passed, "unexpected failures: {:?}", report.failures);
+        assert!(report.failures.is_empty());
+    }
+
+    #[test]
+    fn evaluate_flags_each_violated_requirement() {
+        let mut report = nominal_report();
+        report.speedup_over_realtime = 9.0;
+        report.firmware_armed_observed = false;
+        report.max_tilt_deg = 50.0;
+        report.final_altitude_m = 0.5;
+        evaluate(&mut report);
+        assert!(!report.passed);
+        assert_eq!(report.failures.len(), 4, "failures: {:?}", report.failures);
     }
 }

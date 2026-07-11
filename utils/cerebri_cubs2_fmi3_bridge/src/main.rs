@@ -26,6 +26,11 @@ const EXTERNAL_ODOMETRY_TOPIC: &str = "synapse/v1/topic/external_odometry";
 const PWM_TOPIC: &str = "synapse/v1/topic/pwm_signal_outputs";
 const ATTITUDE_TOPIC: &str = "synapse/v1/topic/attitude_command";
 
+/// The upstream FMI3 runner owns the bridge lifecycle through the terminate
+/// flag, so a missing PWM response never aborts the bridge; it is surfaced
+/// at this interval instead.
+const STALL_WARNING_PERIOD: Duration = Duration::from_secs(5);
+
 struct SharedTransport {
     mapping: MmapMut,
 }
@@ -156,6 +161,7 @@ fn main() -> Result<()> {
     let mut latest_attitude = [0_u8; ATTITUDE_SIZE];
     latest_attitude[8..12].copy_from_slice(&1.0_f32.to_le_bytes());
     let mut next_publish = Instant::now();
+    let mut next_stall_warning = Instant::now() + STALL_WARNING_PERIOD;
     let mut idle_rounds = 0_u32;
     let wall_start = Instant::now();
 
@@ -166,6 +172,7 @@ fn main() -> Result<()> {
             odometry = transport.odometry();
             timestamp.copy_from_slice(&odometry[..8]);
             pwm = None;
+            next_stall_warning = Instant::now() + STALL_WARNING_PERIOD;
             while pwm_subscriber
                 .try_recv()
                 .map_err(|error| anyhow!("failed to drain {PWM_TOPIC}: {error}"))?
@@ -225,6 +232,13 @@ fn main() -> Result<()> {
                     );
                 }
                 continue;
+            }
+            let now = Instant::now();
+            if now >= next_stall_warning {
+                eprintln!(
+                    "FastDyn/CUBS2 FMI3 bridge still waiting for a PWM response to sequence {pending_sequence}"
+                );
+                next_stall_warning = now + STALL_WARNING_PERIOD;
             }
         }
 

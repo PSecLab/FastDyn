@@ -78,6 +78,13 @@ impl Transport {
             .context("shared-memory extent overflow")?;
         let deadline = Instant::now() + timeout;
         let (_file, mapping) = open_mapping(memory_path, required_len, deadline)?;
+        let shared_base = mapping.as_ptr() as usize + offset;
+        if !shared_base.is_multiple_of(align_of::<SharedLayout>()) {
+            bail!(
+                "{SHARED_SYMBOL} at RAM offset {offset:#x} is not {}-byte aligned",
+                align_of::<SharedLayout>()
+            );
+        }
         let mut transport = Self {
             mapping,
             offset,
@@ -160,8 +167,13 @@ impl Transport {
                         self.sequence
                     );
                 }
+                // Mostly-hot spinning keeps exchange latency low; this
+                // periodic yield stops a hung firmware from pinning the
+                // core for the entire timeout window.
+                thread::yield_now();
+            } else {
+                std::hint::spin_loop();
             }
-            std::hint::spin_loop();
         }
 
         let mut pwm = topic::PwmSignalOutputsData::default();
@@ -203,5 +215,99 @@ mod tests {
         assert_eq!(offset_of!(SharedLayout, attitude_estimate), 208);
         assert_eq!(offset_of!(SharedLayout, attitude_command), 248);
         assert_eq!(offset_of!(SharedLayout, control_loop_metrics), 296);
+    }
+
+    #[test]
+    fn exchange_round_trips_through_the_shared_layout() {
+        let path = std::env::temp_dir().join(format!(
+            "fastdyn-rdd2-transport-test-{}",
+            std::process::id()
+        ));
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(size_of::<SharedLayout>() as u64).unwrap();
+        let mapping = unsafe { MmapOptions::new().map_mut(&file) }.unwrap();
+
+        // The rehosted firmware maps the same file from another process;
+        // a second mapping in a thread exercises the same coherence rules.
+        let fw_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let mut fw_mapping = unsafe { MmapOptions::new().map_mut(&fw_file) }.unwrap();
+        let firmware = thread::spawn(move || {
+            let shared = fw_mapping.as_mut_ptr().cast::<SharedLayout>();
+            let sequence = loop {
+                let sequence =
+                    unsafe { &*ptr::addr_of!((*shared).input_sequence) }.load(Ordering::Acquire);
+                if sequence != 0 {
+                    break sequence;
+                }
+                thread::yield_now();
+            };
+            let received_timestamp_us =
+                unsafe { ptr::addr_of!((*shared).inertial_sample).read() }.timestamp_us();
+            let mut pwm = topic::PwmSignalOutputsData::default();
+            pwm.set_output0_us(1750);
+            let mut health = topic::VehicleHealthData::default();
+            health.set_flags(topic::VehicleHealthFlags::Armed.bits());
+            health.set_sensors_health(
+                (topic::SensorComponentFlags::Gyro
+                    | topic::SensorComponentFlags::Accel
+                    | topic::SensorComponentFlags::RadioControl)
+                    .bits(),
+            );
+            unsafe {
+                ptr::copy_nonoverlapping(&pwm, ptr::addr_of_mut!((*shared).pwm_signal_outputs), 1);
+                ptr::copy_nonoverlapping(&health, ptr::addr_of_mut!((*shared).vehicle_health), 1);
+                (*ptr::addr_of!((*shared).response_sequence)).store(sequence, Ordering::Release);
+            }
+            received_timestamp_us
+        });
+
+        let mut transport = Transport {
+            mapping,
+            offset: 0,
+            sequence: 0,
+        };
+        transport
+            .shared()
+            .magic
+            .store(RDD2_LOCKSTEP_MAGIC, Ordering::Release);
+        let inputs =
+            protocol::lockstep_inputs([0.1, 0.2, 0.3], [0.0, 0.0, 9.8], [1500; 16], 5_000_000);
+        let (motor, state) = transport
+            .exchange(&inputs, Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(motor.values[0], 0.75);
+        assert!(state.armed && state.rc_valid && state.imu_ok);
+        assert_eq!(firmware.join().unwrap(), 5_000);
+        assert_eq!(transport.shared().terminate.load(Ordering::Acquire), 0);
+        drop(transport);
+
+        let final_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let final_mapping = unsafe { MmapOptions::new().map_mut(&final_file) }.unwrap();
+        let terminate_offset = offset_of!(SharedLayout, terminate);
+        assert_eq!(
+            u32::from_le_bytes(
+                final_mapping[terminate_offset..terminate_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            1,
+            "dropping the transport must request firmware termination"
+        );
+        drop(final_mapping);
+        fs::remove_file(path).unwrap();
     }
 }

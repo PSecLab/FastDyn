@@ -72,10 +72,11 @@ impl Quadrotor {
         ]
     }
 
-    /// Synapse SIL uses FRD while RDD2's controller and this plant use FLU.
-    pub fn imu_frd(&self) -> ([f32; 3], [f32; 3]) {
-        let frd = |v: [f64; 3]| [v[0] as f32, -v[1] as f32, -v[2] as f32];
-        (frd(self.body_rate), frd(self.specific_force))
+    /// IMU sample in the FLU body frame that this plant integrates in and
+    /// that synapse_fbs v0.5 standardizes for inertial vectors.
+    pub fn imu_flu(&self) -> ([f32; 3], [f32; 3]) {
+        let flu = |v: [f64; 3]| [v[0] as f32, v[1] as f32, v[2] as f32];
+        (flu(self.body_rate), flu(self.specific_force))
     }
 
     pub fn step(&mut self, motor: [f32; 4], dt: f64) {
@@ -164,9 +165,9 @@ mod tests {
         for _ in 0..1_000 {
             plant.step([0.0; 4], 0.001);
         }
-        let (_, accel) = plant.imu_frd();
+        let (_, accel) = plant.imu_flu();
         assert_eq!(plant.altitude(), 0.0);
-        assert!((accel[2] + GRAVITY as f32).abs() < 1.0e-4);
+        assert!((accel[2] - GRAVITY as f32).abs() < 1.0e-4);
     }
 
     #[test]

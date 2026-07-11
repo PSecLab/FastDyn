@@ -526,7 +526,6 @@ ready_message = "RDD2 mission runner connected"
 terminate_run_on_exit = true
 
 [Run.processes.cerebri_rdd2_mission.env]
-RDD2_FASTDYN_LOCATOR = "${RDD2_FASTDYN_LOCATOR:-udp/192.0.2.2:7447}"
 RDD2_FASTDYN_SHARED_MEMORY = "${FASTDYN_QEMU_MEMORY_DIR:-./fastdyn_qemu_memory}/machine0_main_ocram2.bin"
 RDD2_FASTDYN_FIRMWARE_ELF = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic/zephyr/zephyr.elf"
 RDD2_FASTDYN_PLANT_DT_S = "${RDD2_FASTDYN_PLANT_DT_S:-0.020}"

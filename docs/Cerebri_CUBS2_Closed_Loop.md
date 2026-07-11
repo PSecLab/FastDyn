@@ -99,7 +99,11 @@ $FASTDYN static-analyze -c "$CONFIG" -s "$SVD" --force
 
 ## Host network
 
-The ENET models use TAP devices `enet` and `enet2`:
+The ENET models use TAP devices `enet` and `enet2`. The smoke test performs
+this setup itself when `FASTDYN_CUBS2_NETWORK_SETUP=true` (its default), so
+running it locally mutates host networking under `sudo` and removes the bridge
+and TAP devices again on exit. Set `FASTDYN_CUBS2_NETWORK_SETUP=false` to
+manage the devices yourself:
 
 ```bash
 sudo modprobe tun

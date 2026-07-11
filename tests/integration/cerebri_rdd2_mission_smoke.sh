@@ -23,6 +23,9 @@ cleanup() {
     wait "$zenoh_pid" 2>/dev/null || true
   fi
   if [[ "$network_setup" == "true" ]]; then
+    for tap in enet enet2; do
+      sudo ip tuntap del dev "$tap" mode tap 2>/dev/null || true
+    done
     sudo ip link del br-fastdyn 2>/dev/null || true
   fi
 }

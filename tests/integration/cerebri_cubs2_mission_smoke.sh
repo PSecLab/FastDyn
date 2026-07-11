@@ -20,6 +20,9 @@ fi
 
 cleanup() {
   if [[ "$network_setup" == "true" ]]; then
+    for tap in enet enet2; do
+      sudo ip tuntap del dev "$tap" mode tap 2>/dev/null || true
+    done
     sudo ip link del br-fastdyn 2>/dev/null || true
   fi
 }
@@ -64,6 +67,13 @@ simulated="$(awk -F, 'NR > 1 { value=$1 } END { print value }' "$flight_csv")"
 overall_wall="$(jq -sr '[.[] | select(.event == "phase_end" and .phase == "fastdyn.run.total")] | last | .duration_s' "$timing")"
 lockstep_speedup="$(awk -F'|' '$2 ~ /lockstep_speed_x/ { gsub(/[[:space:]]/, "", $3); print $3 }' "$summary")"
 max_alt="$(awk -F'|' '$2 ~ /max_altitude_m/ { gsub(/[[:space:]]/, "", $3); print $3 }' "$summary")"
+for metric in simulated overall_wall lockstep_speedup max_alt; do
+  if [[ -z "${!metric}" || "${!metric}" == "null" ]]; then
+    echo "[ci] CUBS2 mission artifacts are missing metric '$metric' (fastdyn rc=$run_rc)" >&2
+    tail -200 "$log_file" >&2
+    exit 1
+  fi
+done
 overall_speedup="$(awk -v simulated="$simulated" -v wall="$overall_wall" \
   'BEGIN { printf "%.9f", simulated / wall }')"
 
