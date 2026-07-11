@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
 
 env:
-  # Coordinated firmware branch carrying the synapse_fbs 0.6.0 contract. Pin
+  # Coordinated firmware branch carrying the synapse_fbs 0.7.0 contract. Pin
   # a merge SHA after its cerebri_rdd2 PR lands.
-  RDD2_REF: fix/synapse-fbs-0.6
+  RDD2_REF: fix/synapse-fbs-0.7
 
 jobs:
   fastdyn-rdd2-mission:
@@ -82,6 +82,7 @@ jobs:
       - name: Analyze RDD2 Cortex-M7 image
         env:
           CEREBRI_RDD2_ROOT: ${{ github.workspace }}/cerebri_rdd2
+          RDD2_FASTDYN_BUILD_DIR: ${{ github.workspace }}/cerebri_rdd2/build-mr_vmu_tropic
           RDD2_WORKSPACE_ROOT: ${{ github.workspace }}
         run: |
           source fastdyn-env/bin/activate
@@ -97,6 +98,7 @@ jobs:
       - name: Fly RDD2 mission and measure speedup
         env:
           CEREBRI_RDD2_ROOT: ${{ github.workspace }}/cerebri_rdd2
+          RDD2_FASTDYN_BUILD_DIR: ${{ github.workspace }}/cerebri_rdd2/build-mr_vmu_tropic
           RDD2_WORKSPACE_ROOT: ${{ github.workspace }}
           FASTDYN_RDD2_TIMEOUT_SEC: '300'
           FASTDYN_RDD2_NETWORK_SETUP: 'false'

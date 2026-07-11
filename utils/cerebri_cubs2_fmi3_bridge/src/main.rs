@@ -18,11 +18,11 @@ const SHARED_MAGIC: u32 = 0x4355_4253;
 const SHARED_SYMBOL: &str = "cubs2_fastdyn_lockstep_shared";
 const RAM_START_SYMBOL: &str = "_image_ram_start";
 
-const ODOMETRY_SIZE: usize = size_of::<topic::ExternalOdometryData>();
+const ODOMETRY_SIZE: usize = size_of::<topic::OdometryData>();
 const PWM_SIZE: usize = size_of::<topic::PwmSignalOutputsData>();
 const ATTITUDE_SIZE: usize = size_of::<topic::AttitudeCommandData>();
 
-#[repr(C)]
+#[repr(C, align(8))]
 struct SharedLayout {
     magic: AtomicU32,
     input_sequence: AtomicU32,
@@ -367,8 +367,8 @@ fn main() -> Result<()> {
     }
 }
 
-const _: () = assert!(size_of::<SharedLayout>() == 176);
-const _: () = assert!(ODOMETRY_SIZE == 64);
+const _: () = assert!(size_of::<SharedLayout>() == 184);
+const _: () = assert!(ODOMETRY_SIZE == 72);
 const _: () = assert!(PWM_SIZE == 48);
 const _: () = assert!(ATTITUDE_SIZE == 48);
 
@@ -379,10 +379,10 @@ mod tests {
 
     #[test]
     fn layout_matches_firmware_and_upstream_abi() {
-        assert_eq!(size_of::<SharedLayout>(), 176);
-        assert_eq!(align_of::<SharedLayout>(), 4);
+        assert_eq!(size_of::<SharedLayout>(), 184);
+        assert_eq!(align_of::<SharedLayout>(), 8);
         assert_eq!(offset_of!(SharedLayout, odometry), 16);
-        assert_eq!(offset_of!(SharedLayout, pwm), 80);
-        assert_eq!(offset_of!(SharedLayout, attitude), 128);
+        assert_eq!(offset_of!(SharedLayout, pwm), 88);
+        assert_eq!(offset_of!(SharedLayout, attitude), 136);
     }
 }

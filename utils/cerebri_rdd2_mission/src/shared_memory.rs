@@ -130,7 +130,7 @@ impl Transport {
         timeout: Duration,
     ) -> Result<(MotorCommand, FlightState)> {
         let shared = self.shared_mut_ptr();
-        // SAFETY: generated payload structs have the same fixed v0.6 wire
+        // SAFETY: generated payload structs have the same fixed v0.7 wire
         // layout on both sides. The release store publishes both completed
         // copies to the firmware.
         unsafe {

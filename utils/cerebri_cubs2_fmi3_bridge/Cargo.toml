@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0"
 memmap2 = "0.9"
 object = "0.37"
-synapse_fbs = "=0.6.0"
+synapse_fbs = "=0.7.0"
 
 [profile.release]
 codegen-units = 1

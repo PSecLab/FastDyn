@@ -6,7 +6,7 @@
 static_analysis_cache_dir = "./fastdyn_static_analysis_cerebri_rdd2"
 firmware_source_roots = ["${RDD2_WORKSPACE_ROOT:-..}"]
 firmware_build_roots = [
-    "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic",
+    "${RDD2_FASTDYN_BUILD_DIR:-../cerebri_rdd2/build-mr_vmu_tropic}",
 ]
 modeling_dir = "boardrunner/boardrunner_sdk/model"
 
@@ -14,7 +14,7 @@ modeling_dir = "boardrunner/boardrunner_sdk/model"
 enabled = false
 strategy = "rebuild"
 source_project_root = "${RDD2_WORKSPACE_ROOT:-..}"
-build_dir = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic"
+build_dir = "${RDD2_FASTDYN_BUILD_DIR:-../cerebri_rdd2/build-mr_vmu_tropic}"
 reuse_existing_build = true
 allow_build = false
 
@@ -108,8 +108,8 @@ machine = "cortexm"
 cpu = "cortex-m7"
 plugin_library = "build/libfastdyn.so"
 monitor_elf = "../qemu/ws/monitor.elf"
-binary = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic/zephyr/zephyr.elf"
-symbol_file = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic/zephyr/zephyr.elf"
+binary = "${RDD2_FASTDYN_BUILD_DIR:-../cerebri_rdd2/build-mr_vmu_tropic}/zephyr/zephyr.elf"
+symbol_file = "${RDD2_FASTDYN_BUILD_DIR:-../cerebri_rdd2/build-mr_vmu_tropic}/zephyr/zephyr.elf"
 init_nsvtor = "0x70002000"
 twintrace = "None"
 hardware_trace = "hardware_log/io.log"
@@ -525,6 +525,6 @@ terminate_run_on_exit = true
 
 [Run.processes.cerebri_rdd2_mission.env]
 RDD2_FASTDYN_SHARED_MEMORY = "${FASTDYN_QEMU_MEMORY_DIR:-./fastdyn_qemu_memory}/machine0_main_ocram2.bin"
-RDD2_FASTDYN_FIRMWARE_ELF = "${CEREBRI_RDD2_ROOT:-../cerebri_rdd2}/build-mr_vmu_tropic/zephyr/zephyr.elf"
+RDD2_FASTDYN_FIRMWARE_ELF = "${RDD2_FASTDYN_BUILD_DIR:-../cerebri_rdd2/build-mr_vmu_tropic}/zephyr/zephyr.elf"
 RDD2_FASTDYN_PLANT_DT_S = "${RDD2_FASTDYN_PLANT_DT_S:-0.020}"
 RDD2_FASTDYN_MIN_SPEEDUP = "${RDD2_FASTDYN_MIN_SPEEDUP:-10.0}"

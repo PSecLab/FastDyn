@@ -73,7 +73,7 @@ impl Quadrotor {
     }
 
     /// IMU sample in the FLU body frame that this plant integrates in and
-    /// that synapse_fbs v0.6 standardizes for inertial vectors.
+    /// that synapse_fbs v0.7 standardizes for inertial vectors.
     pub fn imu_flu(&self) -> ([f32; 3], [f32; 3]) {
         let flu = |v: [f64; 3]| [v[0] as f32, v[1] as f32, v[2] as f32];
         (flu(self.body_rate), flu(self.specific_force))

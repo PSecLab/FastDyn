@@ -3,7 +3,7 @@
 RDD2 lockstep does not use Zenoh, Ethernet, or the CSyn/ZROS bridge to pace
 the controller. The Rust mission runner maps FastDyn's file-backed QEMU RAM,
 resolves `rdd2_fastdyn_lockstep_shared` and `_image_ram_start` from the firmware
-ELF, and exchanges generated `synapse_fbs` v0.6 payload structs through that
+ELF, and exchanges generated `synapse_fbs` v0.7 payload structs through that
 shared block. There are no fixed firmware addresses or handwritten message
 decoders in the host bridge.
 
@@ -17,7 +17,7 @@ firmware boot and FastDyn/QEMU startup.
 Run the local smoke test after building the firmware and Rust runner:
 
 ```sh
-CEREBRI_RDD2_ROOT=../cerebri_rdd2 \
+RDD2_FASTDYN_BUILD_DIR=../cerebri_rdd2/build-mr_vmu_tropic \
 RDD2_WORKSPACE_ROOT=.. \
 tests/integration/cerebri_rdd2_mission_smoke.sh
 ```

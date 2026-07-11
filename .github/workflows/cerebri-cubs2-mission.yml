@@ -8,7 +8,7 @@ on:
 
 env:
   # Coordinated firmware branch carrying the shared lockstep adapter and the
-  # synapse_fbs 0.6.0 contract. Pin a merge SHA after cerebri_cubs2#15 lands.
+  # synapse_fbs 0.7.0 contract. Pin a merge SHA after cerebri_cubs2#15 lands.
   CUBS2_REF: fix/shared-lockstep-fastdyn
 
 jobs:
