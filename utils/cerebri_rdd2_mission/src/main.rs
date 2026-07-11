@@ -5,18 +5,12 @@ mod shared_memory;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use physics::{Quadrotor, radians_to_degrees};
 use protocol::{FlightState, MotorCommand};
 use serde::Serialize;
-use synapse_fbs::topic_catalog;
-use zenoh::{Wait, config::Config};
-
-type Subscriber =
-    zenoh::pubsub::Subscriber<zenoh::handlers::FifoChannelHandler<zenoh::sample::Sample>>;
 
 const DEFAULT_PLANT_DT: f64 = 0.005;
 /// RDD2's fixed 1600 Hz firmware control-loop period.
@@ -24,7 +18,6 @@ const CONTROLLER_DT: f64 = 0.000_625;
 
 #[derive(Debug)]
 struct Options {
-    locator: String,
     report: PathBuf,
     duration: f64,
     response_timeout: Duration,
@@ -61,7 +54,6 @@ struct Report {
 }
 
 fn options() -> Result<Options> {
-    let mut locator = "udp/192.0.2.2:7447".to_owned();
     let mut report = PathBuf::from("out/cerebri_rdd2_mission.json");
     let mut duration: f64 = 20.0;
     let mut timeout_ms = 2_000_u64;
@@ -85,7 +77,6 @@ fn options() -> Result<Options> {
     while let Some(arg) = args.next() {
         let value = || anyhow!("{arg} requires a value");
         match arg.as_str() {
-            "--locator" => locator = args.next().ok_or_else(value)?,
             "--report" => report = args.next().ok_or_else(value)?.into(),
             "--duration" => duration = args.next().ok_or_else(value)?.parse()?,
             "--response-timeout-ms" => timeout_ms = args.next().ok_or_else(value)?.parse()?,
@@ -98,7 +89,7 @@ fn options() -> Result<Options> {
             "--minimum-speedup" => minimum_speedup = args.next().ok_or_else(value)?.parse()?,
             "-h" | "--help" => {
                 println!(
-                    "cerebri-rdd2-mission [--locator LOCATOR] [--report PATH] [--duration SEC] [--controller-benchmark SEC] [--shared-memory PATH --firmware-elf PATH] [--plant-dt SEC] [--minimum-speedup X]"
+                    "cerebri-rdd2-mission --shared-memory PATH --firmware-elf PATH [--report PATH] [--duration SEC] [--controller-benchmark SEC] [--plant-dt SEC] [--minimum-speedup X]"
                 );
                 std::process::exit(0);
             }
@@ -115,7 +106,6 @@ fn options() -> Result<Options> {
         bail!("--minimum-speedup must be finite and non-negative");
     }
     Ok(Options {
-        locator,
         report,
         duration,
         response_timeout: Duration::from_millis(timeout_ms),
@@ -125,88 +115,6 @@ fn options() -> Result<Options> {
         plant_dt,
         minimum_speedup,
     })
-}
-
-fn publish_inputs(
-    manual_publisher: &zenoh::pubsub::Publisher<'_>,
-    inertial_publisher: &zenoh::pubsub::Publisher<'_>,
-    manual_topic: &str,
-    inertial_topic: &str,
-    inputs: &protocol::LockstepInputs,
-) -> Result<()> {
-    manual_publisher
-        .put(inputs.manual_control.0)
-        .wait()
-        .map_err(|error| anyhow!("cannot publish {manual_topic}: {error}"))?;
-    inertial_publisher
-        .put(inputs.inertial_sample.0)
-        .wait()
-        .map_err(|error| anyhow!("cannot publish {inertial_topic}: {error}"))?;
-    Ok(())
-}
-
-fn zenoh_config(locator: &str) -> Result<Config> {
-    let mut config = Config::default();
-    config
-        .insert_json5("mode", "\"client\"")
-        .map_err(|error| anyhow!("failed to configure Zenoh mode: {error}"))?;
-    config
-        .insert_json5("connect/endpoints", &format!("[\"{locator}\"]"))
-        .map_err(|error| anyhow!("failed to configure Zenoh endpoint: {error}"))?;
-    config
-        .insert_json5("transport/link/tx/queue/batching/enabled", "false")
-        .map_err(|error| anyhow!("failed to disable Zenoh batching: {error}"))?;
-    Ok(config)
-}
-
-fn drain(subscriber: &Subscriber) -> Result<()> {
-    while subscriber
-        .try_recv()
-        .map_err(|error| anyhow!("Zenoh receive failed: {error}"))?
-        .is_some()
-    {}
-    Ok(())
-}
-
-fn receive_motor(subscriber: &Subscriber, timeout: Duration, topic: &str) -> Result<MotorCommand> {
-    let deadline = Instant::now() + timeout;
-    let mut idle = 0_u32;
-    loop {
-        if let Some(sample) = subscriber
-            .try_recv()
-            .map_err(|error| anyhow!("failed to receive {topic}: {error}"))?
-        {
-            let bytes = sample.payload().to_bytes();
-            if let Ok(command) = protocol::motor_output(bytes.as_ref()) {
-                return Ok(command);
-            }
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for {topic}");
-        }
-        idle = idle.wrapping_add(1);
-        if idle.is_multiple_of(256) {
-            thread::yield_now();
-        } else {
-            std::hint::spin_loop();
-        }
-    }
-}
-
-fn latest_flight_state(subscriber: &Subscriber, topic: &str) -> Result<(Option<FlightState>, u64)> {
-    let mut latest = None;
-    let mut count = 0;
-    while let Some(sample) = subscriber
-        .try_recv()
-        .map_err(|error| anyhow!("failed to receive {topic}: {error}"))?
-    {
-        let bytes = sample.payload().to_bytes();
-        if let Ok(state) = protocol::flight_state(bytes.as_ref()) {
-            latest = Some(state);
-            count += 1;
-        }
-    }
-    Ok((latest, count))
 }
 
 fn desired_altitude(time: f64) -> f64 {
@@ -480,70 +388,12 @@ fn run_shared_memory(options: &Options, memory_path: &PathBuf) -> Result<()> {
     }
 }
 
-fn run_zenoh(options: &Options) -> Result<()> {
-    let topic_key = |name| {
-        topic_catalog::topic_by_name(name)
-            .map(|info| info.key)
-            .ok_or_else(|| anyhow!("synapse_fbs v{} has no {name} topic", synapse_fbs::VERSION))
-    };
-    let manual_topic = topic_key("ManualControlCommand")?;
-    let inertial_topic = topic_key("InertialSample")?;
-    let motor_topic = topic_key("PwmSignalOutputs")?;
-    let health_topic = topic_key("VehicleHealth")?;
-    let session = zenoh::open(zenoh_config(&options.locator)?)
-        .wait()
-        .map_err(|error| {
-            anyhow!(
-                "cannot connect to Zenoh router {}: {error}",
-                options.locator
-            )
-        })?;
-    let manual_publisher = session
-        .declare_publisher(manual_topic)
-        .wait()
-        .map_err(|error| anyhow!("cannot declare {manual_topic}: {error}"))?;
-    let inertial_publisher = session
-        .declare_publisher(inertial_topic)
-        .wait()
-        .map_err(|error| anyhow!("cannot declare {inertial_topic}: {error}"))?;
-    let motor_subscriber = session
-        .declare_subscriber(motor_topic)
-        .wait()
-        .map_err(|error| anyhow!("cannot subscribe to {motor_topic}: {error}"))?;
-    let flight_subscriber = session
-        .declare_subscriber(health_topic)
-        .wait()
-        .map_err(|error| anyhow!("cannot subscribe to {health_topic}: {error}"))?;
-    println!("RDD2 mission runner connected to {}", options.locator);
-
-    let mut exchange = |inputs: &protocol::LockstepInputs, timeout: Duration| {
-        drain(&motor_subscriber)?;
-        publish_inputs(
-            &manual_publisher,
-            &inertial_publisher,
-            manual_topic,
-            inertial_topic,
-            inputs,
-        )?;
-
-        let motor = receive_motor(&motor_subscriber, timeout, motor_topic)?;
-        let (state, count) = latest_flight_state(&flight_subscriber, health_topic)?;
-        Ok((motor, state, count))
-    };
-    if options.controller_benchmark.is_some() {
-        run_controller_benchmark(options, &mut exchange)
-    } else {
-        run_mission(options, &mut exchange)
-    }
-}
-
 fn main() -> Result<()> {
     let options = options()?;
-    if let Some(memory_path) = &options.shared_memory {
-        run_shared_memory(&options, memory_path)
-    } else {
-        run_zenoh(&options)
-    }
+    let memory_path = options.shared_memory.as_ref().ok_or_else(|| {
+        anyhow!("--shared-memory or RDD2_FASTDYN_SHARED_MEMORY is required; lockstep does not use CSyn/ZROS transport")
+    })?;
+    run_shared_memory(&options, memory_path)
 }
 
 #[cfg(test)]

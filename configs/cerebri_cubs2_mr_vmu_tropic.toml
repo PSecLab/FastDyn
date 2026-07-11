@@ -510,11 +510,11 @@ enabled = false
 #                   FMI3 / Firmware Lockstep Orchestration
 # ==============================================================================
 # The upstream CUBS2 SIL runner still owns FMU generation, execution, traces,
-# reports, and lockstep checks. This FastDyn bridge replaces native_sim with the
-# rehosted mr_vmu_tropic firmware connected through Zenoh over the ENET TAP.
+# reports, and lockstep checks. The Rust adapter copies generated synapse_fbs
+# payloads directly between its shared file and FastDyn's file-backed QEMU RAM.
 [Run.processes.cerebri_cubs2_fmi3]
 command = [
-    "${FASTDYN_REPO_ROOT}/utils/cerebri_cubs2_fmi3_bridge.py",
+    "${FASTDYN_REPO_ROOT}/utils/cerebri_cubs2_fmi3_bridge/target/release/cerebri-cubs2-fmi3-bridge",
     "--launch",
     "--cubs2-root",
     "${CEREBRI_CUBS2_ROOT:-../cerebri_cubs2}",
@@ -522,8 +522,6 @@ command = [
     "${CUBS2_FASTDYN_BUILD_DIR:-../cerebri_cubs2/build-mr_vmu_tropic-fastdyn}",
     "--artifacts",
     "${FASTDYN_WORK_DIR}/cerebri_cubs2_fmi3",
-    "--locator",
-    "${CUBS2_FASTDYN_LOCATOR:-udp/192.0.2.2:7447}",
     "--t-end",
     "${CUBS2_FASTDYN_T_END:-40}",
     "--startup-timeout-s",
@@ -535,6 +533,7 @@ ready_message = "CUBS2 FMI3 lockstep runner starting"
 terminate_run_on_exit = true
 
 [Run.processes.cerebri_cubs2_fmi3.env]
-CUBS2_FASTDYN_LOCATOR = "${CUBS2_FASTDYN_LOCATOR:-udp/192.0.2.2:7447}"
-CUBS2_FASTDYN_REPUBLISH_S = "${CUBS2_FASTDYN_REPUBLISH_S:-0.02}"
+CUBS2_FASTDYN_SHARED_MEMORY = "${FASTDYN_WORK_DIR}/memory/machine0_main_ocram2.bin"
+CUBS2_FASTDYN_FIRMWARE_ELF = "${CUBS2_FASTDYN_BUILD_DIR:-../cerebri_cubs2/build-mr_vmu_tropic-fastdyn}/zephyr/zephyr.elf"
 CUBS2_FASTDYN_STARTUP_TIMEOUT_S = "${CUBS2_FASTDYN_STARTUP_TIMEOUT_S:-60}"
+CUBS2_FASTDYN_RESPONSE_TIMEOUT_S = "${CUBS2_FASTDYN_RESPONSE_TIMEOUT_S:-30}"

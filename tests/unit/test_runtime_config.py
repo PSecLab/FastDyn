@@ -206,7 +206,14 @@ def test_cerebri_config_launches_native_fmi3_bridge(tmp_path, monkeypatch):
     assert [process.name for process in processes] == ["cerebri_cubs2_fmi3"]
     process = processes[0]
     assert process.command[:4] == [
-        str(repo_root / "utils" / "cerebri_cubs2_fmi3_bridge.py"),
+        str(
+            repo_root
+            / "utils"
+            / "cerebri_cubs2_fmi3_bridge"
+            / "target"
+            / "release"
+            / "cerebri-cubs2-fmi3-bridge"
+        ),
         "--launch",
         "--cubs2-root",
         str(cubs2_root),

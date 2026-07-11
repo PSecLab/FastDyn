@@ -7,7 +7,9 @@ on:
   workflow_dispatch:
 
 env:
-  CUBS2_REF: main
+  # Coordinated firmware branch carrying the shared lockstep adapter and the
+  # synapse_fbs 0.6.0 contract. Pin a merge SHA after cerebri_cubs2#15 lands.
+  CUBS2_REF: fix/shared-lockstep-fastdyn
 
 jobs:
   fastdyn-cubs2-mission:
@@ -18,16 +20,12 @@ jobs:
       - name: Check out FastDyn
         uses: actions/checkout@v4
 
-      - name: Check out latest cerebri_cubs2
+      - name: Check out cerebri_cubs2
         uses: actions/checkout@v4
         with:
           repository: cognipilot/cerebri_cubs2
           ref: ${{ env.CUBS2_REF }}
           path: cerebri_cubs2
-
-      - name: Apply FastDyn hardware-lockstep adapter
-        working-directory: cerebri_cubs2
-        run: git apply ../patches/cerebri_cubs2_fastdyn.patch
 
       - name: Install system dependencies
         run: |
@@ -54,7 +52,7 @@ jobs:
             zephyr
             utils/cerebri_cubs2_fmi3_bridge/target
             ../qemu
-          key: ${{ runner.os }}-cubs2-${{ hashFiles('utils/cerebri_cubs2_fmi3_bridge/Cargo.lock', 'cerebri_cubs2/west.yml', 'setup.sh', 'patches/qemu-fastdyn-plugin-icount.patch', 'patches/cerebri_cubs2_fastdyn.patch') }}
+          key: ${{ runner.os }}-cubs2-${{ hashFiles('utils/cerebri_cubs2_fmi3_bridge/Cargo.lock', 'cerebri_cubs2/west.yml', 'setup.sh', 'patches/qemu-fastdyn-plugin-icount.patch') }}
           restore-keys: ${{ runner.os }}-cubs2-
 
       - name: Initialize and build cerebri_cubs2 FastDyn firmware
@@ -103,7 +101,9 @@ jobs:
           CUBS2_FASTDYN_BUILD_DIR: ${{ github.workspace }}/cerebri_cubs2/build-mr_vmu_tropic-fastdyn
           CUBS2_WORKSPACE_ROOT: ${{ github.workspace }}
           CUBS2_FASTDYN_T_END: '40'
+          CUBS2_FASTDYN_MIN_SPEEDUP: '10'
           FASTDYN_CUBS2_TIMEOUT_SEC: '300'
+          FASTDYN_CUBS2_NETWORK_SETUP: 'false'
         run: tests/integration/cerebri_cubs2_mission_smoke.sh
 
       - name: Upload CUBS2 mission artifacts

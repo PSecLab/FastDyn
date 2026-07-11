@@ -7,8 +7,9 @@ artifacts="$work_dir/cerebri_cubs2_fmi3"
 result="${FASTDYN_CUBS2_RESULT:-$work_dir/cerebri_cubs2_mission.json}"
 log_file="${FASTDYN_CUBS2_LOG:-out/ci/cerebri_cubs2_mission.log}"
 timeout_sec="${FASTDYN_CUBS2_TIMEOUT_SEC:-300}"
-network_setup="${FASTDYN_CUBS2_NETWORK_SETUP:-true}"
+network_setup="${FASTDYN_CUBS2_NETWORK_SETUP:-false}"
 simulated_target="${CUBS2_FASTDYN_T_END:-40}"
+minimum_speedup="${CUBS2_FASTDYN_MIN_SPEEDUP:-10}"
 
 mkdir -p "$(dirname "$log_file")" "$work_dir"
 : >"$log_file"
@@ -76,23 +77,28 @@ for metric in simulated overall_wall lockstep_speedup max_alt; do
 done
 overall_speedup="$(awk -v simulated="$simulated" -v wall="$overall_wall" \
   'BEGIN { printf "%.9f", simulated / wall }')"
+speed_pass="$(awk -v actual="$lockstep_speedup" -v required="$minimum_speedup" \
+  'BEGIN { print (actual >= required) ? "true" : "false" }')"
+passed="$([[ "$run_rc" == 0 && "$speed_pass" == "true" ]] && echo true || echo false)"
 
 jq -n \
-  --argjson passed "$([[ "$run_rc" == 0 ]] && echo true || echo false)" \
+  --argjson passed "$passed" \
   --argjson simulated_seconds "$simulated" \
   --argjson overall_wall_seconds "$overall_wall" \
   --argjson overall_speedup_over_realtime "$overall_speedup" \
   --argjson lockstep_speedup_over_realtime "$lockstep_speedup" \
+  --argjson minimum_lockstep_speedup_required "$minimum_speedup" \
   --argjson max_altitude_m "$max_alt" \
   '{passed: $passed,
     simulated_seconds: $simulated_seconds,
     overall_wall_seconds: $overall_wall_seconds,
     overall_speedup_over_realtime: $overall_speedup_over_realtime,
     lockstep_speedup_over_realtime: $lockstep_speedup_over_realtime,
+    minimum_lockstep_speedup_required: $minimum_lockstep_speedup_required,
     max_altitude_m: $max_altitude_m}' >"$result"
 
 printf '[ci] CUBS2 mission passed=%s simulated=%ss wall=%ss overall=%sx lockstep=%sx max_alt=%sm\n' \
-  "$([[ "$run_rc" == 0 ]] && echo true || echo false)" "$simulated" "$overall_wall" \
+  "$passed" "$simulated" "$overall_wall" \
   "$overall_speedup" "$lockstep_speedup" "$max_alt" | tee -a "$log_file"
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -102,7 +108,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     echo '| Result | Simulated time | Overall wall time | Overall speedup | Lockstep speedup | Max altitude |'
     echo '|---|---:|---:|---:|---:|---:|'
     printf '| %s | %.3f s | %.3f s | **%.2fx** | %.2fx | %.2f m |\n' \
-      "$([[ "$run_rc" == 0 ]] && echo PASS || echo FAIL)" "$simulated" "$overall_wall" \
+      "$([[ "$passed" == true ]] && echo PASS || echo FAIL)" "$simulated" "$overall_wall" \
       "$overall_speedup" "$lockstep_speedup" "$max_alt"
   } >>"$GITHUB_STEP_SUMMARY"
 fi
@@ -110,4 +116,9 @@ fi
 if ((run_rc != 0)); then
   tail -200 "$log_file" >&2
   exit "$run_rc"
+fi
+
+if [[ "$speed_pass" != true ]]; then
+  echo "[ci] CUBS2 lockstep speed ${lockstep_speedup}x is below required ${minimum_speedup}x" >&2
+  exit 1
 fi

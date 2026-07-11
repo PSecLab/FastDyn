@@ -7,10 +7,9 @@ on:
   workflow_dispatch:
 
 env:
-  # cerebri_rdd2 main after CogniPilot/cerebri_rdd2#1 (Rumoca eFMI control +
-  # shared lockstep simulation) and #2 (cerebri_modules rename) landed. Bump
-  # deliberately when coordinating firmware and FastDyn changes.
-  RDD2_REF: 75264399a2c6b9cb9c341a44fffc09af3569acb1
+  # Coordinated firmware branch carrying the synapse_fbs 0.6.0 contract. Pin
+  # a merge SHA after its cerebri_rdd2 PR lands.
+  RDD2_REF: fix/synapse-fbs-0.6
 
 jobs:
   fastdyn-rdd2-mission:

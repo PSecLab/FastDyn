@@ -64,7 +64,7 @@ time, uploads the ArduCopter mission, flies it, and exits after final landing.
 - `docs/Configuration.md`: FastDyn TOML reference for QEMU, FMU, Rumoca,
   helper processes, profiling, and swarm options.
 - `docs/Cerebri_CUBS2_Closed_Loop.md`: CUBS2 `mr_vmu_tropic` rehosting with
-  the upstream compiled FMI3 lockstep plant and native Synapse/Zenoh bridge.
+  the upstream compiled FMI3 plant and direct Rust/shared-memory lockstep.
 - `docs/Cerebri_CUBS2_Rehosting.md`: CUBS2 firmware/static-analysis runbook.
 - `docs/Cerebri_RDD2_Lockstep.md`: RDD2 direct shared-memory lockstep,
   10x mission test, and optional Ethernet/Zenoh side-channel profile.

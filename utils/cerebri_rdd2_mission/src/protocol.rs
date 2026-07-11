@@ -26,7 +26,7 @@ pub fn lockstep_inputs(
     target_boot_time_ns: u64,
 ) -> LockstepInputs {
     let timestamp_us = target_boot_time_ns / 1_000;
-    // synapse_fbs v0.5 standardizes inertial vectors as FLU, matching the
+    // synapse_fbs v0.6 standardizes inertial vectors as FLU, matching the
     // plant's body frame, so the sample passes through unconverted.
     let gyro_flu = Vec3f::new(gyro_flu[0], gyro_flu[1], gyro_flu[2]);
     let accel_flu = Vec3f::new(accel_flu[0], accel_flu[1], accel_flu[2]);
@@ -116,7 +116,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inputs_use_generated_v05_structs() {
+    fn inputs_use_generated_v06_structs() {
         let mut channels = [1500; 16];
         channels[2] = 1250;
         channels[4] = 2000;
@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn outputs_use_generated_v05_accessors() {
+    fn outputs_use_generated_v06_accessors() {
         let mut pwm = topic::PwmSignalOutputsData::default();
         pwm.set_output0_us(1250);
         pwm.set_output1_us(1500);
