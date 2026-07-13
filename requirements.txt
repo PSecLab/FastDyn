@@ -4,6 +4,7 @@ cmsis-svd==0.6
 colorama==0.4.6
 crewai==1.14.5
 dotenv==0.9.9
+distlib>=0.3.6
 jpype1==1.5.2
 lxml==6.0.1
 networkx==3.4.2
