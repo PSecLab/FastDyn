@@ -105,7 +105,11 @@ Build it with:
   git -C "$qemu_root" apply "$repo_root/patches/qemu-fastdyn-plugin-icount.patch"
   mkdir -p "$qemu_root/build"
   cd "$qemu_root/build"
-  ../configure --target-list=arm-softmmu --enable-plugins --disable-sdl
+  ../configure \
+    --target-list=arm-softmmu \
+    --enable-plugins \
+    --disable-docs \
+    --disable-sdl
   make qemu-system-arm
 EOF
 }
@@ -116,8 +120,9 @@ fastdyn_setup_qemu_build() {
   local qemu_repo="$3"
   local qemu_ref="$4"
   local qemu_bin="$qemu_root/build/qemu-system-arm"
+  local qemu_config_stamp="$qemu_root/build/.fastdyn-headless-config-v1"
 
-  if [[ -x "$qemu_bin" && -d "$qemu_root/.git" ]]; then
+  if [[ -x "$qemu_bin" && -f "$qemu_config_stamp" && -d "$qemu_root/.git" ]]; then
     if fastdyn_setup_qemu_patch "$repo_root" "$qemu_root"; then
       echo "FastDyn patched QEMU is already built: $qemu_bin"
       return 0
@@ -145,8 +150,13 @@ fastdyn_setup_qemu_build() {
     return "$patch_status"
   fi
   mkdir -p "$qemu_root/build" || return
-  if [[ ! -f "$qemu_root/build/build.ninja" ]]; then
-    (cd "$qemu_root/build" && ../configure --target-list=arm-softmmu --enable-plugins --disable-sdl) || return
+  if [[ ! -f "$qemu_root/build/build.ninja" || ! -f "$qemu_config_stamp" ]]; then
+    (cd "$qemu_root/build" && ../configure \
+      --target-list=arm-softmmu \
+      --enable-plugins \
+      --disable-docs \
+      --disable-sdl) || return
+    touch "$qemu_config_stamp" || return
   fi
   make -C "$qemu_root/build" -j"$(nproc)" qemu-system-arm || return
 }
