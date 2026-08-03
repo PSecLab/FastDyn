@@ -395,21 +395,52 @@ def _device_config_exists(config_path, device_name):
         return False
 
 
-def _iter_enabled_elder_scrolls(machine):
+def _iter_required_boardrunner_scrolls(machine):
+    seen = set()
+
+    def emit(scroll):
+        if not scroll or scroll in seen:
+            return None
+        seen.add(scroll)
+        return scroll
+
     for dev in machine.devices.values():
         for handler in getattr(dev, "handlers", []) or []:
-            if getattr(handler, "model", None) != "elder":
-                continue
             if getattr(handler, "enabled", True) is False:
                 continue
             scroll = getattr(handler, "scroll", None)
             if scroll:
-                yield scroll
+                emitted = emit(scroll)
+                if emitted is not None:
+                    yield emitted
+
+        for slave in getattr(dev, "slaves", []) or []:
+            params = getattr(slave, "params", {}) or {}
+            if params.get("enabled", True) is False:
+                continue
+            scroll = getattr(slave, "device_scroll", None)
+            if scroll:
+                emitted = emit(scroll)
+                if emitted is not None:
+                    yield emitted
+
+        for conn in getattr(dev, "connections", []) or []:
+            if not isinstance(conn, dict):
+                continue
+            if conn.get("enabled", True) is False:
+                continue
+            if str(conn.get("type", "")).lower().strip() != "slave":
+                continue
+            scroll = conn.get("device_scroll")
+            if scroll:
+                emitted = emit(scroll)
+                if emitted is not None:
+                    yield emitted
 
 
 def _compile_missing_boardrunner_models(machine):
     missing = [
-        scroll for scroll in _iter_enabled_elder_scrolls(machine)
+        scroll for scroll in _iter_required_boardrunner_scrolls(machine)
         if not _abs_repo_path(scroll).exists()
     ]
     if not missing:

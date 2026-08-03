@@ -643,7 +643,7 @@ logger_content = """
     connection_id = "CS: device=3"
     cs_id = 3
     bus = "spi"
-    device_scroll = "boardrunner/boardrunner_sdk/build/ms5611_spi.so"
+    device_scroll = "boardrunner/boardrunner_sdk/build/ms5611_spi1.so"
 
 [Device.spi4]
     ranges = [["0x40013400", "0x40013800"]]
