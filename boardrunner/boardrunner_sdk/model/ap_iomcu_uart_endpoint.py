@@ -43,6 +43,19 @@ BOOTSTRAP_INITIAL_REPEATS = 0
 BOOTSTRAP_INTERVAL_S = 0.005
 SELECT_TIMEOUT_S = 0.005
 MAX_PENDING_TX = 4096
+MAX_RC_CHANNELS = 18
+MAX_SERVO_CHANNELS = 16
+
+RAW_RC_COUNT = 0
+RAW_RC_FLAGS = 1
+RAW_RC_NRSSI = 2
+RAW_RC_DATA = 3
+RAW_RC_FRAME_COUNT = 4
+RAW_RC_LOST_FRAME_COUNT = 5
+RAW_RC_CHANNEL_BASE = 6
+
+RAW_RC_FLAG_FAILSAFE = 1 << 1
+RAW_RC_FLAG_RC_OK = 1 << 2
 
 crc8_table = [
     0x00, 0x07, 0x0e, 0x09, 0x1c, 0x1b, 0x12, 0x15, 0x38, 0x3f, 0x36, 0x31,
@@ -103,6 +116,39 @@ def make_count_code(code, count):
     return ((code & 0x03) << 6) | (count & 0x3F)
 
 
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes", "on")
+
+
+def monotonic_us():
+    return int(time.monotonic() * 1000000)
+
+
+def clamp_u16(value, low=0, high=0xFFFF):
+    return max(low, min(high, int(value))) & 0xFFFF
+
+
+def clamp_pwm(value):
+    return clamp_u16(value, 800, 2200)
+
+
+def parse_pwm_list(value, max_count):
+    if not value:
+        return []
+    out = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        out.append(clamp_pwm(part))
+        if len(out) >= max_count:
+            break
+    return out
+
+
 def packet_crc_ok(frame):
     tmp = bytearray(frame)
     recv_crc = tmp[1]
@@ -143,6 +189,26 @@ class MockIOMCU:
         self.status_flags = 0x0001
         self.setup_flags = 0x0000
         self.bootstrap_index = 0
+        self.rc_channels = [1500] * MAX_RC_CHANNELS
+        rc_defaults = parse_pwm_list(os.environ.get("AP_IOMCU_RC_DEFAULTS"), MAX_RC_CHANNELS)
+        for i, value in enumerate(rc_defaults):
+            self.rc_channels[i] = value
+        if rc_defaults:
+            self.rc_count = len(rc_defaults)
+        else:
+            self.rc_count = int(os.environ.get("AP_IOMCU_RC_CHANNELS", "8"))
+            self.rc_count = max(1, min(MAX_RC_CHANNELS, self.rc_count))
+        self.rc_valid = env_flag("AP_IOMCU_RC_VALID", True)
+        self.rc_rssi = clamp_u16(os.environ.get("AP_IOMCU_RC_RSSI", "100"), 0, 255)
+        self.rc_frame_count = 0
+        self.rc_lost_frame_count = 0
+        self.rc_updated_us = monotonic_us()
+        self.output_channels = [1500] * MAX_SERVO_CHANNELS
+        output_defaults = parse_pwm_list(os.environ.get("AP_IOMCU_SERVO_DEFAULTS"), MAX_SERVO_CHANNELS)
+        for i, value in enumerate(output_defaults):
+            self.output_channels[i] = value
+        self.output_seq = 0
+        self.output_updated_us = 0
         self._init_defaults()
 
     def _page(self, page):
@@ -187,21 +253,75 @@ class MockIOMCU:
         servos = self._page(PAGE_SERVOS)
         actuators = self._page(PAGE_ACTUATORS)
         direct_pwm = self._page(PAGE_DIRECT_PWM)
-        for i in range(16):
-            pwm[i] = 1500
-            servos[i] = 1500
-            actuators[i] = 1500
-            direct_pwm[i] = 1500
+        for i in range(MAX_SERVO_CHANNELS):
+            pwm[i] = self.output_channels[i]
+            servos[i] = self.output_channels[i]
+            actuators[i] = self.output_channels[i]
+            direct_pwm[i] = self.output_channels[i]
 
         raw_adc = self._page(PAGE_RAW_ADC_INPUT)
         raw_adc[0] = 5000
         raw_adc[1] = 5000
 
+        self._sync_rc_pages()
+        self._sync_output_pages()
+
+    def _sync_rc_pages(self):
         raw_rc = self._page(PAGE_RAW_RC_INPUT)
         rc = self._page(PAGE_RC_INPUT)
-        for i in range(8):
-            raw_rc[i] = 1500
-            rc[i] = 1500
+
+        flags = RAW_RC_FLAG_RC_OK if self.rc_valid else RAW_RC_FLAG_FAILSAFE
+        raw_rc[RAW_RC_COUNT] = self.rc_count
+        raw_rc[RAW_RC_FLAGS] = flags
+        raw_rc[RAW_RC_NRSSI] = self.rc_rssi
+        raw_rc[RAW_RC_DATA] = 0
+        raw_rc[RAW_RC_FRAME_COUNT] = self.rc_frame_count & 0xFFFF
+        raw_rc[RAW_RC_LOST_FRAME_COUNT] = self.rc_lost_frame_count & 0xFFFF
+
+        for i in range(MAX_RC_CHANNELS):
+            value = self.rc_channels[i] if i < self.rc_count else 0
+            rc[i] = value
+            idx = RAW_RC_CHANNEL_BASE + i
+            if idx < len(raw_rc):
+                raw_rc[idx] = value
+
+    def _sync_output_pages(self):
+        pwm = self._page(PAGE_PWM_INFO)
+        servos = self._page(PAGE_SERVOS)
+        actuators = self._page(PAGE_ACTUATORS)
+        direct_pwm = self._page(PAGE_DIRECT_PWM)
+        for i, value in enumerate(self.output_channels):
+            pwm[i] = value
+            servos[i] = value
+            actuators[i] = value
+            direct_pwm[i] = value
+
+    def set_rc_input(self, channels=None, valid=None, rssi=None, timestamp_us=None):
+        if channels is not None:
+            if len(channels) > MAX_RC_CHANNELS:
+                raise ValueError(f"channels may contain at most {MAX_RC_CHANNELS} values")
+            for i, value in enumerate(channels):
+                self.rc_channels[i] = clamp_pwm(value)
+            self.rc_count = len(channels)
+        if valid is not None:
+            self.rc_valid = bool(valid)
+        if rssi is not None:
+            self.rc_rssi = clamp_u16(rssi, 0, 255)
+
+        self.rc_updated_us = int(timestamp_us) if timestamp_us is not None else monotonic_us()
+        self.rc_frame_count = (self.rc_frame_count + 1) & 0xFFFF
+        if not self.rc_valid:
+            self.rc_lost_frame_count = (self.rc_lost_frame_count + 1) & 0xFFFF
+        self._sync_rc_pages()
+
+    def note_output_write(self, offset, values):
+        for i, value in enumerate(values):
+            idx = offset + i
+            if 0 <= idx < len(self.output_channels):
+                self.output_channels[idx] = clamp_u16(value)
+        self.output_seq = (self.output_seq + 1) & 0xFFFFFFFF
+        self.output_updated_us = monotonic_us()
+        self._sync_output_pages()
 
     def _refresh_dynamic_state(self):
         self.seq = (self.seq + 1) & 0xFFFFFFFF
@@ -214,6 +334,11 @@ class MockIOMCU:
 
         setup = self._page(PAGE_SETUP)
         setup[0] = self.setup_flags
+        if self.rc_valid:
+            self.rc_frame_count = (self.rc_frame_count + 1) & 0xFFFF
+        else:
+            self.rc_lost_frame_count = (self.rc_lost_frame_count + 1) & 0xFFFF
+        self._sync_rc_pages()
 
     def read_regs(self, page, offset, count):
         self._refresh_dynamic_state()
@@ -232,14 +357,7 @@ class MockIOMCU:
                 regs[idx] = value & 0xFFFF
 
         if page in (PAGE_ACTUATORS, PAGE_DIRECT_PWM, PAGE_SERVOS):
-            servos = self._page(PAGE_SERVOS)
-            pwm = self._page(PAGE_PWM_INFO)
-            for i, value in enumerate(values):
-                idx = offset + i
-                if 0 <= idx < len(servos):
-                    servos[idx] = value & 0xFFFF
-                if 0 <= idx < len(pwm):
-                    pwm[idx] = value & 0xFFFF
+            self.note_output_write(offset, values)
 
         if page == PAGE_SETUP and offset == 0 and values:
             self.setup_flags = values[0] & 0xFFFF
