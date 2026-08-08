@@ -126,10 +126,6 @@ void fastdyn_callback(unsigned int cpu_index, void *udata) {
 	    curr_bkpt_addr = (uint32_t) strtoul(input, NULL, 16);
 	}
 
-	if (!py_init) {
-		initialize_halucinator_python_vm();
-    }
-
 	PyGILState_STATE gstate = PyGILState_Ensure();
 
 	DEBUG_LOG("fastdyn api called!\n");
@@ -155,13 +151,13 @@ void fastdyn_callback(unsigned int cpu_index, void *udata) {
 }
 
 int python_vm_setup(void) {
-	// Shutdown the Python Interpreter if already started.
-	Py_Finalize();
-
     //Register QEMU-API Module
     PyImport_AppendInittab("qemuapi", PyInit_emb);
 
-	//Python Interpreter can be used anywhere now!
+	//Initialize Python VM eagerly at plugin load time
+	//instead of deferring to the first breakpoint hit.
+	initialize_halucinator_python_vm();
+
 	return 0;
 }
 
