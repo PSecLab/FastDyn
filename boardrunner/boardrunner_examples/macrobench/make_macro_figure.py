@@ -78,7 +78,7 @@ def main():
             continue
         bm, bs = stats[key]["halucinator"]
         hm, hs = stats[key]["fastdyn-py"]
-        labels.append(f"{label}\n({n_int:,} intercepts)")
+        labels.append(f"{label}\n({n_int:,} dispatches)")
         base_mean.append(bm); base_sd.append(bs)
         fd_mean.append(hm); fd_sd.append(hs)
         speedups.append(bm / hm)

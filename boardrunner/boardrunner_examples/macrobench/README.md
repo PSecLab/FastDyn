@@ -38,7 +38,7 @@ python3 runner.py --fw stm32_uart_it --backend halucinator
 
 Prints wall time in seconds (or `TIMEOUT`). Add `--csv` to emit
 `fw,backend,wall_s`. Add `--dump-emu-log <path>` to persist the
-emulator's stdout+stderr for diagnostics (used to extract intercept
+emulator's stdout+stderr for diagnostics (used to extract dispatch
 counts, see below).
 
 ## Full sweep
@@ -131,7 +131,7 @@ if the firmware uses `-n <name>`).
 
 The paper reports these dispatch counts as evidence that the
 `stm32_uart_it` slowdown is a startup-dominated microbenchmark
-(8 total intercept fires) whereas `zephyr_fs` amortizes the fixed
+(8 total dispatches) whereas `zephyr_fs` amortizes the fixed
 plugin cost over 1,177 dispatches, yielding the 38.37× speedup.
 
 ## Naming

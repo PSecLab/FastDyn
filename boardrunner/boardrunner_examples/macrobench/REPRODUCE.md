@@ -110,13 +110,13 @@ have tested.
 
 FastDyn-Py is **0.91× on stm32_uart_it** (slightly slower than
 HALucinator). This is the expected outcome for a startup-dominated
-microbenchmark: `stm32_uart_it` dispatches only **8 intercepts** in
-its entire lifetime (see `stats/stm32_uart_it.yaml` — HALucinator's
-own per-breakpoint counters), while `zephyr_fs` dispatches **1,177**
-(see `stats/zephyr_fs.yaml`). FastDyn-Py's per-op savings amortize
-the plugin's fixed loading cost only when the firmware sustains many
-per-op dispatches, which is why the speedup grows monotonically with
-intercept count. See Figure 8 in the paper.
+microbenchmark: `stm32_uart_it` issues only **8 handler dispatches**
+in its entire lifetime (see `stats/stm32_uart_it.yaml` —
+HALucinator's own per-breakpoint counters), while `zephyr_fs` issues
+**1,177** (see `stats/zephyr_fs.yaml`). FastDyn-Py's per-op savings
+amortize the plugin's fixed loading cost only when the firmware
+sustains many per-op dispatches, which is why the speedup grows
+monotonically with dispatch count. See Figure 8 in the paper.
 
 ## Full result tables (per iteration)
 
