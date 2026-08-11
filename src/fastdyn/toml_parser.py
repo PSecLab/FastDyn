@@ -142,7 +142,7 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
     q.stop_on_start      = toml_parser.machine_info.get("stop_on_start", False)
     q.launch_gdb         = toml_parser.machine_info.get("launch_gdb", False)
 
-    q.semihosting        = toml_parser.machine_info.get("semihosting", True)
+    q.semihosting        = toml_parser.machine_info.get("semihosting", False)
     q.semihosting_config = toml_parser.machine_info.get("semihosting_config", "enable=on,target=native")
 
     q.monitor_port       = _env_int(
@@ -160,6 +160,9 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
     q.icount             = _format_icount_option(toml_parser.machine_info.get("icount", None))
     q.timer_irq_period_ns = toml_parser.machine_info.get("timer_irq_period_ns", None)
 
+    q.display            = toml_parser.machine_info.get("display", "none")
+    q.monitor            = toml_parser.machine_info.get("monitor", None)
+    q.serial             = toml_parser.machine_info.get("serial", None)
     q.coverage           = _env_bool(
         "FASTDYN_COVERAGE",
         toml_parser.machine_info.get("coverage", False),
@@ -189,19 +192,23 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
     for idx, cpu in enumerate(toml_parser.cpus_info):
         curr_cpu = toml_parser.cpus_info[cpu][0]
 
+        binary_path = curr_cpu.get('binary') or curr_cpu.get('drive_file') or ''
         cpu_obj = machine0.add_cpu(
                 arch=curr_cpu.get("arch", "arm"),
                 machine=curr_cpu.get("machine", "cortexm"),
                 cpu=curr_cpu.get("cpu", "cortex-m4"),
-                binary=curr_cpu['binary'],  #mandatory else throw error
-                init_nsvtor= curr_cpu.get("init_nsvtor", None),  #handle by the target to retreive correct value from binary
+                binary=binary_path,
+                init_nsvtor= curr_cpu.get("init_nsvtor", None),
                 twintrace = curr_cpu.get("twintrace", None),
                 hardware_trace = curr_cpu.get("hardware_trace", None),
                 introspect = curr_cpu.get("introspect", False),
                 exstng_config_path = curr_cpu.get("existing_config_path", False),
                 )
 
-        #additional params if set by the user
+        # additional params if set by the user
+        cpu_obj.drive_file     =   curr_cpu.get('drive_file', None)
+        cpu_obj.drive_format   =   curr_cpu.get('drive_format', 'raw')
+        cpu_obj.bios           =   curr_cpu.get('bios', None) or toml_parser.machine_info.get("bios", None)
         cpu_obj.plugin_library  =   curr_cpu.get('plugin_library', 'build/libfastdyn.so')
         cpu_obj.monitor_elf     =   curr_cpu.get('monitor_elf', '../ws/monitor.elf')
         cpu_obj.log_file        =   toml_parser.machine_info.get("log_file", curr_cpu.get("log_file", cpu_obj.log_file))
@@ -245,7 +252,7 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
 
     machine0.add_memory(memory_name='main',
                         memory_id = curr_mem['id'],
-                        memory_start = curr_mem['base_address'],
+                        memory_start = curr_mem.get('base_address', None),
                         memory_size=curr_mem['memory_size'],
                         memory_type=curr_mem['memory_type'],
                         backend      = curr_mem['backend'],          # file | ram | memfd
@@ -258,7 +265,7 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
         curr_mem = toml_parser.memory_info.get(memory)[0]
         machine0.add_memory(memory_name=memory,
                             memory_id = curr_mem['id'],
-                            memory_start = curr_mem['base_address'],
+                            memory_start = curr_mem.get('base_address', None),
                             memory_size=curr_mem['memory_size'],
                             memory_type=curr_mem['memory_type'],
                             backend      = curr_mem['backend'],          # file | ram | memfd
@@ -318,10 +325,20 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
             sys.exit(1)
 
         #add device ranges
-        for range in device_info.get('ranges'):
+        for r_entry in device_info.get('ranges', []) or []:
+            if isinstance(r_entry, str):
+                if "-" in r_entry:
+                    parts = r_entry.split("-", 1)
+                    r_start, r_end = parts[0].strip(), parts[1].strip()
+                else:
+                    r_start, r_end = r_entry, r_entry
+            elif isinstance(r_entry, (list, tuple)) and len(r_entry) >= 2:
+                r_start, r_end = r_entry[0], r_entry[1]
+            else:
+                continue
             device_handler.add_ranges(
-                start=range[0],
-                end=range[1]
+                start=r_start,
+                end=r_end
             )
 
         #add connections (host endpoints or bus-attached slaves)

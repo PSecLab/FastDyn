@@ -978,8 +978,8 @@ def generate(hardware_log, slave_model, reference_model, firmware_code, board, p
                 auto_discover=False,    # don’t do repo search when user already gave a path
             )
         except parse_helper.SvdResolutionError as e:
-            log.error(str(e))
-            sys.exit(1)
+            log.info(f"Skipping SVD resolution for platform '{platform}': SVD not required/applicable.")
+            svd_device = None
 
         log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
         svd_device = parse_helper.get_svd_device(svd_file)
@@ -1262,8 +1262,8 @@ def verifier(hardware_log, emulation_log, device_models, model_names, board,
             auto_discover=False,
         )
     except parse_helper.SvdResolutionError as e:
-        log.error(str(e))
-        sys.exit(1)
+        log.info(f"Skipping SVD resolution for platform '{platform}': SVD not required/applicable.")
+        svd_device = None
 
     log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
     svd_device = parse_helper.get_svd_device(svd_file)

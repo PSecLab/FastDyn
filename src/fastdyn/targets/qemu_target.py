@@ -287,14 +287,62 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     if not qmp_socket or qmp_socket == "/tmp/qmp.sock":
         qmp_socket = os.path.join(out_path, "qmp.sock")
 
-    cpu_configs = [
-        "-machine", f"{cpu0.machine},memory-backend={main_mem_id}",
-        "-cpu", cpu0.cpu,
-        "-kernel", cpu0.binary,
-        "-qmp", f"unix:{qmp_socket},server,nowait",
-        "-monitor", f"tcp:127.0.0.1:{opts.monitor_port},server,nowait",
-    ]
+    # Machine and RAM Size
+    if main_mem_id:
+        cpu_configs = ["-M", f"{cpu0.machine},memory-backend={main_mem_id}"]
+    else:
+        cpu_configs = ["-M", cpu0.machine]
 
+    if getattr(main_memory, "memory_size", None):
+        cpu_configs.extend(["-m", main_memory.memory_size])
+
+    if getattr(cpu0, "cpu", None):
+        cpu_configs.extend(["-cpu", cpu0.cpu])
+
+    # Kernel (only if binary is explicitly set and is NOT a disk image)
+    kernel_file = getattr(cpu0, "binary", None)
+    drive_file = getattr(cpu0, "drive_file", None) or getattr(opts, "drive_file", None)
+    if kernel_file and kernel_file != drive_file and kernel_file != "":
+        if helper.is_elf(kernel_file) or not drive_file:
+            cpu_configs.extend(["-kernel", kernel_file])
+
+    # Firmware BIOS ROM file
+    bios_file = getattr(opts, "bios", None) or getattr(cpu0, "bios", None)
+    if bios_file:
+        cpu_configs.extend(["-bios", bios_file])
+
+    # Disk Drive
+    if drive_file:
+        drive_fmt = getattr(cpu0, "drive_format", "raw")
+        cpu_configs.extend(["-drive", f"file={drive_file},format={drive_fmt}"])
+
+    # Display (-display none)
+    display_opt = getattr(opts, "display", None)
+    if display_opt:
+        cpu_configs.extend(["-display", display_opt])
+
+    # Monitor (-monitor stdio / tcp)
+    monitor_opt = getattr(opts, "monitor", None)
+    if monitor_opt:
+        cpu_configs.extend(["-monitor", monitor_opt])
+    elif getattr(opts, "monitor_port", None):
+        cpu_configs.extend(["-monitor", f"tcp:127.0.0.1:{opts.monitor_port},server,nowait"])
+
+    # Serial (-serial none / mon:stdio)
+    serial_opt = getattr(opts, "serial", None)
+    if serial_opt:
+        cpu_configs.extend(["-serial", serial_opt])
+    elif monitor_opt == "stdio":
+        cpu_configs.extend(["-serial", "none"])
+
+    # QMP socket
+    qmp_socket = opts.qmp_socket
+    if qmp_socket:
+        if qmp_socket == "/tmp/qmp.sock":
+            qmp_socket = os.path.join(out_path, "qmp.sock")
+        cpu_configs.extend(["-qmp", f"unix:{qmp_socket},server,nowait"])
+
+    # Icount / Logging / SMP
     icount = str(os.environ.get("FASTDYN_QEMU_ICOUNT", opts.icount or "")).strip()
     if icount.lower() not in ("", "none", "off", "false", "0"):
         cpu_configs.extend(["-icount", icount])
@@ -311,25 +359,33 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     if len(cpus) > 1:
         cpu_configs.extend(["-smp", str(len(cpus))])
 
+    # GDB debugging
     if opts.enable_gdb:
         gdb_port = int(getattr(opts, "gdb_port", 1234))
-        log.info("GDB debugging enabled on port %s.", gdb_port)
-        cpu_configs.extend(["-gdb", f"tcp::{gdb_port}"])
+        if gdb_port == 1234:
+            cpu_configs.append("-s")
+        else:
+            cpu_configs.extend(["-gdb", f"tcp::{gdb_port}"])
+
     if opts.stop_on_start:
         cpu_configs.append("-S")
 
-    if opts.semihosting:
+    if opts.semihosting and getattr(cpu0, "arch", "").lower() not in ("x86", "x86_64", "i386"):
         cpu_configs.extend(["--semihosting", "--semihosting-config", opts.semihosting_config])
 
-    # init_nsvtor is effectively machine-wide for Cortex-M
-    init_nsvtor = getattr(cpu0, "init_nsvtor", 0)
+    # Optional init_nsvtor for Cortex-M targets
+    init_nsvtor = getattr(cpu0, "init_nsvtor", None)
     if init_nsvtor not in (None, 0):
         cpu_configs.extend(["-global", f"armv7m.init-nsvtor={init_nsvtor}"])
-    else:
-        if not helper.is_elf(cpu0.binary):
-            raise ValueError("Not an ELF (raw dump/bin). Need init_nsvtor in the configuration.")
-        nsvtor_elf = helper.elf_file_parser(cpu0.binary)
-        cpu_configs.extend(["-global", f"armv7m.init-nsvtor={nsvtor_elf}"])
+    elif getattr(cpu0, "arch", "").lower() == "arm" and getattr(cpu0, "machine", "").lower() == "cortexm":
+        if helper.is_elf(cpu0.binary):
+            nsvtor_elf = helper.elf_file_parser(cpu0.binary)
+            cpu_configs.extend(["-global", f"armv7m.init-nsvtor={nsvtor_elf}"])
+
+    # Generic global key-value overrides from TOML [Machine.globals]
+    machine_globals = getattr(opts, "globals", {}) or {}
+    for g_key, g_val in machine_globals.items():
+        cpu_configs.extend(["-global", f"{g_key}={g_val}"])
 
     cmd.extend(cpu_configs)
 
@@ -343,17 +399,15 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     all_virtuals = []
     all_modifiers = []
 
-    # This is useful for a user that was using fastdyn for one project and
-    # wants a more readable TOML file for the next project.
     if cpu0.exstng_config_path:
         existing_config_path = os.path.join(cpu0.exstng_config_path, "virtuals.txt")
-        with open(existing_config_path, "r") as f:
-            existing_virtuals = f.readlines()
+        if os.path.exists(existing_config_path):
+            with open(existing_config_path, "r") as f:
+                all_virtuals.extend(f.readlines())
         existing_config_path = os.path.join(cpu0.exstng_config_path, "modifiers.txt")
-        with open(existing_config_path, "r") as f:
-            existing_modifiers = f.readlines()
-        all_virtuals.extend(existing_virtuals)
-        all_modifiers.extend(existing_modifiers)
+        if os.path.exists(existing_config_path):
+            with open(existing_config_path, "r") as f:
+                all_modifiers.extend(f.readlines())
 
     for c in cpus:
         all_virtuals.extend(getattr(c, "virtuals", []) or [])
@@ -373,14 +427,18 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     # ------------------------ Memory objects ------------------------
     memory_config = []
 
-    # main memory object + globals
-    memory_config.extend([
+    # main memory object
+    main_mem_args = [
         "-object",
         f"memory-backend-file,id={main_memory.memory_id},mem-path={main_memory.memory_file},"
         f"size={main_memory.memory_size},share={share_flag}",
-        "-global",
-        f"{cpu0.machine}-soc.ram_baseaddr0={main_memory.memory_start}",
-    ])
+    ]
+    if getattr(main_memory, "memory_start", None):
+        main_mem_args.extend([
+            "-global",
+            f"{cpu0.machine}-soc.ram_baseaddr0={main_memory.memory_start}",
+        ])
+    memory_config.extend(main_mem_args)
 
     # additional memories (stable order: by key name)
     extra_keys = sorted([k for k in memories.keys() if k != "main"])
@@ -388,14 +446,18 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         m = memories[key]
         share_flag = "on" if getattr(m, "memory_share", True) else "off"
         _ensure_memory_backend_file(m)
-        memory_config.extend([
+        extra_mem_args = [
             "-object",
             f"memory-backend-file,id={m.memory_id},mem-path={m.memory_file},size={m.memory_size},share={share_flag}",
-            "-global",
-            f"{cpu0.machine}-soc.ram_baseaddr{idx}={m.memory_start}",
-            "-global",
-            f"{cpu0.machine}-soc.ram_backend{idx}={m.memory_id}",
-        ])
+        ]
+        if getattr(m, "memory_start", None):
+            extra_mem_args.extend([
+                "-global",
+                f"{cpu0.machine}-soc.ram_baseaddr{idx}={m.memory_start}",
+                "-global",
+                f"{cpu0.machine}-soc.ram_backend{idx}={m.memory_id}",
+            ])
+        memory_config.extend(extra_mem_args)
 
     cmd.extend(memory_config)
 
@@ -600,14 +662,36 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         plugin_kv.append(f"finline={opts.finline}")
     cmd.extend(["--plugin", ",".join(plugin_kv)])
 
-    #TODO: Fix it
-    cmd.extend(["-nographic"])
+    if "-display" not in cmd:
+        cmd.extend(["-nographic"])
 
     # ------------------------ GDB command ------------------------
     gdb_cmd, launch_gdb, binary = get_gdb_cmd(machine, out_path)
 
     if print_command:
-        fastdyn_log.info(f"Running following qemu command:\n{' '.join(cmd)}")
+        lines = [cmd[0]]
+        idx = 1
+        while idx < len(cmd):
+            arg = cmd[idx]
+            if arg.startswith("-") and idx + 1 < len(cmd) and not cmd[idx + 1].startswith("-"):
+                val = cmd[idx + 1]
+                if "," in val and len(val) > 60:
+                    val_parts = val.split(",")
+                    val_str = ",\n    ".join(val_parts)
+                    lines.append(f"{arg} {val_str}")
+                else:
+                    lines.append(f"{arg} {val}")
+                idx += 2
+            else:
+                lines.append(arg)
+                idx += 1
+        formatted_cmd = " \\\n  ".join(lines)
+        print("\n" + "=" * 80)
+        print("Running QEMU Command:")
+        print("=" * 80)
+        print(formatted_cmd)
+        print("=" * 80 + "\n")
+        fastdyn_log.info(f"Running following qemu command:\n{formatted_cmd}")
     return cmd, gdb_cmd, launch_gdb, binary
 
 

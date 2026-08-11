@@ -53,17 +53,37 @@ static inline unsigned dev_addr_to_slot(hwaddr addr, hwaddr REGION_BASE)
 //walk the list and dispatch to every registered handler.
 static DeviceNode *irq_lut[MAX_INTERRUPTS] = {0}; //Initialize all to NULL
 
-static inline void dev_get_timestamp(time_t *sec, long *usec) {
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
+typedef struct RangeNode {
+    hwaddr start;
+    hwaddr end;
+    DeviceModel *dev;
+    struct RangeNode *next;
+} RangeNode;
 
-	// Calculate offset from start
-	*sec = ts.tv_sec - start_ts.tv_sec;
-	*usec = (ts.tv_nsec - start_ts.tv_nsec) / 1000;
-	if (*usec < 0) {
-    	*sec -= 1;
-	    *usec += 1000000;
-	}
+static RangeNode *g_dynamic_ranges = NULL;
+
+DeviceModel* find_device_model(const char *name);
+
+static DeviceModel *dev_find_by_range(hwaddr addr)
+{
+    for (RangeNode *curr = g_dynamic_ranges; curr; curr = curr->next) {
+        if (addr >= curr->start && addr <= curr->end) {
+            return curr->dev;
+        }
+    }
+    return NULL;
+}
+
+static inline void dev_get_timestamp(time_t *sec, long *usec) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    *sec = ts.tv_sec - start_ts.tv_sec;
+    *usec = (ts.tv_nsec - start_ts.tv_nsec) / 1000;
+    if (*usec < 0) {
+        *sec -= 1;
+        *usec += 1000000;
+    }
 }
 
 static int dev_write(char * handler, long unsigned int address, uint64_t value, long unsigned int size) {
@@ -75,52 +95,55 @@ static int dev_write(char * handler, long unsigned int address, uint64_t value, 
     dev_get_timestamp(&sec, &usec);
 #endif
     DeviceNode **lut = dev_select_lut(address);
-    if (!lut) {
+    DeviceModel *dev_to_use = NULL;
 
+    /* A. Handler-based routing for PCIe devices */
+    if (handler && strncmp(handler, "generic_pcie_", 13) == 0) {
+        char dev_name[64] = {0};
+        const char *p_bar = strrchr(handler, '_');
+        if (p_bar && p_bar > handler + 13) {
+            size_t len = p_bar - (handler + 13);
+            if (len < sizeof(dev_name)) {
+                strncpy(dev_name, handler + 13, len);
+                dev_name[len] = '\0';
+                dev_to_use = find_device_model(dev_name);
+            }
+        }
+    }
+
+    /* B. Dynamic 64-bit range lookup */
+    if (!dev_to_use) {
+        dev_to_use = dev_find_by_range(address);
+    }
+
+    if (dev_to_use) {
+        dev_to_use->write(dev_to_use->opaque, address, value, size, pc);
+#ifdef DEV_LOGGER
+        if (twintrace_mode != TT_OFF) {
+            utils_log_to_file(io_logger,
+            "[%5ld.%06ld] icount=%" PRIu64 " [%s] Write: \t address=0x%08X, size=%lu bytes, value=0x%0*" PRIx64 ", pc=0x%08" PRIx64 "\n",
+            sec, usec, icount, dev_to_use->name, (unsigned)address, size, (int)(size * 2), value, pc);
+        } else {
+            utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
+                    sec, usec, dev_to_use->name, (unsigned)address, (unsigned)size, (int)(size * 2), value, (unsigned)pc);
+        }
+#endif
+        if (handler && (handler[0] == 'g')) {
+            return 0;
+        }
+        return 1;
+    }
+
+    if (!lut) {
 #ifdef DEV_LOGGER
         utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled (Unknown Region): \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-                        sec, usec, address, size, size * 2, value, pc);
+                        sec, usec, (unsigned)address, (unsigned)size, (int)(size * 2), value, (unsigned)pc);
 #endif
         probe_check_unhandled_access(pc, address, 1);
         return 1; // Continue internal operation
     }
 
-    hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
-    unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
-    unsigned idx = dev_addr_to_slot(address, region_base);
-
-    DeviceNode *node = (idx < max_slots) ? lut[idx] : NULL;
-    bool handled = false;
-
-    // Iterate through all devices registered at this address
-    while (node) {
-        DeviceModel *dev = node->dev;
-        if (dev) {
-            dev->write(dev->opaque, address, value, size, pc);
-            handled = true;
-#ifdef DEV_LOGGER
-    if (twintrace_mode != TT_OFF) {
-        utils_log_to_file(io_logger,
-        "[%5ld.%06ld] icount=%" PRIu64 " [%s] Write: \t address=0x%08X, size=%lu bytes, value=0x%0*" PRIx64 ", pc=0x%08" PRIx64 "\n",
-        sec, usec, icount, dev->name, (unsigned)address, size, (int)(size * 2), value, pc);
-    } else {
-        utils_log_to_file(io_logger,"[%5ld.%06ld] [%s] Write: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-                sec, usec, dev->name, address, size, size * 2, value, pc);
-    }
-#endif
-        }
-        node = node->next;
-    }
-
-    if (!handled) {
-#ifdef DEV_LOGGER
-        utils_log_to_file(io_logger,"[%5ld.%06ld] IO Write Access NOT Handled: \t address = 0x%08X, size = %u bytes, value = 0x%0*" PRIx64 ", pc=0x%08X \n",
-                        sec, usec, address, size, size * 2, value, pc);
-#endif
-        dev_debug("IO Access not handled");
-        probe_check_unhandled_access(pc, address, 1);
-    }
-
+    bool handled = (dev_to_use != NULL);
 // Filter out QEMU internals ('g') only and we dont filter ('v)
 //It is not always injecting double interrupts every ms
     if (handler && ((handler[0] == 'g') ||
@@ -144,39 +167,46 @@ static int dev_read(char * handler, long unsigned int address, uint64_t *buf, lo
 #endif
     uint64_t value = 0; // Default value
     DeviceNode **lut = dev_select_lut(address);
-
-    if (!lut) {
-#ifdef DEV_LOGGER
-        utils_log_to_file(io_logger,
-            "[%5ld.%06ld] IO Read Access NOT Handled (Unknown Region): \t address=0x%08" PRIx64 ", size=%u bytes, pc=0x%08" PRIx64 "\n",
-            sec, usec, (uint64_t)address, size, (uint64_t)pc);
-#endif
-        probe_check_unhandled_access(pc, address, 0);
-        return 1;
-    }
-
-    hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
-    unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
-    unsigned idx = dev_addr_to_slot(address, region_base);
-
-    DeviceNode *node = (idx < max_slots) ? lut[idx] : NULL;
     DeviceModel *dev_to_use = NULL;
 
-    if (node) { // Check if at least one device exists
-        if (node->next == NULL) {
-            // Case 1: Only one device registered. Use it without checking priority.
-            dev_to_use = node->dev;
-        } else {
-            // Case 2: Multiple devices registered. Find priority, or default to first.
-            DeviceNode *current = node;
-            dev_to_use = node->dev; // Default to the first device found
+    /* A. Handler-based routing for PCIe devices */
+    if (handler && strncmp(handler, "generic_pcie_", 13) == 0) {
+        char dev_name[64] = {0};
+        const char *p_bar = strrchr(handler, '_');
+        if (p_bar && p_bar > handler + 13) {
+            size_t len = p_bar - (handler + 13);
+            if (len < sizeof(dev_name)) {
+                strncpy(dev_name, handler + 13, len);
+                dev_name[len] = '\0';
+                dev_to_use = find_device_model(dev_name);
+            }
+        }
+    }
 
-            while (current) {
-                if (current->dev && current->dev->name && strcmp(current->dev->name, read_priority_device_name) == 0) {
-                    dev_to_use = current->dev; // Found the priority device, override default
-                    break;
+    /* B. Dynamic 64-bit range lookup */
+    if (!dev_to_use) {
+        dev_to_use = dev_find_by_range(address);
+    }
+
+    if (!dev_to_use && lut) {
+        hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
+        unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
+        unsigned idx = dev_addr_to_slot(address, region_base);
+
+        DeviceNode *node = (idx < max_slots) ? lut[idx] : NULL;
+        if (node) {
+            if (node->next == NULL) {
+                dev_to_use = node->dev;
+            } else {
+                DeviceNode *current = node;
+                dev_to_use = node->dev;
+                while (current) {
+                    if (current->dev && current->dev->name && strcmp(current->dev->name, read_priority_device_name) == 0) {
+                        dev_to_use = current->dev;
+                        break;
+                    }
+                    current = current->next;
                 }
-                current = current->next;
             }
         }
     }
@@ -302,29 +332,39 @@ void dev_irqret_hook(int number) {
 	}
 }
 
+
+
 void dev_register_device_model(hwaddr start, hwaddr end, DeviceModel *dev) {
+    if (!dev) return;
+
+    /* 1. Register in dynamic 64-bit range list */
+    RangeNode *rnode = (RangeNode *)malloc(sizeof(RangeNode));
+    if (rnode) {
+        rnode->start = start;
+        rnode->end = end;
+        rnode->dev = dev;
+        rnode->next = g_dynamic_ranges;
+        g_dynamic_ranges = rnode;
+    }
+
+    /* 2. Also populate legacy slot LUT if within standard slot bounds */
     DeviceNode **lut = dev_select_lut(start);
-    if (!lut) return; // Address range not supported
+    if (lut) {
+        hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
+        unsigned idx_start = dev_addr_to_slot(start, region_base);
+        hwaddr last_addr = (end > start) ? end - 1 : end;
+        unsigned idx_end = dev_addr_to_slot(last_addr, region_base);
+        unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
+        if (idx_end >= max_slots) idx_end = max_slots - 1;
 
-    hwaddr region_base = (lut == device_lut) ? DEVICE_BASE : SYSTEM_BASE;
-    unsigned idx_start = dev_addr_to_slot(start, region_base);
-    hwaddr last_addr = (end > start) ? end - 1 : end;
-    unsigned idx_end = dev_addr_to_slot(last_addr, region_base);
-
-    unsigned max_slots = (lut == device_lut) ? NUM_SLOTS : SYSTEM_NUM_SLOTS;
-    if (idx_end >= max_slots) idx_end = max_slots - 1;
-
-    for (unsigned i = idx_start; i <= idx_end; i++) {
-        // Create a new node for the linked list
-        DeviceNode *newNode = (DeviceNode *)malloc(sizeof(DeviceNode));
-        if (!newNode) {
-            utils_die("Failed to allocate memory for device node");
+        for (unsigned i = idx_start; i <= idx_end; i++) {
+            DeviceNode *newNode = (DeviceNode *)malloc(sizeof(DeviceNode));
+            if (newNode) {
+                newNode->dev = dev;
+                newNode->next = lut[i];
+                lut[i] = newNode;
+            }
         }
-        newNode->dev = dev;
-
-        // Prepend the new node to the list at this slot
-        newNode->next = lut[i];
-        lut[i] = newNode;
     }
 }
 

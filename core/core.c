@@ -390,16 +390,66 @@ uint32_t qemu_get_register(int reg)
     return return_data;
 }
 
+static struct qemu_plugin_register *g_pc_reg_handle = NULL;
+static struct qemu_plugin_register *g_sp_reg_handle = NULL;
+
+static void core_init_reg_handles(void)
+{
+    if (!g_register_descriptors) {
+        g_register_descriptors = qemu_plugin_get_registers();
+    }
+    if (!g_register_descriptors) {
+        return;
+    }
+    for (guint i = 0; i < g_register_descriptors->len; i++) {
+        qemu_plugin_reg_descriptor *rd = &g_array_index(g_register_descriptors, qemu_plugin_reg_descriptor, i);
+        if (rd->name) {
+            if (!g_pc_reg_handle && (g_ascii_strcasecmp(rd->name, "rip") == 0 ||
+                                     g_ascii_strcasecmp(rd->name, "pc") == 0 ||
+                                     g_ascii_strcasecmp(rd->name, "r15") == 0)) {
+                g_pc_reg_handle = rd->handle;
+            }
+            if (!g_sp_reg_handle && (g_ascii_strcasecmp(rd->name, "rsp") == 0 ||
+                                     g_ascii_strcasecmp(rd->name, "sp") == 0 ||
+                                     g_ascii_strcasecmp(rd->name, "r13") == 0)) {
+                g_sp_reg_handle = rd->handle;
+            }
+        }
+    }
+}
+
 uint64_t core_get_pc(void) {
-	uint64_t ret_val;
-	ret_val = qemu_get_register(ARM_V7M_PC);
-	return ret_val;
+    if (!g_pc_reg_handle) {
+        core_init_reg_handles();
+    }
+    if (g_pc_reg_handle) {
+        GByteArray *buf = g_byte_array_sized_new(8);
+        if (qemu_plugin_read_register(g_pc_reg_handle, buf) > 0) {
+            uint64_t val = 0;
+            memcpy(&val, buf->data, MIN(buf->len, sizeof(val)));
+            g_byte_array_free(buf, TRUE);
+            return val;
+        }
+        g_byte_array_free(buf, TRUE);
+    }
+    return qemu_get_register(ARM_V7M_PC);
 }
 
 uint64_t core_get_sp(void) {
-	uint64_t ret_val;
-	ret_val = qemu_get_register(ARM_V7M_SP);
-	return ret_val;
+    if (!g_sp_reg_handle) {
+        core_init_reg_handles();
+    }
+    if (g_sp_reg_handle) {
+        GByteArray *buf = g_byte_array_sized_new(8);
+        if (qemu_plugin_read_register(g_sp_reg_handle, buf) > 0) {
+            uint64_t val = 0;
+            memcpy(&val, buf->data, MIN(buf->len, sizeof(val)));
+            g_byte_array_free(buf, TRUE);
+            return val;
+        }
+        g_byte_array_free(buf, TRUE);
+    }
+    return qemu_get_register(ARM_V7M_SP);
 }
 
 uint64_t core_get_icount(void) {

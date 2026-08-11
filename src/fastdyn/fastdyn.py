@@ -230,12 +230,12 @@ class Machine:
         pass
 
     def add_cmsis_svd(self, cmsis_svd):
-        fastdyn_log.info("Parsing the passed path for the CMSIS SVD")
-
         platform = (self.platform or "").strip()
-        if not platform and (cmsis_svd and os.path.isdir(os.path.expanduser(cmsis_svd))):
-            fastdyn_log.error("Machine platform is required when CMSIS SVD path points to a directory.")
-            sys.exit(1)
+        if not platform or platform.lower() in ("intel", "x86", "x86_64", "base_generic", "pc", "q35"):
+            fastdyn_log.info(f"Skipping CMSIS SVD resolution for non-ARM/Intel platform '{platform}'.")
+            return
+
+        fastdyn_log.info("Parsing the passed path for the CMSIS SVD")
 
         try:
             svd_file, svd_key = parse_helper.resolve_svd(
@@ -245,8 +245,8 @@ class Machine:
                 auto_discover=False,    # don’t do repo search when user already gave a path
             )
         except parse_helper.SvdResolutionError as e:
-            fastdyn_log.error(str(e))
-            sys.exit(1)
+            fastdyn_log.info(f"Skipping SVD resolution for platform '{platform}': SVD not required/applicable.")
+            return
 
         fastdyn_log.info(f"Using SVD: {svd_file} (key='{svd_key}')")
         self.svd_file = svd_file
@@ -588,6 +588,9 @@ class MemoryType(Enum):
     SRAM = "SRAM"
     MMIO = "MMIO"
     FLASH = "FLASH"
+    DRAM = "DRAM"
+    RAM = "RAM"
+    SYSTEM = "SYSTEM"
 
 class BackendType(Enum):
     FILE = "FILE"
