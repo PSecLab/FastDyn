@@ -117,6 +117,27 @@ introspect = false
 existing_config_path = "virtuals/physics/flight_controllers/courbet/copter462/unlabeled_conf"
 ```
 
+### Instruction Modifiers
+
+FastDyn supports inline instruction modifiers under `[[CPU.cpu0.modifiers]]` to patch register states (such as redirecting `PC`/`RIP` execution flow or overriding register values) dynamically when QEMU executes a specific target address.
+
+```toml
+# x86_64 Example
+[[CPU.cpu0.modifiers]]
+at = "0x18008"
+patch = "rip <- 0x18004"
+
+# ARM Example
+[[CPU.cpu0.modifiers]]
+at = "0x08000210"
+patch = "r15 <- 0x08000214"
+```
+
+#### Architecture TCG Register Mappings:
+In QEMU's TCG translation generator (`update_reg`), target registers map to specific internal TCG slots:
+- **ARM 32-bit**: `r15` / `pc` maps to TCG slot **`15`** (`R15` / `PC`). `r13` / `sp` maps to TCG slot **`13`** (`R13` / `SP`).
+- **Intel / x86_64**: `rip` / `pc` maps to TCG slot **`16`** (`cpu_eip` / `RIP`). `rsp` / `sp` maps to TCG slot **`4`** (`RSP`).
+
 ## FMU
 
 `[FMU]` lets FastDyn build and load Rumoca FMI v3 models directly from Modelica.

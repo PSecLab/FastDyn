@@ -184,7 +184,6 @@ size_t update_entry_count = 0;
 
 
 
-// Helper to parse a single line
 static int parse_update_line(const char *line, UpdateEntry *entry);
 int parse_update_line(const char *line, UpdateEntry *entry) {
     char buf[128];
@@ -203,10 +202,30 @@ int parse_update_line(const char *line, UpdateEntry *entry) {
     // Second token: target (rX, [rX] or 0xADDRESS)
 	token = strtok(NULL, " \t");
     if (!token) return -1;
-	if (token[0] == 'r') {
-    entry->type = TARGET_REGISTER;
-    entry->target.reg_num = strtoul(token + 1, &endptr, 0);
-    if (*endptr != '\0') return -1;
+    /*
+     * Architectural TCG Register Slot Mapping Conventions:
+     * - "rip" : Slot 16 (QEMU x86_64 TCG cpu_eip target)
+     * - "rsp" : Slot 4  (QEMU x86_64 TCG RSP target)
+     * - "pc"  : Slot 15 (QEMU ARM 32-bit TCG R15/PC target)
+     * - "sp"  : Slot 13 (QEMU ARM 32-bit TCG R13/SP target)
+     * - "rX"  : Slot X  (Numeric register index)
+     */
+	if (strcasecmp(token, "rip") == 0) {
+        entry->type = TARGET_REGISTER;
+        entry->target.reg_num = 16; // x86 RIP slot in TCG
+	} else if (strcasecmp(token, "rsp") == 0) {
+        entry->type = TARGET_REGISTER;
+        entry->target.reg_num = 4; // x86 RSP slot in TCG
+	} else if (strcasecmp(token, "pc") == 0) {
+        entry->type = TARGET_REGISTER;
+        entry->target.reg_num = 15; // ARM PC slot in TCG
+	} else if (strcasecmp(token, "sp") == 0) {
+        entry->type = TARGET_REGISTER;
+        entry->target.reg_num = 13; // ARM SP slot in TCG
+	} else if (token[0] == 'r') {
+        entry->type = TARGET_REGISTER;
+        entry->target.reg_num = strtoul(token + 1, &endptr, 0);
+        if (*endptr != '\0') return -1;
 	} else if (token[0] == '[' && token[strlen(token) - 1] == ']') {
     // Target is [rX] dereference
     token[strlen(token) - 1] = '\0'; // Remove trailing ']'
@@ -227,11 +246,29 @@ int parse_update_line(const char *line, UpdateEntry *entry) {
 	}
 
 
-    // Third token: value (immediate, register, or dereference)
+    // Third token: value (immediate, register, or dereference), optional assignment operator (<- = := ->)
     token = strtok(NULL, " \t");
     if (!token) return -1;
 
-    if (token[0] == 'r') {
+    if (strcmp(token, "<-") == 0 || strcmp(token, "=") == 0 ||
+        strcmp(token, ":=") == 0 || strcmp(token, "->") == 0) {
+        token = strtok(NULL, " \t");
+        if (!token) return -1;
+    }
+
+    if (strcasecmp(token, "rip") == 0) {
+        entry->value_type = VALUE_REGISTER;
+        entry->value.reg_num = 16;
+    } else if (strcasecmp(token, "rsp") == 0) {
+        entry->value_type = VALUE_REGISTER;
+        entry->value.reg_num = 4;
+    } else if (strcasecmp(token, "pc") == 0) {
+        entry->value_type = VALUE_REGISTER;
+        entry->value.reg_num = 15;
+    } else if (strcasecmp(token, "sp") == 0) {
+        entry->value_type = VALUE_REGISTER;
+        entry->value.reg_num = 13;
+    } else if (token[0] == 'r') {
         // Source is a register value
         entry->value_type = VALUE_REGISTER;
         entry->value.reg_num = strtoul(token + 1, &endptr, 0);
@@ -245,7 +282,6 @@ int parse_update_line(const char *line, UpdateEntry *entry) {
         }
         entry->value_type = VALUE_DEREF;
         entry->value.reg_num = strtoul(token + 2, &endptr, 0); // skip [r
-        if (*endptr != '\0') return -1;
     } else {
         // Must be an immediate
         entry->value_type = VALUE_IMMEDIATE;
