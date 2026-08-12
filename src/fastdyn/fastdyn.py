@@ -231,8 +231,8 @@ class Machine:
 
     def add_cmsis_svd(self, cmsis_svd):
         platform = (self.platform or "").strip()
-        if not platform or platform.lower() in ("intel", "x86", "x86_64", "base_generic", "pc", "q35"):
-            fastdyn_log.info(f"Skipping CMSIS SVD resolution for non-ARM/Intel platform '{platform}'.")
+        if not platform or platform.lower() in ("intel", "x86", "x86_64", "base_generic", "pc", "q35", "riscv", "riscv32", "riscv64", "virt", "spike"):
+            fastdyn_log.info(f"Skipping CMSIS SVD resolution for non-ARM platform '{platform}'.")
             return
 
         fastdyn_log.info("Parsing the passed path for the CMSIS SVD")

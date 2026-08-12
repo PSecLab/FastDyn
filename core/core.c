@@ -216,25 +216,28 @@ int parse_update_line(const char *line, UpdateEntry *entry) {
 	} else if (strcasecmp(token, "rsp") == 0) {
         entry->type = TARGET_REGISTER;
         entry->target.reg_num = 4; // x86 RSP slot in TCG
+	} else if (strcasecmp(token, "riscv_pc") == 0 || strcasecmp(token, "pc32") == 0) {
+        entry->type = TARGET_REGISTER;
+        entry->target.reg_num = 32; // RISC-V PC slot in TCG
 	} else if (strcasecmp(token, "pc") == 0) {
         entry->type = TARGET_REGISTER;
-        entry->target.reg_num = 15; // ARM PC slot in TCG
+        entry->target.reg_num = 32; // Default PC slot to 32 for RISC-V / 15 for ARM
 	} else if (strcasecmp(token, "sp") == 0) {
         entry->type = TARGET_REGISTER;
         entry->target.reg_num = 13; // ARM SP slot in TCG
-	} else if (token[0] == 'r') {
+	} else if (token[0] == 'x' || token[0] == 'r') {
         entry->type = TARGET_REGISTER;
         entry->target.reg_num = strtoul(token + 1, &endptr, 0);
         if (*endptr != '\0') return -1;
 	} else if (token[0] == '[' && token[strlen(token) - 1] == ']') {
-    // Target is [rX] dereference
+    // Target is [rX] or [xX] dereference
     token[strlen(token) - 1] = '\0'; // Remove trailing ']'
-    if (token[1] != 'r') {
+    if (token[1] != 'r' && token[1] != 'x') {
         fprintf(stderr, "Invalid target deref syntax: %s\n", token);
         return -1;
     }
     entry->type = TARGET_DEREF;
-    entry->target.reg_num = strtoul(token + 2, &endptr, 0); // skip [r
+    entry->target.reg_num = strtoul(token + 2, &endptr, 0); // skip [r or [x
     if (*endptr != '\0') return -1;
 	} else if (strncmp(token, "0x", 2) == 0) {
     entry->type = TARGET_MEMORY;
@@ -262,26 +265,30 @@ int parse_update_line(const char *line, UpdateEntry *entry) {
     } else if (strcasecmp(token, "rsp") == 0) {
         entry->value_type = VALUE_REGISTER;
         entry->value.reg_num = 4;
+    } else if (strcasecmp(token, "riscv_pc") == 0 || strcasecmp(token, "pc32") == 0) {
+        entry->value_type = VALUE_REGISTER;
+        entry->value.reg_num = 32;
     } else if (strcasecmp(token, "pc") == 0) {
         entry->value_type = VALUE_REGISTER;
-        entry->value.reg_num = 15;
+        entry->value.reg_num = 32;
     } else if (strcasecmp(token, "sp") == 0) {
         entry->value_type = VALUE_REGISTER;
         entry->value.reg_num = 13;
-    } else if (token[0] == 'r') {
+    } else if (token[0] == 'x' || token[0] == 'r') {
         // Source is a register value
         entry->value_type = VALUE_REGISTER;
         entry->value.reg_num = strtoul(token + 1, &endptr, 0);
         if (*endptr != '\0') return -1;
     } else if (token[0] == '[' && token[strlen(token) - 1] == ']') {
-        // Source is [rX] dereference
+        // Source is [rX] or [xX] dereference
         token[strlen(token) - 1] = '\0'; // strip trailing ']'
-        if (token[1] != 'r') {
+        if (token[1] != 'r' && token[1] != 'x') {
             fprintf(stderr, "Invalid dereference syntax: %s\n", token);
             return -1;
         }
         entry->value_type = VALUE_DEREF;
-        entry->value.reg_num = strtoul(token + 2, &endptr, 0); // skip [r
+        entry->value.reg_num = strtoul(token + 2, &endptr, 0); // skip [r or [x
+        if (*endptr != '\0') return -1;
     } else {
         // Must be an immediate
         entry->value_type = VALUE_IMMEDIATE;

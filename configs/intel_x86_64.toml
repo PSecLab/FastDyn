@@ -1,0 +1,59 @@
+# ==============================================================================
+#                    Fastdyn Configuration for Intel x86_64
+# ==============================================================================
+
+[Memory]
+[Memory.main]
+id = "ram0"
+memory_size = "512M"
+memory_type = "DRAM"
+backend = "file"
+memory_file = "/dev/shm/intel_x86_ram"
+share = true
+prealloc = false
+
+# ==============================================================================
+#                                Machine & CPU
+# ==============================================================================
+[Machine]
+platform = "Intel"
+qemu_path = "/data/qemu/build/qemu-system-x86_64"
+enable_gdb = true
+stop_on_start = true
+monitor_port = 5555
+qmp_socket = "/tmp/qmp.sock"
+log_file = "qemu.log"
+print_command = true
+monitor = "stdio"
+display = "none"
+serial = "none"
+semihosting = false
+bios = "/usr/share/seabios/bios.bin"
+
+[CPU]
+[[CPU.cpu0]]
+arch = "x86_64"
+machine = "base_generic"
+cpu = "qemu64"
+plugin_library = "build/libfastdyn.so"
+drive_file = "/data/baremetal/intel/custom_disk.img"
+drive_format = "raw"
+
+[[CPU.cpu0.modifiers]]
+at = "0x18008"
+patch = "rip <- 0x18004"
+
+# ==============================================================================
+#                              Device Configuration
+# ==============================================================================
+[Device.Models.classic]
+    # Default handler for unmapped MMIO / Port I/O accesses
+
+[Device.remaining_space]
+    ranges = [["0x00000000", "0xFFFFFFFFFFFFFFFF"]]
+    description = "Full 64-bit address space monitored by fastdyn plugin"
+
+	[[Device.remaining_space.handlers]]
+        model = "classic"
+        enabled = false
+

@@ -1,0 +1,56 @@
+# ==============================================================================
+#           Fastdyn Configuration for Baremetal RISC-V 64 Kernel
+# ==============================================================================
+
+[Memory]
+[Memory.main]
+id = "ram0"
+memory_size = "128M"
+memory_type = "DRAM"
+backend = "file"
+memory_file = "/dev/shm/riscv_ram"
+share = true
+prealloc = false
+
+# ==============================================================================
+#                                Machine & CPU
+# ==============================================================================
+[Machine]
+platform = "RISCV"
+qemu_path = "/data/qemu/build/qemu-system-riscv64"
+enable_gdb = true
+stop_on_start = true
+monitor_port = 5555
+qmp_socket = "/tmp/qmp.sock"
+log_file = "qemu.log"
+print_command = true
+monitor = "stdio"
+display = "none"
+serial = "none"
+semihosting = false
+
+[CPU]
+[[CPU.cpu0]]
+arch = "riscv64"
+machine = "virt"
+cpu = "rv64"
+binary = "/data/baremetal/riscv/kernel.elf"
+plugin_library = "build/libfastdyn.so"
+
+[[CPU.cpu0.modifiers]]
+at = "0x8020041c"
+patch = "riscv_pc <- 0x80200418"
+
+# ==============================================================================
+#                              Device Configuration
+# ==============================================================================
+[Device.Models.classic]
+    # Default handler for unmapped MMIO / Port I/O accesses
+
+[Device.remaining_space]
+    ranges = [["0x00000000", "0xFFFFFFFFFFFFFFFF"]]
+    description = "Full 64-bit address space monitored by fastdyn plugin"
+
+	[[Device.remaining_space.handlers]]
+        model = "classic"
+        enabled = false
