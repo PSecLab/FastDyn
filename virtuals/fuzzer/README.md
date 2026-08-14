@@ -4,7 +4,7 @@ This is the directory for the current fuzzing implementation, which will be upda
 
 ## Overview
 
-To start, this is the guide for manually setting up the fuzzer to run. To use the current agentic approach for harness generation and mutation, see agentic/README.md
+To start, this is the guide for manually setting up the fuzzer to run.
 
 fuzz.c is the core of the fuzzer, which is meant to act as a generic interface between the fuzzing backend and the model/firmware that is acting as the fuzzing harness. Currently, we support libAFL and a modified version of AFLNet as the backends for this fuzzer, which can be compiled in in the Makefile depending on the usecase. libAFL is good for producing a generic, single chunk per iteration, and is easier to get going on a new target. AFLNet is better for stateful protocols with a trace of messages, but requires a bit more work for a new protocol, which involves adding in support for that protocol into the modified AFLNet. We have currently added Ethernet and Modbus support in AFLNet which can be used as a reference along with the existing protocols
 
@@ -57,80 +57,125 @@ Then, in the Makefile, make sure to set the relevant flag
 AFLNET 		 ?= true
 ```
 
-## Usage
+## Generic Usage
 
-When using the stateful fuzzer, update the path to the seeds in fuzz_aflnet.c along with the targeted protocol in the launch
+The generic fuzzer obtains one input for each iteration and writes contiguous
+parts of that input to the fields in a JSON schema. It is configured entirely
+from the target TOML and does not need a target-specific injection callback.
 
-### fuzz.c interface
+Currently this supports libAFL
 
-fuzz.c is meant to provide a generic interface for fuzzing, whichever backend is compiled in will automatically be used in the background. Our current backends are implementet in fuzz_aflnet.c and fuzz_libafl.c, but should require no modifications.
+### Fuzzing Virtuals
 
-A custom implementation of the fuzzer on a new firmware will require some familiarity with the usage of virtuals and modifiers in the .toml configuration file for the firmware. lwip_config.toml for STM32F769i-eval in boardrunner/boardrunner_examples should be a good example of how to define virtuals, which are implemented in stateful_fuzzers/lwip_ip.c in this case. These virtuals must be registered in fuzz_init using virtual_register(...)
+The generic loop uses three virtual instructions:
 
-The general interface consists of the following main functions to focus on which will be useful if you write your own virtuals for hooking the firmware or making a model-based fuzzer:
+- `fuzz_state_point` some firmware may have a long startup or a difficult to
+  reach fuzzing target. In these cases, the state point is meant to be a
+  more complete version of the snapshot that allows a fresh run to be started
+  at a chosen point. It simply needs a previous run to have reached that point
+  for the snapshot to be taken, subsequent runs can then begin there, skipping
+  initialization. May not be necessary on all targets.
+- `fuzz_snap_point` captures the per-input snapshot on its first visit. On
+  every visit it restores the snapshot as necessary, obtains the next input,
+  and invokes the generic schema writer.
+- `fuzz_sync_point` marks the end of processing for one input. It records
+  coverage, requests the next input, and restores the snapshot for the next
+  iteration.
 
-```c
-// Register a callback of the type void callback(void);
-void fuzz_register_snap_callback(fuzz_callback_t cb); // called when the fuzzer gets to the snapshot handler, useful for stateless fuzzing that should be injected at the same point as the snapshot
-void fuzz_register_callback(fuzz_callback_t cb); // called when the fuzzer gets to the post input handling hook
-void fuzz_register_exit(fuzz_callback_t cb); // called when the fuzzer exits, happens on a crash or user interruption
+Choose a snap point immediately before the code that consumes the fuzzed data,
+and a sync point after that code has completed. Redirect execution from the
+sync point back to the snap point with a modifier. The redirected instruction
+must be safe to skip; function epilogues are a common choice when the modifier
+updates `r15` before the epilogue executes.
 
-// called when the fuzzer is restoring a memory snapshot, is useful for model-level fuzzing so the model can reset some state
-// importantly, is called on the first restore_snapshot, so the first call should tell the model what to restore to
-void fuzz_register_restore(fuzz_callback_t cb); 
-post
-// Data getting/setting with fuzzing backend
-size_t fuzz_get_data(char* buf, size_t len); // - Gets the next buffer from the fuzzer, returns 0 if the previous input is still running
-void fuzz_set_data(char* buf, size_t len); // - Returns data to the fuzzer, useful for AFLNet which wants data back, for libAFL this does nothing
+```toml
+[Machine]
+coverage = true
+fuzzing = true
+fuzzing_schema = "path/to/schema.json"
 
-// These allow getting/setting registers and memory
-uint32_t fuzz_get_register(int reg);
-void fuzz_set_register(uint32_t value, int reg);
-int fuzz_write_memory(unsigned long long addr, uint8_t *mem_buf, int len);
-int fuzz_read_memory(unsigned long long addr, uint8_t *mem_buf, int len);
+[[CPU.cpu0.virtuals]]
+at = "0x08001000"
+instruction = "fuzz_state_point"
+args = []
 
-// These are the built in virtuals that are essential to the fuzzing interface
-static void virt_assert(unsigned int cpu_index, void *udata); // - This should be set wherever the program cannot reach, reporting reaching it as a bug, restarting program if no non-null PC is given
-static void fuzz_snap_point(unsigned int cpu_index, void *udata); // - This should be set after initialization is done, when the input/sequence is done running, this point will be restored to
-static void fuzz_sync_point(unsigned int cpu_index, void *udata); // - This should be set after an input is done being processed, which tells the fuzzer to queue up the next input
+[[CPU.cpu0.virtuals]]
+at = "0x08002000"
+instruction = "fuzz_snap_point"
+args = []
+
+[[CPU.cpu0.virtuals]]
+at = "0x08002080"
+instruction = "fuzz_sync_point"
+args = []
+
+[[CPU.cpu0.modifiers]]
+at = "0x08002080"
+patch = "r15 0x08002000"
 ```
 
-### Examples
+The state point is normally reached once. The snap and sync points then form
+the persistent loop: **snap → inject → target code → sync → snap**.
 
-Here are some example use cases that are pre-made, to demonstrate fuzzing both from the model-level or from the firmware, which each have their pros and cons. The model layer means you don't have to analyze the firmware to accurately inject and extract inputs/outputs, which is useful for firmwares who have complicated peripheral interactions that are hard to generically insert data into, such as some USART inputting firmwares. The firmware level allows you to directly inject data into the firwmare, which can be useful if you're targetting fuzzing a parser withing the firwmare, letting you skip and stub out parts of the firmware that aren't useful to you with virtuals and modifiers.
+### Schema
 
-#### LWIP fuzzing
+`fuzzing_schema` names a JSON file with one top-level `fields` array. Each
+field has exactly four properties: `name`, `location`, `type`, and `size`.
+Fields consume input in array order, so the total requested fuzz input is the
+sum of their sizes.
 
-LWIP has both model-based and firmware-based fuzzing implementations to use as references, with different pros and cons. The model-based is simpler to implement but is much slower, while the firmware-based is faster, but has a more manual implementation and an imperfect input injection. These examples run in persistent mode since this firmware sometimes uses more RAM than the script automatically detects, so we change the size of one of the sections in bin-writable-ranges as follows:
-```
-0x20000000	0x7c000
-```
-
-##### Model-Based
-
-To use the model-based fuzzing, uncomment the virtual definitions for fuzz_snap_point and fuzz_sync_point in lwip_config.toml, and enable elder mode for the ethernet peripheral. Then, build the provided fuzzing_model.c, and point the elder configuration to the build fuzzing model. Then, simply run the lwip config
-```sh
-fastdyn run --config boardrunner/boardrunner_examples/examples/STM32F769i-eval/LWIP/lwip_config.toml -p
-```
-
-##### Firmware-Based
-
-Our firmware-based fuzzing stubs out all hardware accesses, allowing running it with no hardware connection, and no built model. In the configuration file, uncomment all provided virtuals and modifers. Then, set both the ethernet peripheral and unhandled space to use 'classic' meaning all reads and writes are ignored, reads return 0. Then, simply run the firmware
-```sh
-fastdyn run --config boardrunner/boardrunner_examples/examples/STM32F769i-eval/LWIP/lwip_config.toml -p
-```
-
-#### MQTT fuzzing
-
-##### Firmware-Based
-
-This firmware-based fuzzing also stubs out hardware accesses to allow running with no connection. This firmware has a very simple input injection point, making it an ideal use case for this. The provided .toml file for the MQTT firmware should already have everything set correctly to fuzz. The one minor bug that has to be tweaked is to change fuzz.c on line 352 to the following to avoid a problem occuring from including the PC in the snapshot, which is important for other implementations
-```c
-for (int i = 0; i < 15; i++) {
+```json
+{
+  "fields": [
+    {
+      "name": "message",
+      "location": "r2",
+      "type": "random",
+      "size": 291
+    },
+    {
+      "name": "mode",
+      "location": "reg(0)",
+      "type": "random",
+      "size": 4
+    }
+  ]
+}
 ```
 
-##### Modbus fuzzing
+`random` is the only type currently supported. It copies the field's next
+`size` bytes from the fuzz input to its resolved `location`, which can be
+an expression, detailed blow.
 
-##### Model-Based
+Locations are evaluated once, when the schema is first loaded at the snapshot
+point. This intentionally freezes register-derived addresses and pointer
+chains for the campaign.
 
-To fuzz Modbus, use the fuzzing_model.c for the elder mode model, and use the provided virtuals for handling synchronization and snapshotting. As with the previous firmwares, run in persistent mode with -p.
+| Location | Meaning |
+| --- | --- |
+| `reg(1)` | Fuzz register `r1` itself. This form is valid only as the complete location. |
+| `0x20001000` | Fuzz memory at an absolute address. |
+| `r2` | Read `r2` and fuzz memory at the address it contains. |
+| `r2 + 0x10` | Fuzz memory 16 bytes into the buffer addressed by `r2`. |
+| `[r3]` | Read an unsigned 32-bit value from memory at `r3`; fuzz memory at the resulting address. |
+| `u16[r3 + 6]` | Read a 16-bit unsigned value from `r3 + 6`; use it as the destination address. |
+| `[[r0 + 0x20] + 0x8] + 0x10` | Follow a pointer at `r0 + 0x20`, then a pointer at offset `0x8` in that object, and fuzz 16 bytes into the final object. |
+
+Memory expressions support `+`, `-`, `*`, `/`, parentheses, and nested
+dereferences. A bare bracket dereference reads 32 bits; `uN[expression]`
+reads an unsigned `N`-bit value. Non-byte-aligned widths are rounded up to a
+byte read and masked to `N` bits. For example, if `r4` points to a connection,
+the following resolves a three-step object chain before the bytes are written:
+
+```json
+{
+  "name": "payload",
+  "location": "[[[r4 + 0x14] + 0x8] + 0x20]",
+  "type": "random",
+  "size": 64
+}
+```
+
+Here the parser reads a pointer from `r4 + 0x14`, follows a second pointer at
+offset `0x8`, then follows a third pointer at offset `0x20`. Use parentheses
+when they make a more complex arithmetic expression clearer.

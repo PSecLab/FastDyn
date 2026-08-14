@@ -11,11 +11,10 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <errno.h>
-#include <signal.h>
+#include <fcntl.h>
 #include <sys/mman.h>
-#include <sys/wait.h>
+#include <sys/stat.h>
 #include <immintrin.h>
 
 #include "virtuals.h"
@@ -27,6 +26,9 @@
 #include "stateful_fuzzers/stateful_fuzzers.h"
 
 static int coverage = 0;
+/* Sync redirects may execute during firmware startup; they are valid only
+ * after fuzz_snap_point has established the fuzzing baseline. */
+static bool fuzz_snap_initialized = false;
 
 static char g_fuzzing_buf[1024];
 
@@ -34,11 +36,38 @@ uint32_t fuzz_prev_pc = 0;
 
 #define CVG_PATH "fastdyn_work/cvg.bin"
 #define SNAPSHOT_RAW_PATH "fastdyn_work/snapshot.bin"
+#define SAVESTATE_RAW_PATH "fastdyn_work/savestate.bin"
 #define SNAPSHOT_REG_COUNT 16
 
-// list of consecutive address+size values listing writable regions of memory, count is total entries not # of pairs
-static const char *writable_ranges_path(void) {
-    const char *path = getenv("FASTDYN_WRITABLE_RANGES_FILE");
+/* Keep these slots fixed even when a particular Cortex-M model does not
+ * expose every register. This keeps snapshot files independent of optional
+ * ARMv8-M features such as MSPLIM and PSPLIM. */
+static const char *const fuzz_special_register_names[] = {
+    "xpsr",
+    "msp",
+    "psp",
+    "msplim",
+    "psplim",
+    "primask",
+    "basepri",
+    "faultmask",
+    "control",
+};
+
+#define SNAPSHOT_SPECIAL_REG_COUNT \
+    (sizeof(fuzz_special_register_names) / sizeof(fuzz_special_register_names[0]))
+
+// Lists of consecutive address+size values, with counts measured in entries
+// rather than pairs. The snapshot list is user-selected; savestate covers all
+// writable ranges.
+static const char *snapshot_ranges_path(void) {
+    const char *path = getenv("FASTDYN_SNAPSHOT_RANGES_FILE");
+    if (path && path[0]) {
+        return path;
+    }
+
+    /* Keep the old override for the selected fuzzing snapshot. */
+    path = getenv("FASTDYN_WRITABLE_RANGES_FILE");
     if (path && path[0]) {
         return path;
     }
@@ -53,6 +82,22 @@ static const char *writable_ranges_path(void) {
     return "fastdyn_work/bin-writable-ranges";
 }
 
+static const char *savestate_ranges_path(void) {
+    const char *path = getenv("FASTDYN_SAVESTATE_RANGES_FILE");
+    if (path && path[0]) {
+        return path;
+    }
+
+    const char *work_dir = getenv("FASTDYN_WORK_DIR");
+    if (work_dir && work_dir[0]) {
+        static char buffer[4096];
+        snprintf(buffer, sizeof(buffer), "%s/bin-all-writable-ranges", work_dir);
+        return buffer;
+    }
+
+    return "fastdyn_work/bin-all-writable-ranges";
+}
+
 static const char *coverage_output_path() {
     const char *work_dir = getenv("FASTDYN_WORK_DIR");
     if (work_dir && work_dir[0]) {
@@ -64,15 +109,12 @@ static const char *coverage_output_path() {
     return "./fastdyn_work/cvg.bin";
 }
 
-static size_t wlist_count = 0;
-static uint32_t *wlist = NULL;
-static pid_t g_agentic_fuzz_pid = -1;
+static size_t g_snapshot_ranges_count = 0;
+static uint32_t *g_snapshot_ranges = NULL;
+static size_t g_savestate_ranges_count = 0;
+static uint32_t *g_savestate_ranges = NULL;
 
 static int fuzz_irq_depth = 0;
-
-static uint8_t *snap_membuff = NULL;
-static uint32_t g_snapshot_regs[SNAPSHOT_REG_COUNT];
-static bool g_snapshot_loaded_from_file = false;
 
 typedef enum {
     FUZZ_MSG_INACTIVE = 0,
@@ -126,186 +168,7 @@ static void fuzz_irq_exit(int irq) {
 static void fuzz_sync_coverage(void) {
     core_wait_for_trace_drain();
     fuzz_prev_pc = 0;
-}
-
-// ----------------------- agentic_fuzz monitor process -------------------------
-
-static const char *fuzz_get_arg_exact(const char *key, int argc, char **argv)
-{
-    size_t len = strlen(key);
-
-    for (int i = 0; i < argc; i++) {
-        if (strncmp(argv[i], key, len) == 0 && argv[i][len] == '=') {
-            return argv[i] + len + 1;
-        }
-    }
-
-    return NULL;
-}
-
-static bool fuzz_arg_bool(const char *value, bool default_value)
-{
-    if (value == NULL || value[0] == '\0') {
-        return default_value;
-    }
-
-    if (strcasecmp(value, "1") == 0 ||
-        strcasecmp(value, "true") == 0 ||
-        strcasecmp(value, "yes") == 0 ||
-        strcasecmp(value, "on") == 0) {
-        return true;
-    }
-
-    if (strcasecmp(value, "0") == 0 ||
-        strcasecmp(value, "false") == 0 ||
-        strcasecmp(value, "no") == 0 ||
-        strcasecmp(value, "off") == 0 ||
-        strcasecmp(value, "none") == 0) {
-        return false;
-    }
-
-    return default_value;
-}
-
-static void agentic_fuzz_signal_child(int signal_number)
-{
-    if (g_agentic_fuzz_pid <= 0) {
-        return;
-    }
-
-    if (kill(-g_agentic_fuzz_pid, signal_number) != 0 && errno == ESRCH) {
-        kill(g_agentic_fuzz_pid, signal_number);
-    }
-}
-
-static void agentic_fuzz_stop_monitor(void)
-{
-    if (g_agentic_fuzz_pid <= 0) {
-        return;
-    }
-
-    int status = 0;
-    pid_t waited = waitpid(g_agentic_fuzz_pid, &status, WNOHANG);
-    if (waited == g_agentic_fuzz_pid || (waited < 0 && errno == ECHILD)) {
-        g_agentic_fuzz_pid = -1;
-        return;
-    }
-
-    agentic_fuzz_signal_child(SIGTERM);
-
-    for (int i = 0; i < 50; i++) {
-        waited = waitpid(g_agentic_fuzz_pid, &status, WNOHANG);
-        if (waited == g_agentic_fuzz_pid || (waited < 0 && errno == ECHILD)) {
-            g_agentic_fuzz_pid = -1;
-            return;
-        }
-        usleep(50000);
-    }
-
-    agentic_fuzz_signal_child(SIGKILL);
-    while (waitpid(g_agentic_fuzz_pid, &status, 0) < 0 && errno == EINTR) {
-        continue;
-    }
-    g_agentic_fuzz_pid = -1;
-}
-
-static void agentic_fuzz_start_monitor(int argc, char **argv)
-{
-    const char *enabled = fuzz_get_arg_exact("agentic_fuzz", argc, argv);
-    if (!fuzz_arg_bool(enabled, false) || g_agentic_fuzz_pid > 0) {
-        return;
-    }
-
-    const char *python = fuzz_get_arg_exact("agentic_fuzz_python", argc, argv);
-    const char *script = fuzz_get_arg_exact("agentic_fuzz_script", argc, argv);
-    const char *cwd = fuzz_get_arg_exact("agentic_fuzz_cwd", argc, argv);
-    const char *binary = fuzz_get_arg_exact("agentic_fuzz_binary", argc, argv);
-    const char *work_dir = fuzz_get_arg_exact("agentic_fuzz_work_dir", argc, argv);
-    const char *in_dir = fuzz_get_arg_exact("agentic_fuzz_in_dir", argc, argv);
-    const char *out_dir = fuzz_get_arg_exact("agentic_fuzz_out_dir", argc, argv);
-    const char *coverage_path = fuzz_get_arg_exact("agentic_fuzz_coverage", argc, argv);
-    const char *regions = fuzz_get_arg_exact("agentic_fuzz_regions", argc, argv);
-    const char *snapshot = fuzz_get_arg_exact("agentic_fuzz_snapshot", argc, argv);
-    const char *log_path = fuzz_get_arg_exact("agentic_fuzz_log", argc, argv);
-    const char *model = fuzz_get_arg_exact("agentic_fuzz_model", argc, argv);
-    const char *taint_arg = fuzz_get_arg_exact("agentic_fuzz_taint", argc, argv);
-    bool taint = fuzz_arg_bool(taint_arg, true);
-
-    if (python == NULL || python[0] == '\0') python = "python3";
-    if (script == NULL || script[0] == '\0') script = "virtuals/fuzzer/agentic/monitor.py";
-    if (work_dir == NULL || work_dir[0] == '\0') work_dir = "fastdyn_work";
-    if (in_dir == NULL || in_dir[0] == '\0') in_dir = "fastdyn_work/corpus";
-    if (out_dir == NULL || out_dir[0] == '\0') out_dir = "fastdyn_work/corpus-agentic";
-    if (coverage_path == NULL || coverage_path[0] == '\0') coverage_path = "fastdyn_work/bbl.txt";
-    if (regions == NULL || regions[0] == '\0') regions = "fastdyn_work/bin-writable-ranges";
-    if (snapshot == NULL || snapshot[0] == '\0') snapshot = "fastdyn_work/snapshot.bin";
-    if (log_path == NULL || log_path[0] == '\0') log_path = "fastdyn_work/agentic_fuzz-monitor.log";
-
-    if (binary == NULL || binary[0] == '\0') {
-        fprintf(stderr, "[agentic_fuzz] agentic_fuzz=true but agentic_fuzz_binary is missing\n");
-        return;
-    }
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("[agentic_fuzz] fork");
-        return;
-    }
-
-    if (pid == 0) {
-        int log_fd = open(log_path, O_CREAT | O_WRONLY | O_APPEND, 0666);
-        if (log_fd >= 0) {
-            dup2(log_fd, STDOUT_FILENO);
-            dup2(log_fd, STDERR_FILENO);
-            if (log_fd > STDERR_FILENO) {
-                close(log_fd);
-            }
-        }
-
-        setsid();
-
-        if (cwd != NULL && cwd[0] != '\0' && chdir(cwd) != 0) {
-            perror("[agentic_fuzz] chdir");
-            _exit(127);
-        }
-
-        setenv("PYTHONUNBUFFERED", "1", 1);
-
-        char *child_argv[21];
-        int idx = 0;
-        child_argv[idx++] = (char *)python;
-        child_argv[idx++] = "-u";
-        child_argv[idx++] = (char *)script;
-        child_argv[idx++] = (char *)binary;
-        child_argv[idx++] = "run";
-        child_argv[idx++] = "--work-dir";
-        child_argv[idx++] = (char *)work_dir;
-        child_argv[idx++] = "--in-dir";
-        child_argv[idx++] = (char *)in_dir;
-        child_argv[idx++] = "--out-dir";
-        child_argv[idx++] = (char *)out_dir;
-        child_argv[idx++] = "--coverage";
-        child_argv[idx++] = (char *)coverage_path;
-        child_argv[idx++] = "--regions";
-        child_argv[idx++] = (char *)regions;
-        child_argv[idx++] = "--snapshot";
-        child_argv[idx++] = (char *)snapshot;
-        if (model != NULL && model[0] != '\0') {
-            child_argv[idx++] = "--model";
-            child_argv[idx++] = (char *)model;
-        }
-        if (taint) {
-            child_argv[idx++] = "--taint";
-        }
-        child_argv[idx] = NULL;
-
-        execvp(python, child_argv);
-        perror("[agentic_fuzz] execvp");
-        _exit(127);
-    }
-
-    g_agentic_fuzz_pid = pid;
-    //printf("[agentic_fuzz] started monitor pid %d, logging to %s\n", (int)pid, log_path);
+    fuzz_bbl_reset_trace();
 }
 
 // ----------------------- data getting & setting -----------------------------
@@ -385,8 +248,8 @@ void fuzz_set_data(char* buf, size_t len)
 
 // ------------------- snapshotting related functions ------------------------
 
-// load the writable memory from bin-writable-ranges, produced by binary_wrange.py
-// notably, this is not always 100% correct in all cases, where manual edits to bin-writable-ranges can improve snapshots
+// Load address/size pairs produced by binary_wrange.py. Manual edits to the
+// selected file can improve fuzz snapshots without reducing savestate coverage.
 static uint32_t *fuzz_get_writable_ranges(const char *filename, size_t *out_count)
 {
     FILE *f = fopen(filename, "r");
@@ -427,123 +290,406 @@ static uint32_t *fuzz_get_writable_ranges(const char *filename, size_t *out_coun
     return array;
 }
 
-static size_t fuzz_snapshot_size(void)
+static bool fuzz_append_memory_ranges(uint32_t **ranges, size_t *count,
+                                      uint32_t *extra_ranges,
+                                      size_t extra_count)
+{
+    if ((extra_count & 1) || (extra_count != 0 && !extra_ranges)) {
+        return false;
+    }
+
+    if (extra_count == 0) {
+        free(extra_ranges);
+        return true;
+    }
+
+    if (*count > SIZE_MAX - extra_count ||
+        *count + extra_count > SIZE_MAX / sizeof(**ranges)) {
+        return false;
+    }
+
+    uint32_t *combined = realloc(*ranges,
+                                 (*count + extra_count) * sizeof(**ranges));
+    if (!combined) {
+        return false;
+    }
+
+    memcpy(combined + *count, extra_ranges,
+           extra_count * sizeof(*extra_ranges));
+    free(extra_ranges);
+    *ranges = combined;
+    *count += extra_count;
+    return true;
+}
+
+typedef struct {
+    const uint32_t *pairs;
+    size_t count;
+} fuzz_memory_ranges_t;
+
+typedef enum {
+    FUZZ_REGISTERS_BASE,
+    FUZZ_REGISTERS_BASE_AND_SPECIAL,
+} fuzz_register_profile_t;
+
+typedef struct {
+    const char *name;
+    const char *path;
+    fuzz_register_profile_t registers;
+    fuzz_memory_ranges_t (*memory_ranges)(void);
+} fuzz_state_policy_t;
+
+typedef struct {
+    const fuzz_state_policy_t *policy;
+    uint32_t *ranges;
+    size_t range_count;
+    uint8_t *membuff;
+    uint32_t regs[SNAPSHOT_REG_COUNT];
+    uint32_t special_regs[SNAPSHOT_SPECIAL_REG_COUNT];
+    bool loaded_from_file;
+    bool taken;
+} fuzz_saved_state_t;
+
+static size_t fuzz_memory_ranges_size(const uint32_t *ranges, size_t count)
 {
     size_t total_mem = 0;
 
-    for (size_t i = 1; i < wlist_count; i += 2) {
-        total_mem += wlist[i];
+    for (size_t i = 1; i < count; i += 2) {
+        total_mem += ranges[i];
     }
 
     return total_mem;
 }
 
-// take the initial snapshot, supports saving/loading snapshots to/from disk
-int fuzz_snap_memory() {
-    uint32_t file_regs[SNAPSHOT_REG_COUNT];
-    size_t total_mem;
-    FILE *f;
-    g_snapshot_loaded_from_file = false;
+/* Policy boundaries for the two restore points. The range generator writes
+ * the complete writable set for savestate and a user-selected subset for the
+ * fuzzing snapshot. */
+static fuzz_memory_ranges_t fuzz_savestate_memory_ranges(void)
+{
+    /* Additional explicit savestate ranges will be appended here. */
+    return (fuzz_memory_ranges_t) {
+        .pairs = g_savestate_ranges,
+        .count = g_savestate_ranges_count,
+    };
+}
 
-    f = fopen(SNAPSHOT_RAW_PATH, "rb");
+static fuzz_memory_ranges_t fuzz_snapshot_memory_ranges(void)
+{
+    return (fuzz_memory_ranges_t) {
+        .pairs = g_snapshot_ranges,
+        .count = g_snapshot_ranges_count,
+    };
+}
 
-    // read an existing snapshot file if present, useful for skipping initialization, checks that sp is valid
-    if (f) {
-        if (fread(file_regs, sizeof(file_regs[0]), SNAPSHOT_REG_COUNT, f) == SNAPSHOT_REG_COUNT) {
-            total_mem = fuzz_snapshot_size();
-            snap_membuff = malloc(total_mem);
+static const fuzz_state_policy_t g_savestate_policy = {
+    .name = "savestate",
+    .path = SAVESTATE_RAW_PATH,
+    .registers = FUZZ_REGISTERS_BASE_AND_SPECIAL,
+    .memory_ranges = fuzz_savestate_memory_ranges,
+};
 
-            if (!snap_membuff) {
-                fclose(f);
-                printf("Failed to malloc buffer\n");
-                return -1;
-            }
+static const fuzz_state_policy_t g_fuzz_snapshot_policy = {
+    .name = "snapshot",
+    .path = SNAPSHOT_RAW_PATH,
+    .registers = FUZZ_REGISTERS_BASE,
+    .memory_ranges = fuzz_snapshot_memory_ranges,
+};
 
-            if (fread(snap_membuff, 1, total_mem, f) == total_mem && fgetc(f) == EOF) {
-                memcpy(g_snapshot_regs, file_regs, sizeof(g_snapshot_regs));
-                g_snapshot_loaded_from_file = true;
-                fclose(f);
-                printf("Loaded snapshot from %s\n", SNAPSHOT_RAW_PATH);
-                return 0;
-            }
+static fuzz_saved_state_t g_savestate = {
+    .policy = &g_savestate_policy,
+};
 
-            free(snap_membuff);
-            snap_membuff = NULL;
-        }
+static fuzz_saved_state_t g_fuzz_snapshot = {
+    .policy = &g_fuzz_snapshot_policy,
+};
 
-        fclose(f);
-        printf("Ignoring invalid snapshot dump at %s\n", SNAPSHOT_RAW_PATH);
+static bool fuzz_state_has_special_registers(const fuzz_saved_state_t *state)
+{
+    return state->policy->registers == FUZZ_REGISTERS_BASE_AND_SPECIAL;
+}
+
+static bool fuzz_state_select_memory_ranges(fuzz_saved_state_t *state)
+{
+    fuzz_memory_ranges_t ranges = state->policy->memory_ranges();
+
+    if ((ranges.count & 1) || (ranges.count != 0 && !ranges.pairs)) {
+        return false;
     }
 
-    total_mem = fuzz_snapshot_size();
+    if (ranges.count == 0) {
+        return true;
+    }
 
-    snap_membuff = malloc(total_mem);
-    if (!snap_membuff) {
-        printf("Failed to malloc buffer\n");
+    state->ranges = malloc(ranges.count * sizeof(*state->ranges));
+    if (!state->ranges) {
+        return false;
+    }
+
+    memcpy(state->ranges, ranges.pairs, ranges.count * sizeof(*state->ranges));
+    state->range_count = ranges.count;
+    return true;
+}
+
+static qemu_plugin_reg_descriptor *fuzz_find_register(GArray *registers,
+                                                       const char *name)
+{
+    for (guint i = 0; i < registers->len; i++) {
+        qemu_plugin_reg_descriptor *descriptor = &g_array_index(
+            registers, qemu_plugin_reg_descriptor, i);
+
+        if (strcmp(descriptor->name, name) == 0) {
+            return descriptor;
+        }
+    }
+
+    return NULL;
+}
+
+/* Save the current Cortex-M special-register state into a caller-provided
+ * fixed-size buffer. Registers not implemented by this CPU are left as zero. */
+static bool fuzz_save_special_registers(uint32_t *buffer)
+{
+    GArray *registers = qemu_plugin_get_registers();
+    GByteArray *value = g_byte_array_sized_new(sizeof(uint32_t));
+    bool success = true;
+
+    if (!registers || !value) {
+        if (registers) {
+            g_array_free(registers, true);
+        }
+        if (value) {
+            g_byte_array_free(value, true);
+        }
+        return false;
+    }
+
+    memset(buffer, 0, sizeof(uint32_t) * SNAPSHOT_SPECIAL_REG_COUNT);
+
+    for (size_t i = 0; i < SNAPSHOT_SPECIAL_REG_COUNT; i++) {
+        qemu_plugin_reg_descriptor *descriptor = fuzz_find_register(
+            registers, fuzz_special_register_names[i]);
+        int count;
+
+        if (!descriptor) {
+            continue;
+        }
+
+        g_byte_array_set_size(value, 0);
+        count = qemu_plugin_read_register(descriptor->handle, value);
+        if (count != sizeof(uint32_t) || value->len != sizeof(uint32_t)) {
+            printf("[savestate] Failed to read special register %s\n",
+                   fuzz_special_register_names[i]);
+            success = false;
+            break;
+        }
+
+        /* Cortex-M register data is little-endian target byte order. */
+        buffer[i] = (uint32_t)value->data[0] |
+                    ((uint32_t)value->data[1] << 8) |
+                    ((uint32_t)value->data[2] << 16) |
+                    ((uint32_t)value->data[3] << 24);
+    }
+
+    g_byte_array_free(value, true);
+    g_array_free(registers, true);
+    return success;
+}
+
+static bool fuzz_restore_special_registers(const uint32_t *buffer)
+{
+    GArray *registers = qemu_plugin_get_registers();
+    bool success = true;
+
+    if (!registers) {
+        return false;
+    }
+
+    for (size_t i = 0; i < SNAPSHOT_SPECIAL_REG_COUNT; i++) {
+        qemu_plugin_reg_descriptor *descriptor = fuzz_find_register(
+            registers, fuzz_special_register_names[i]);
+        uint8_t value[sizeof(uint32_t)] = {
+            buffer[i] & 0xff,
+            (buffer[i] >> 8) & 0xff,
+            (buffer[i] >> 16) & 0xff,
+            (buffer[i] >> 24) & 0xff,
+        };
+
+        if (!descriptor) {
+            continue;
+        }
+
+        if (qemu_plugin_write_register(descriptor->handle, value) !=
+            sizeof(uint32_t)) {
+            printf("[savestate] Failed to restore special register %s\n",
+                   fuzz_special_register_names[i]);
+            success = false;
+            break;
+        }
+    }
+
+    g_array_free(registers, true);
+    return success;
+}
+
+static void fuzz_state_discard(fuzz_saved_state_t *state)
+{
+    free(state->membuff);
+    free(state->ranges);
+    state->membuff = NULL;
+    state->ranges = NULL;
+    state->range_count = 0;
+}
+
+/* Capture one policy-defined state, loading an existing raw image when one is
+ * available. The raw file layout remains compatible with the prior format. */
+static int fuzz_state_take(fuzz_saved_state_t *state)
+{
+    uint32_t file_regs[SNAPSHOT_REG_COUNT];
+    uint32_t file_special_regs[SNAPSHOT_SPECIAL_REG_COUNT];
+    bool special_regs = fuzz_state_has_special_registers(state);
+    size_t total_mem;
+    FILE *f;
+
+    state->loaded_from_file = false;
+    if (!fuzz_state_select_memory_ranges(state)) {
+        printf("[%s] Invalid memory ranges\n", state->policy->name);
         return -1;
     }
 
-    for (int i = 0; i < SNAPSHOT_REG_COUNT; i++) {
-        g_snapshot_regs[i] = qemu_get_register(i);
+    total_mem = fuzz_memory_ranges_size(state->ranges, state->range_count);
+    state->membuff = malloc(total_mem ? total_mem : 1);
+    if (!state->membuff) {
+        printf("[%s] Failed to allocate memory buffer\n", state->policy->name);
+        fuzz_state_discard(state);
+        return -1;
     }
 
-    // Save current memory
-    size_t offset = 0;
-    for (size_t i = 0; i < wlist_count; i += 2) {
-        qemu_plugin_read_memory(wlist[i], snap_membuff + offset, wlist[i+1]);
-        offset += wlist[i+1];
-    }
-
-    // dump snapshot to file
-    f = fopen(SNAPSHOT_RAW_PATH, "wb");
+    f = fopen(state->policy->path, "rb");
     if (f) {
-        if (fwrite(g_snapshot_regs, sizeof(g_snapshot_regs[0]), SNAPSHOT_REG_COUNT, f) != SNAPSHOT_REG_COUNT) {
-            printf("Failed to write snapshot register header to %s\n", SNAPSHOT_RAW_PATH);
-        } else if (fwrite(snap_membuff, 1, total_mem, f) != total_mem) {
-            printf("Failed to write full snapshot to %s\n", SNAPSHOT_RAW_PATH);
+        if (fread(file_regs, sizeof(file_regs[0]), SNAPSHOT_REG_COUNT, f) == SNAPSHOT_REG_COUNT &&
+            (!special_regs ||
+             fread(file_special_regs, sizeof(file_special_regs[0]),
+                   SNAPSHOT_SPECIAL_REG_COUNT, f) == SNAPSHOT_SPECIAL_REG_COUNT) &&
+            fread(state->membuff, 1, total_mem, f) == total_mem && fgetc(f) == EOF) {
+            memcpy(state->regs, file_regs, sizeof(state->regs));
+            if (special_regs) {
+                memcpy(state->special_regs, file_special_regs,
+                       sizeof(state->special_regs));
+            }
+            state->loaded_from_file = true;
+            fclose(f);
+            printf("Loaded %s from %s\n", state->policy->name, state->policy->path);
+            return 0;
+        }
+
+        fclose(f);
+        printf("Ignoring invalid %s dump at %s\n",
+               state->policy->name, state->policy->path);
+    }
+
+    for (int i = 0; i < SNAPSHOT_REG_COUNT; i++) {
+        state->regs[i] = qemu_get_register(i);
+    }
+
+    if (special_regs && !fuzz_save_special_registers(state->special_regs)) {
+        fuzz_state_discard(state);
+        return -1;
+    }
+
+    size_t offset = 0;
+    for (size_t i = 0; i < state->range_count; i += 2) {
+        qemu_plugin_read_memory(state->ranges[i], state->membuff + offset,
+                                state->ranges[i + 1]);
+        offset += state->ranges[i + 1];
+    }
+
+    f = fopen(state->policy->path, "wb");
+    if (f) {
+        if (fwrite(state->regs, sizeof(state->regs[0]), SNAPSHOT_REG_COUNT, f) != SNAPSHOT_REG_COUNT) {
+            printf("Failed to write %s register header to %s\n",
+                   state->policy->name, state->policy->path);
+        } else if (special_regs &&
+                   fwrite(state->special_regs, sizeof(state->special_regs[0]),
+                         SNAPSHOT_SPECIAL_REG_COUNT, f) != SNAPSHOT_SPECIAL_REG_COUNT) {
+            printf("Failed to write %s special-register header to %s\n",
+                   state->policy->name, state->policy->path);
+        } else if (fwrite(state->membuff, 1, total_mem, f) != total_mem) {
+            printf("Failed to write full %s to %s\n",
+                   state->policy->name, state->policy->path);
         } else {
-            printf("Wrote snapshot to %s\n", SNAPSHOT_RAW_PATH);
+            printf("Wrote %s to %s\n", state->policy->name, state->policy->path);
         }
         fclose(f);
     } else {
-        printf("Failed to open %s for snapshot dump\n", SNAPSHOT_RAW_PATH);
+        printf("Failed to open %s for %s dump\n",
+               state->policy->path, state->policy->name);
     }
 
     return 0;
 }
 
-static bool g_snapshot_taken = false;
-
-static bool fuzz_ensure_snapshot(void)
+static bool fuzz_state_ensure(fuzz_saved_state_t *state)
 {
-    if (g_snapshot_taken) {
+    if (state->taken) {
         return true;
     }
 
-    if (fuzz_snap_memory() != 0) {
-        perror("Failed to take initial snapshot\n");
+    if (fuzz_state_take(state) != 0) {
+        perror("Failed to take initial state");
         return false;
     }
 
-    g_snapshot_taken = true;
+    state->taken = true;
     return true;
+}
+
+static bool fuzz_state_restore(fuzz_saved_state_t *state)
+{
+    if (!fuzz_state_ensure(state) || !state->membuff) {
+        return false;
+    }
+
+    size_t offset = 0;
+    for (size_t i = 0; i < state->range_count; i += 2) {
+        qemu_plugin_write_memory(state->ranges[i], state->membuff + offset,
+                                 state->ranges[i + 1]);
+        offset += state->ranges[i + 1];
+    }
+
+    /* Snapshot and savestate currently share the base-register restore set.
+     * PC is intentionally excluded because each restore point resumes through
+     * its hook rather than by jumping back to the captured instruction. */
+    for (int i = 0; i < 15; i++) {
+        fuzz_set_register(state->regs[i], i);
+    }
+
+    if (fuzz_state_has_special_registers(state) &&
+        !fuzz_restore_special_registers(state->special_regs)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool fuzz_savestate_ensure(void)
+{
+    return fuzz_state_ensure(&g_savestate);
+}
+
+static bool fuzz_savestate_restore(void)
+{
+    return fuzz_state_restore(&g_savestate);
+}
+
+static bool fuzz_snapshot_ensure(void)
+{
+    return fuzz_state_ensure(&g_fuzz_snapshot);
 }
 
 bool fuzz_restore_snapshot(void)
 {
-    if (!fuzz_ensure_snapshot() || !snap_membuff) {
+    if (!fuzz_state_restore(&g_fuzz_snapshot)) {
         return false;
-    }
-
-    size_t total_mem = 0;
-    for (size_t i = 0; i < wlist_count; i += 2) {
-        qemu_plugin_write_memory(wlist[i], snap_membuff + total_mem, wlist[i+1]);
-        total_mem += wlist[i+1];
-    }
-
-    // include pc, we may restore from a different point than taken
-    for (int i = 0; i < 15; i++) {
-        fuzz_set_register(g_snapshot_regs[i], i);
     }
 
     if (g_fuzz_restore_callback) {
@@ -638,25 +784,41 @@ static inline bool fuzz_snap_init_timeout(int seconds) {
     return elapsed_sec > seconds || (elapsed_sec == seconds && elapsed_nsec >= 0);
 }
 
+static void fuzz_state_point(unsigned int cpu_index, void *udata)
+{
+    (void)cpu_index;
+    (void)udata;
+
+    static bool state_init = false;
+    if (state_init) return;
+    
+    if (!fuzz_savestate_ensure()) {
+        utils_die("[state] Failed to take savestate snapshot");
+    }
+    if (g_savestate.loaded_from_file && !fuzz_savestate_restore()) {
+        utils_die("[state] Failed to restore savestate snapshot");
+    }
+
+    state_init = true;
+}
+
 static void fuzz_sync_point(unsigned int cpu_index, void *udata);
 static void fuzz_snap_point(unsigned int cpu_index, void *udata)
 {
-    static bool initialized = false;
-
     // optionally wait x seconds after first hook to get to post initialization in some firmwares
-    if (!initialized && fuzz_snap_init_timeout(0)) {
+    if (!fuzz_snap_initialized && fuzz_snap_init_timeout(0)) {
         fuzz_irq_depth = 0; // fix any drift after jumping
-        if (!fuzz_ensure_snapshot()) {
+        if (!fuzz_snapshot_ensure()) {
             utils_die("[sync] Failed to take initial snapshot");
         }
 
-        if (g_snapshot_loaded_from_file && !fuzz_restore_snapshot()) {
+        if (g_fuzz_snapshot.loaded_from_file && !fuzz_restore_snapshot()) {
             utils_die("[sync] Failed to restore loaded snapshot");
         }
 
         observed_clear();
 
-        initialized = true;
+        fuzz_snap_initialized = true;
 
         fuzz_sync_point(cpu_index, udata);
     }
@@ -668,6 +830,9 @@ static void fuzz_snap_point(unsigned int cpu_index, void *udata)
 
 static void fuzz_sync_point(unsigned int cpu_index, void *udata)
 {
+    if (!fuzz_snap_initialized) {
+        return;
+    }
     if (!coverage) {
         utils_die("[fuzz_sync] Coverage not enabled, cannot assert coverage data");
     }
@@ -689,6 +854,7 @@ static void fuzz_sync_point(unsigned int cpu_index, void *udata)
     while (true) {
         if (oldState == FUZZ_MSG_READY) {
             fuzz_set_message_state(oldState); // reactivate the message
+            printf("Goodbye2\n");
             return;
         }
 
@@ -739,21 +905,23 @@ void fuzz_add_observed_value(uint32_t val) {
     
     if (val == 0xFFFFFFFD) {
         fuzz_irq_depth++;
+        //printf("++IRQ == %d\n", fuzz_irq_depth);
     } else if (val == 0xFFFFFFFB) {
         fuzz_irq_depth--;
+        //printf("--IRQ == %d\n", fuzz_irq_depth);
     } else {
-        if (fuzz_irq_depth == 0) {
+        if (fuzz_irq_depth == 0 || false) {
             // we don't want stale value from before trace
             if (fuzz_prev_pc != 0) {
                 uint32_t idx = (fuzz_prev_pc ^ val) % MAP_SIZE;
                 CVG[idx] = CVG[idx] + 1;
             }
 
-            if (g_trace_enabled) fuzz_trace_record_pc(val);
             fuzz_prev_pc = val;
         }
-        fuzz_bbl_add(val);
+        fuzz_bbl_add(val, fuzz_irq_depth);
     }
+    if (g_trace_enabled) fuzz_trace_record_pc(val);
 }
 
 static void fuzz_serialize_coverage(const char *filename) {
@@ -800,23 +968,15 @@ static void fuzz_destroy(void) {
     }
     fuzz_dump_bbl();
     fuzz_serialize_coverage(coverage_output_path());
-    agentic_fuzz_stop_monitor();
-}
-
-// miscelanious virtual you can use to test if the firmware reaches something without enabling gdb and tracing
-static void fuzz_print_test(unsigned int cpu_index, void *udata) {
-    printf("[test]\n");
 }
 
 int fuzz_init(int argc, char **argv) {
     const char *filename = utils_get_arg("coverage", argc, argv);
-    if (filename &&
-        (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
-
+    const char *fuzzing = utils_get_arg("fuzzing", argc, argv);
+    if (filename && (strcasecmp(filename, "true") == 0 || strcmp(filename, "1") == 0)) {
         coverage = 1;
-        fuzz_bbl_init();
+        fuzz_bbl_init(argc, argv);
         core_register_exit_hook(fuzz_destroy);
-        agentic_fuzz_start_monitor(argc, argv);
     } else {
         printf("Coverage is required to fuzz\n");
         return 0;
@@ -824,23 +984,48 @@ int fuzz_init(int argc, char **argv) {
 
     core_register_irq_hook(fuzz_irq_entry, fuzz_irq_exit);
 
-    wlist = fuzz_get_writable_ranges(writable_ranges_path(), &wlist_count);
+    g_savestate_ranges = fuzz_get_writable_ranges(
+        savestate_ranges_path(), &g_savestate_ranges_count);
+    if (g_savestate_ranges == NULL || (g_savestate_ranges_count & 1)) {
+        utils_die("[state] Couldn't parse all writable memory definitions");
+    }
 
-    if (wlist == NULL || (wlist_count & 1)) {
-        utils_die("[sync] Couldn't parse writable memory definitions");
+    const char *extra_ranges_path = utils_get_arg("savestate_extra_ranges",
+                                                   argc, argv);
+    if (extra_ranges_path && extra_ranges_path[0]) {
+        size_t extra_ranges_count = 0;
+        uint32_t *extra_ranges = fuzz_get_writable_ranges(extra_ranges_path,
+                                                           &extra_ranges_count);
+        if (!extra_ranges || !fuzz_append_memory_ranges(
+                &g_savestate_ranges, &g_savestate_ranges_count,
+                extra_ranges, extra_ranges_count)) {
+            free(extra_ranges);
+            utils_die("[state] Couldn't parse savestate extra memory definitions");
+        }
+    }
+
+    g_snapshot_ranges = fuzz_get_writable_ranges(
+        snapshot_ranges_path(), &g_snapshot_ranges_count);
+    if (g_snapshot_ranges == NULL || (g_snapshot_ranges_count & 1)) {
+        utils_die("[sync] Couldn't parse selected writable memory definitions");
     }
 
     fuzz_deactivate_message();
 
     virtual_register("assert", virt_assert);
     virtual_register("fuzz_snap_point", fuzz_snap_point);
+    virtual_register("fuzz_state_point", fuzz_state_point);
     virtual_register("fuzz_sync_point", fuzz_sync_point);
 
     // This is where the stateless injection harness should go
-    fuzz_register_snap_callback(fuzz_packetreceived_inject);
+    generic_configure(argc, argv);
+    fuzz_register_snap_callback(generic_callback);
 
-    if (!fuzz_backend_init()) {
-        utils_die("[sync] Failed backend initialization");
+    if (fuzzing &&
+        (strcasecmp(fuzzing, "true") == 0 || strcmp(fuzzing, "1") == 0)) {
+        if (!fuzz_backend_init()) {
+            utils_die("[sync] Failed backend initialization");
+        }
     }
 
     return 0;

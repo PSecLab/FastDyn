@@ -2,13 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <signal.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <errno.h>
+#include <core.h>
 #include "ring_buffer.h"
 #include "mavlink_lib.h"
 #include "mavlink.h"
@@ -24,6 +23,8 @@
 static pthread_t gcs_listener_tid;
 static pthread_t gps_input_listener_tid;
 static bool gcs_listener_running = false;
+static bool gcs_shutdown_hook_registered = false;
+static bool gcs_shutdown_complete = false;
 
 static struct sockaddr_in gcs_addr;
 static int send_sockfd = -1;
@@ -123,7 +124,7 @@ void mark_close_flight_log_fd(int fd) {
     }
 }
 
-static void close_all_flight_log_fds() {
+static void close_all_flight_log_fds(void) {
     for (int i = 0; i < flight_log_fd_index; i++) {
         if (flight_log_fd_array[i] != -1) {
             close(flight_log_fd_array[i]);
@@ -133,20 +134,29 @@ static void close_all_flight_log_fds() {
     flight_log_fd_index = 0;
 }
 
-void sigint_handler(int sig) {
-    printf("\n[Main] Caught SIGINT (Ctrl-C).\n");
+static void gcs_shutdown(void) {
+    if (gcs_shutdown_complete) {
+        return;
+    }
+    gcs_shutdown_complete = true;
+
     printf("[Main] Closing all flight log file descriptors...\n");
     close_all_flight_log_fds();
     printf("[Main] Flight log file descriptors closed.\n");
-    printf("[Main] Sending cancellation request to MAVLink listener threads...\n");
-    pthread_cancel(gcs_listener_tid);
-    pthread_cancel(gps_input_listener_tid);
-    pthread_join(gcs_listener_tid, NULL);
-    pthread_join(gps_input_listener_tid, NULL);
-    gcs_listener_running = false;
+
+    if (gcs_listener_running) {
+        printf("[Main] Sending cancellation request to MAVLink listener threads...\n");
+        fflush(stdout);
+        pthread_cancel(gcs_listener_tid);
+        pthread_cancel(gps_input_listener_tid);
+        pthread_join(gcs_listener_tid, NULL);
+        pthread_join(gps_input_listener_tid, NULL);
+        gcs_listener_running = false;
+    }
+
     print_fuzzed_input(&g_fuzzed_input);
-    printf("[Main] MAVLink listener threads joined. Exiting.\n");
-    exit(0);
+    printf("[Main] MAVLink listener threads joined.\n");
+    fflush(stdout);
 }
 
 // const char * mavlink_dictionary(uint32_t message_id){
@@ -291,15 +301,9 @@ static void* udp_listener(void *arg) {
 }
 
 void start_gcs_listener(RingBuffer *rb) {
-    struct sigaction sa;
-    sa.sa_handler = sigint_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-
-    // Install SIGINT handler (Ctrl-C)
-    if (sigaction(SIGINT, &sa, NULL) == -1) {
-        perror("sigaction");
-        exit(EXIT_FAILURE);
+    if (!gcs_shutdown_hook_registered) {
+        core_register_exit_hook(gcs_shutdown);
+        gcs_shutdown_hook_registered = true;
     }
 
     gcs_listener_config = (udp_listener_config_t) {

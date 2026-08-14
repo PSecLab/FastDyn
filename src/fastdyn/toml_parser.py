@@ -34,6 +34,55 @@ def _env_bool(name, default):
     raise ValueError(f"{name} must be a boolean, got {value!r}")
 
 
+def _positive_int(value, setting):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{setting} must be a positive integer, got {value!r}")
+    return value
+
+
+def _range_integer(value, setting, *, positive=False):
+    if isinstance(value, bool):
+        raise TypeError(f"{setting} must be an integer or integer string, got {value!r}")
+
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, str):
+        try:
+            result = int(value, 0)
+        except ValueError as exc:
+            raise ValueError(f"{setting} must be an integer, got {value!r}") from exc
+    else:
+        raise TypeError(f"{setting} must be an integer or integer string, got {value!r}")
+
+    if result < 0 or (positive and result == 0):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"{setting} must be {qualifier}, got {value!r}")
+    return result
+
+
+def _savestate_extra_ranges(value):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError("[Machine].savestate_extra_ranges must be an array of tables")
+
+    ranges = []
+    for index, entry in enumerate(value):
+        setting = f"[Machine].savestate_extra_ranges[{index}]"
+        if not isinstance(entry, dict):
+            raise TypeError(f"{setting} must be an inline table")
+        if "start" not in entry or "size" not in entry:
+            raise ValueError(f"{setting} requires start and size")
+
+        start = _range_integer(entry["start"], f"{setting}.start")
+        size = _range_integer(entry["size"], f"{setting}.size", positive=True)
+        if start + size - 1 > 0xFFFFFFFFFFFFFFFF:
+            raise ValueError(f"{setting} exceeds the address space")
+        ranges.append((start, size))
+
+    return ranges
+
+
 def _memory_file_for(machine_name, memory_name, memory_info):
     memory_file = memory_info["memory_file"]
     memory_dir = os.environ.get("FASTDYN_QEMU_MEMORY_DIR")
@@ -45,6 +94,33 @@ def _memory_file_for(machine_name, memory_name, memory_info):
     memory_id = str(memory_info.get("id", memory_name))
     filename = f"{machine_name}_{memory_name}_{memory_id}.bin"
     return str(Path(memory_dir).expanduser() / filename)
+
+
+def _resolve_existing_config_path(config_path, value):
+    if value in (None, "", False):
+        return False
+
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return str(path)
+
+    config_path = Path(config_path).expanduser().resolve()
+    bases = [
+        config_path.parent,
+        Path.cwd(),
+    ]
+
+    try:
+        bases.append(fmu_build.find_repo_root(config_path))
+    except Exception:
+        pass
+
+    for base in bases:
+        candidate = (base / path).resolve()
+        if candidate.exists():
+            return str(candidate)
+
+    return str((bases[-1] / path).resolve())
 
 
 def _format_icount_option(value):
@@ -153,6 +229,10 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
         "FASTDYN_QMP_SOCKET",
         toml_parser.machine_info.get("qmp_socket", "/tmp/qmp.sock"),
     )
+    q.exit_timeout_ms    = _positive_int(
+        toml_parser.machine_info.get("exit_timeout_ms", 5000),
+        "[Machine].exit_timeout_ms",
+    )
     q.gdb_port           = _env_int(
         "FASTDYN_GDB_PORT",
         toml_parser.machine_info.get("gdb_port", 1234),
@@ -164,20 +244,27 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
         "FASTDYN_COVERAGE",
         toml_parser.machine_info.get("coverage", False),
     )
+    q.fuzzing            = _env_bool(
+        "FASTDYN_FUZZING",
+        toml_parser.machine_info.get("fuzzing", False),
+    )
+    fuzzing_schema = toml_parser.machine_info.get("fuzzing_schema")
+    if fuzzing_schema is not None and not isinstance(fuzzing_schema, str):
+        raise TypeError("[Machine].fuzzing_schema must be a path string")
+    q.fuzzing_schema = _resolve_existing_config_path(toml_config, fuzzing_schema)
+    q.edge_coverage      = _env_bool(
+        "FASTDYN_EDGE_COVERAGE",
+        toml_parser.machine_info.get("edge_coverage", False),
+    )
     q.finline            = toml_parser.machine_info.get("finline", None)
     q.print_command       = toml_parser.machine_info.get("print_command", False)
     q.reset_memory_files  = toml_parser.machine_info.get("reset_memory_files", False)
+    q.savestate_extra_ranges = _savestate_extra_ranges(
+        toml_parser.machine_info.get("savestate_extra_ranges")
+    )
 
     machine0.ignore_functions = toml_parser.machine_info.get("ignore_functions", [])
     machine0.milestones = toml_parser.machine_info.get("milestones", [])
-    q.agentic_fuzz         = toml_parser.machine_info.get("agentic_fuzz", False)
-    q.agentic_fuzz_python  = toml_parser.machine_info.get("agentic_fuzz_python", None)
-    q.agentic_fuzz_script  = toml_parser.machine_info.get("agentic_fuzz_script", None)
-    q.agentic_fuzz_in_dir  = toml_parser.machine_info.get("agentic_fuzz_in_dir", None)
-    q.agentic_fuzz_out_dir = toml_parser.machine_info.get("agentic_fuzz_out_dir", None)
-    q.agentic_fuzz_model   = toml_parser.machine_info.get("agentic_fuzz_model", None)
-    q.agentic_fuzz_taint   = toml_parser.machine_info.get("agentic_fuzz_taint", True)
-
     #add cmsis svd if Platform name provided by the user
     if toml_parser.machine_info.get("platform") is not None:
         machine0.add_cmsis_svd(cmsis_svd=svd_path)
@@ -198,7 +285,10 @@ def parser(out_dir, machine_name, toml_config, svd_path, fmu_name=None, load_fmu
                 twintrace = curr_cpu.get("twintrace", None),
                 hardware_trace = curr_cpu.get("hardware_trace", None),
                 introspect = curr_cpu.get("introspect", False),
-                exstng_config_path = curr_cpu.get("existing_config_path", False),
+                exstng_config_path = _resolve_existing_config_path(
+                    toml_config,
+                    curr_cpu.get("existing_config_path", False),
+                ),
                 )
 
         #additional params if set by the user

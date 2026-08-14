@@ -12,8 +12,6 @@ from ..utils import helper, twintrace
 from ..binary import binary_wrange
 import logging
 
-FASTDYN_DEFAULT_WORKDIR = "fastdyn_work"
-
 from .. import fastdyn_log as fastdyn_log_conf
 from .. import profiling, timing
 log = logging.getLogger(__name__)
@@ -28,6 +26,28 @@ def _dedup_preserve_order(items):
             seen.add(x)
             out.append(x)
     return out
+
+
+def _read_lines_if_exists(path):
+    if not path or not os.path.isfile(path):
+        return []
+    with open(path, "r") as f:
+        return f.readlines()
+
+
+def _read_existing_config(path):
+    if not path:
+        return [], []
+
+    if os.path.isdir(path):
+        virtuals_path = os.path.join(path, "virtuals.txt")
+        modifiers_path = os.path.join(path, "modifiers.txt")
+        return _read_lines_if_exists(virtuals_path), _read_lines_if_exists(modifiers_path)
+
+    if os.path.isfile(path):
+        return [], _read_lines_if_exists(path)
+
+    raise FileNotFoundError(f"existing_config_path not found: {path}")
 
 
 def _bool01(v: bool) -> str:
@@ -121,34 +141,17 @@ def _abs_path(path, base=None):
     return os.path.abspath(path)
 
 
-def _resolve_path(path, bases):
-    if path is None:
+def _write_savestate_extra_ranges(out_path, ranges):
+    """Serialize validated TOML ranges for the fuzzer plugin at startup."""
+    if not ranges:
         return None
 
-    path = os.path.expanduser(str(path))
-    if os.path.isabs(path):
-        return os.path.normpath(path)
+    path = os.path.abspath(os.path.join(out_path, "savestate-extra-ranges"))
+    with open(path, "w", encoding="utf-8") as f:
+        for start, size in ranges:
+            f.write(f"0x{start:X}\t0x{size:X}\n")
 
-    for base in bases:
-        if base is None:
-            continue
-        candidate = os.path.abspath(os.path.join(base, path))
-        if os.path.exists(candidate):
-            return candidate
-
-    first_base = next((base for base in bases if base is not None), None)
-    return _abs_path(path, first_base)
-
-
-def _fastdyn_source_root():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-
-
-def _agentic_fuzz_cwd_from_script(script_path):
-    script_dir = os.path.dirname(script_path)
-    if os.path.basename(script_dir) == "src":
-        return os.path.dirname(script_dir)
-    return script_dir
+    return path
 
 
 def _extract_monitor_port(qemu_cmd):
@@ -167,6 +170,7 @@ def _extract_monitor_port(qemu_cmd):
         return int(port_str)
     except Exception:
         return None
+
 
 def _extract_plugin_path(qemu_cmd):
     """
@@ -346,12 +350,7 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     # This is useful for a user that was using fastdyn for one project and
     # wants a more readable TOML file for the next project.
     if cpu0.exstng_config_path:
-        existing_config_path = os.path.join(cpu0.exstng_config_path, "virtuals.txt")
-        with open(existing_config_path, "r") as f:
-            existing_virtuals = f.readlines()
-        existing_config_path = os.path.join(cpu0.exstng_config_path, "modifiers.txt")
-        with open(existing_config_path, "r") as f:
-            existing_modifiers = f.readlines()
+        existing_virtuals, existing_modifiers = _read_existing_config(cpu0.exstng_config_path)
         all_virtuals.extend(existing_virtuals)
         all_modifiers.extend(existing_modifiers)
 
@@ -471,6 +470,10 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     if (opts.coverage):
         binary_wrange.run(f"{out_path}/bin-writable-ranges", cpu0.binary)
 
+    savestate_extra_ranges_path = _write_savestate_extra_ranges(
+        out_path, getattr(opts, "savestate_extra_ranges", [])
+    )
+
     # ------------------------ Plugin ------------------------
     plugin_lib = cpu0.plugin_library
     for c in cpus[1:]:
@@ -482,55 +485,6 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
             "Build it from the FastDyn repository root after patched QEMU is ready, for example:\n"
             "  make qemu_path=../qemu PHY=true FLIGHT_CONTROLLERS=true FMU=true"
         )
-
-    # ------------------------ Agentic Fuzzer ----------------
-    fastdyn_root = _fastdyn_source_root()
-    work_dir_abs = _abs_path(out_path or FASTDYN_DEFAULT_WORKDIR)
-    binary_abs = _resolve_path(cpu0.binary, [os.getcwd(), fastdyn_root])
-
-    agentic_fuzz_plugin = []
-    if opts.agentic_fuzz:
-        if not opts.coverage:
-            raise ValueError("agentic_fuzz=true requires coverage=true")
-
-        default_agentic_fuzz_root = os.path.join(
-            fastdyn_root,
-            "virtuals",
-            "fuzzer",
-            "agentic",
-        )
-        default_agentic_fuzz_script = os.path.join(default_agentic_fuzz_root, "monitor.py")
-        agentic_fuzz_script = _resolve_path(
-            opts.agentic_fuzz_script or default_agentic_fuzz_script,
-            [os.getcwd(), fastdyn_root, default_agentic_fuzz_root],
-        )
-        agentic_fuzz_cwd = work_dir_abs
-        agentic_fuzz_in_dir = _resolve_path(
-            opts.agentic_fuzz_in_dir or "corpus",
-            [work_dir_abs],
-        )
-        agentic_fuzz_out_dir = _resolve_path(
-            opts.agentic_fuzz_out_dir or "corpus-agentic",
-            [work_dir_abs],
-        )
-
-        agentic_fuzz_plugin = [
-            "agentic_fuzz=1",
-            f"agentic_fuzz_python={opts.agentic_fuzz_python or 'python3'}",
-            f"agentic_fuzz_script={agentic_fuzz_script}",
-            f"agentic_fuzz_cwd={agentic_fuzz_cwd}",
-            f"agentic_fuzz_binary={binary_abs}",
-            f"agentic_fuzz_work_dir={work_dir_abs}",
-            f"agentic_fuzz_in_dir={agentic_fuzz_in_dir}",
-            f"agentic_fuzz_out_dir={agentic_fuzz_out_dir}",
-            f"agentic_fuzz_coverage={os.path.join(work_dir_abs, 'bbl.txt')}",
-            f"agentic_fuzz_regions={os.path.join(work_dir_abs, 'bin-writable-ranges')}",
-            f"agentic_fuzz_snapshot={os.path.join(work_dir_abs, 'snapshot.bin')}",
-            f"agentic_fuzz_log={os.path.join(work_dir_abs, 'agentic_fuzz-monitor.log')}",
-            f"agentic_fuzz_taint={_bool01(opts.agentic_fuzz_taint)}",
-        ]
-        if opts.agentic_fuzz_model:
-            agentic_fuzz_plugin.append(f"agentic_fuzz_model={opts.agentic_fuzz_model}")
 
     # ------------------------ Introspection ------------------------
     introspection = cpu0.introspect
@@ -551,9 +505,20 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
         f"virtual={virtuals_path}",
         f"modifier={modifiers_path}",
         f"coverage={_bool01(opts.coverage)}",
+        f"fuzzing={_bool01(getattr(opts, 'fuzzing', False))}",
+        f"edge_coverage={_bool01(getattr(opts, 'edge_coverage', False))}",
         f"twintrace={twintrace_opt}",
         f"twintrace_binary={replay_binary}",
     ]
+
+    fuzzing_schema = getattr(opts, "fuzzing_schema", None)
+    if fuzzing_schema:
+        plugin_kv.append(f"fuzzing_schema={fuzzing_schema}")
+
+    if savestate_extra_ranges_path:
+        plugin_kv.append(
+            f"savestate_extra_ranges={savestate_extra_ranges_path}"
+        )
 
     if getattr(machine, "fmu_path", None):
         plugin_kv.append(f"fmu={machine.fmu_path}")
@@ -594,14 +559,13 @@ def build_qemu_cmd(machine, dev_config_path, out_path):
     if (introspection):
         plugin_kv.extend(introspect_plugin)
 
-    plugin_kv.extend(agentic_fuzz_plugin)
-
     if opts.finline is not None:
         plugin_kv.append(f"finline={opts.finline}")
     cmd.extend(["--plugin", ",".join(plugin_kv)])
 
-    #TODO: Fix it
-    cmd.extend(["-nographic"])
+    # Avoid -nographic: it binds QEMU's serial/monitor chardevs to stdio,
+    # which QEMU closes before plugin atexit callbacks run.
+    cmd.extend(["-display", "none"])
 
     # ------------------------ GDB command ------------------------
     gdb_cmd, launch_gdb, binary = get_gdb_cmd(machine, out_path)
@@ -648,10 +612,23 @@ def setup_qemu(machine, work_dir=None):
     return qemu_cmd, gdb_cmd, launch_gdb, binary
 
 
-def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary, python_endpoints=None):
+def start_execution(
+    qemu_cmd,
+    launch_gdb,
+    gdb_cmd,
+    binary,
+    python_endpoints=None,
+    exit_timeout_ms=5000,
+):
     """
     Starts QEMU. If enabled, optionally launches a GDB terminal.
     """
+    if (
+        isinstance(exit_timeout_ms, bool)
+        or not isinstance(exit_timeout_ms, int)
+        or exit_timeout_ms <= 0
+    ):
+        raise ValueError("exit_timeout_ms must be a positive integer")
 
     # best-effort cleanup based on the monitor port in this command
     port = _extract_monitor_port(qemu_cmd)
@@ -692,11 +669,16 @@ def start_execution(qemu_cmd, launch_gdb, gdb_cmd, binary, python_endpoints=None
             log.info(f"QEMU exited with code {ret}")
     except KeyboardInterrupt:
         try:
-            qemu_proc.terminate()
-        except Exception:
-            pass
-        if port is not None:
-            kill_qemu_process(port)
+            qemu_proc.wait(timeout=exit_timeout_ms / 1000.0)
+        except subprocess.TimeoutExpired:
+            log.warning(
+                "QEMU did not exit within %d ms after Ctrl-C; forcing termination.",
+                exit_timeout_ms,
+            )
+            if port is not None:
+                kill_qemu_process(port)
+            else:
+                qemu_proc.kill()
     finally:
         for ep_proc in endpoint_procs:
             try:

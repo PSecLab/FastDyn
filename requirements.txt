@@ -2,7 +2,6 @@ capstone==5.0.7
 click>=8.1.7,<8.2.0
 cmsis-svd==0.6
 colorama==0.4.6
-crewai==1.14.5
 dotenv==0.9.9
 jpype1==1.5.2
 lxml==6.0.1
@@ -24,4 +23,3 @@ python-dotenv>=1.0.0
 scipy==1.15.3
 six==1.17.0
 tomli>=2.0.2,<2.1.0
-triton-library==1.0.0rc4

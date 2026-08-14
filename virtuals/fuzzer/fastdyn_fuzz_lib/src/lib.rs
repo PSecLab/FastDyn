@@ -1,11 +1,10 @@
 #[cfg(windows)]
 use std::ptr::write_volatile;
 use std::{
-    collections::HashSet,
     fs::{self, OpenOptions},
     io::Write,
     marker::PhantomData,
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr,
     sync::{
         atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering},
@@ -19,8 +18,10 @@ use bincode;
 use core::num::NonZeroUsize;
 #[cfg(feature = "tui")]
 use libafl::monitors::tui::TuiMonitor;
+#[cfg(feature = "tui")]
+use libafl::monitors::OnDiskJsonMonitor;
 #[cfg(not(feature = "tui"))]
-use libafl::monitors::SimpleMonitor;
+use libafl::monitors::{OnDiskJsonMonitor, SimpleMonitor};
 use libafl::{
     common::HasNamedMetadata,
     corpus::{Corpus, InMemoryCorpus, OnDiskCorpus},
@@ -28,7 +29,7 @@ use libafl::{
     executors::{Executor, ExitKind, WithObservers},
     feedback_and_fast, feedback_or_fast,
     feedbacks::{CrashFeedback, MapFeedbackMetadata, MaxMapFeedback, TimeoutFeedback},
-    fuzzer::{Evaluator, ExecuteInputResult, Fuzzer, StdFuzzer},
+    fuzzer::Fuzzer,
     generators::RandPrintablesGenerator,
     inputs::{BytesInput, HasTargetBytes},
     mutators::{havoc_mutations::havoc_mutations, scheduled::HavocScheduledMutator},
@@ -48,11 +49,11 @@ static CURRENT_INPUT_LEN: AtomicUsize = AtomicUsize::new(0);
 static NEXT_INPUT_EPOCH: AtomicU64 = AtomicU64::new(1);
 static PUBLISHED_INPUT_EPOCH: AtomicU64 = AtomicU64::new(0);
 static COMPLETED_INPUT_EPOCH: AtomicU64 = AtomicU64::new(0);
+static BACKEND_READY_FOR_INPUT: AtomicBool = AtomicBool::new(false);
 static INTERESTING_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 lazy_static::lazy_static! {
     static ref FUZZ_THREAD: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
-    static ref AGENTIC_INPUTS_SEEN: Mutex<HashSet<PathBuf>> = Mutex::new(HashSet::new());
 }
 
 //This will hold the coverage from the run.
@@ -61,7 +62,6 @@ const MAP_SIZE: usize = 65536; // same as AFL, make sure the definition of this 
 pub static mut CVG: [u8; MAP_SIZE] = [0; MAP_SIZE];
 
 static STATE_PATH: &str = "fastdyn_work/state.bin";
-static AGENTIC_CORPUS_PATH: &str = "fastdyn_work/corpus-agentic";
 
 const ASSERT_NONE: u32 = 0;
 const ASSERT_RECOVERABLE: u32 = 1;
@@ -79,7 +79,7 @@ extern "C" {
     fn fuzz_dump_bbl();
     fn fuzz_trace_commit_run();
     fn fuzz_trace_disable();
-    fn fuzz_trace_enable();
+    fn fuzz_trace_enable(max_entries: i32);
     fn fuzz_trace_reset();
 
     static mut g_trace_completed: FastDynTraceRun;
@@ -134,83 +134,30 @@ fn wait_until_complete(epoch: u64) -> Result<(), ()> {
     Ok(())
 }
 
-fn take_assert_status() -> u32 {
-    ASSERT_STATUS.swap(ASSERT_NONE, Ordering::AcqRel)
-}
+fn wait_until_backend_ready() -> Result<(), ()> {
+    const SPIN_ITERS: usize = 10_000;
+    let timeout = Duration::from_secs(60);
+    let start_time = Instant::now();
+    let mut spins = 0;
 
-fn add_agentic_inputs_to_fuzzer<CS, F, IC, IF, OF, E, EM, S>(
-    fuzzer: &mut StdFuzzer<CS, F, IC, IF, OF>,
-    executor: &mut E,
-    state: &mut S,
-    mgr: &mut EM,
-) -> Result<(), libafl::Error>
-where
-    StdFuzzer<CS, F, IC, IF, OF>: Evaluator<E, EM, BytesInput, S>,
-{
-    let corpus_path = PathBuf::from(AGENTIC_CORPUS_PATH);
-    if let Err(err) = fs::create_dir_all(&corpus_path) {
-        eprintln!(
-            "Couldn't create agentic corpus directory {}: {:?}",
-            corpus_path.display(),
-            err
-        );
-        return Ok(());
-    }
-
-    let Ok(entries) = fs::read_dir(&corpus_path) else {
-        return Ok(());
-    };
-
-    let mut pending = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "raw"))
-        .collect::<Vec<_>>();
-    pending.sort();
-
-    for path in pending {
-        let seen_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if AGENTIC_INPUTS_SEEN.lock().unwrap().contains(&seen_path) {
-            continue;
+    while !BACKEND_READY_FOR_INPUT.load(Ordering::Acquire) {
+        if start_time.elapsed() > timeout {
+            return Err(());
         }
 
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                eprintln!(
-                    "Couldn't read agentic corpus input {}: {:?}",
-                    path.display(),
-                    err
-                );
-                continue;
-            }
-        };
-
-        let input = BytesInput::new(bytes);
-        let (result, _) = fuzzer.evaluate_input(state, executor, mgr, &input)?;
-        let is_interesting = matches!(
-            result,
-            ExecuteInputResult::Corpus | ExecuteInputResult::Solution
-        );
-
-        let mut interesting_path = seen_path.as_os_str().to_os_string();
-        interesting_path.push(".interesting");
-        if let Err(err) = fs::write(
-            PathBuf::from(interesting_path),
-            if is_interesting { b"1" } else { b"0" },
-        ) {
-            eprintln!(
-                "Couldn't write agentic interesting marker for {}: {:?}",
-                path.display(),
-                err
-            );
+        if spins < SPIN_ITERS {
+            std::hint::spin_loop();
+            spins += 1;
+        } else {
+            std::thread::yield_now();
         }
-
-        AGENTIC_INPUTS_SEEN.lock().unwrap().insert(seen_path);
-        println!("Evaluated agentic corpus input {}", path.display());
     }
 
     Ok(())
+}
+
+fn take_assert_status() -> u32 {
+    ASSERT_STATUS.swap(ASSERT_NONE, Ordering::AcqRel)
 }
 
 // ------------------ Tracing and Interesting tracking for LLM augmentation ----------------------
@@ -247,7 +194,7 @@ where
 
     unsafe {
         fuzz_trace_reset();
-        fuzz_trace_enable();
+        fuzz_trace_enable(-1);
     }
 
     publish_input(epoch, buf);
@@ -267,25 +214,22 @@ where
     take_assert_status()
 }
 
-pub fn trace_interesting_write_completed_trace<I>(input: &I, status: u32) -> std::io::Result<()>
-where
-    I: HasTargetBytes,
-{
-    fs::create_dir_all("fastdyn_work/corpus")?;
-
-    let trace_id = INTERESTING_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
-    let raw_path = format!("fastdyn_work/corpus/interesting{}.raw", trace_id);
-    let trace_path = format!("fastdyn_work/corpus/interesting{}.trace", trace_id);
-
-    std::fs::write(raw_path, input.target_bytes().as_slice())?;
-
+fn write_completed_trace(
+    trace_path: &Path,
+    capture_name: &str,
+    source_path: Option<&Path>,
+    status: u32,
+) -> std::io::Result<()> {
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(trace_path)?;
 
-    writeln!(file, "# interesting input trace capture")?;
+    writeln!(file, "# {capture_name}")?;
+    if let Some(source_path) = source_path {
+        writeln!(file, "# source={}", source_path.display())?;
+    }
     writeln!(file, "# assert_status={}", status)?;
 
     unsafe {
@@ -304,6 +248,40 @@ where
     }
 
     Ok(())
+}
+
+pub fn trace_interesting_write_completed_trace<I>(input: &I, status: u32) -> std::io::Result<()>
+where
+    I: HasTargetBytes,
+{
+    fs::create_dir_all("fastdyn_work/corpus")?;
+
+    let trace_id = INTERESTING_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
+    let raw_path = format!("fastdyn_work/corpus/interesting{}.raw", trace_id);
+    let trace_path = format!("fastdyn_work/corpus/interesting{}.trace", trace_id);
+
+    std::fs::write(raw_path, input.target_bytes().as_slice())?;
+    write_completed_trace(
+        Path::new(&trace_path),
+        "interesting input trace capture",
+        None,
+        status,
+    )
+}
+
+fn trace_corpus_write_completed_trace(source_path: &Path, status: u32) -> std::io::Result<PathBuf> {
+    let mut trace_path = source_path.as_os_str().to_os_string();
+    trace_path.push(".trace");
+    let trace_path = PathBuf::from(trace_path);
+
+    write_completed_trace(
+        &trace_path,
+        "initial corpus input trace capture",
+        Some(source_path),
+        status,
+    )?;
+
+    Ok(trace_path)
 }
 
 fn next_interesting_trace_index(corpus_path: &std::path::Path) -> usize {
@@ -359,6 +337,7 @@ pub extern "C" fn fuzz_libafl_wait_next(
     data: *mut *const u8,
     len: *mut usize,
 ) -> u64 {
+    BACKEND_READY_FOR_INPUT.store(true, Ordering::Release);
     spin_wait_until(|| PUBLISHED_INPUT_EPOCH.load(Ordering::Acquire) > after_epoch);
 
     let epoch = PUBLISHED_INPUT_EPOCH.load(Ordering::Acquire);
@@ -396,13 +375,53 @@ pub extern "C" fn fuzz_libafl_report_assert(fatal: bool) {
 struct FastDynExecutor<S> {
     phantom: PhantomData<S>,
     crashed: bool,
+    pending_initial_traces: Vec<(PathBuf, BytesInput)>,
 }
 
 impl<S> FastDynExecutor<S> {
-    pub fn new(_state: &S) -> Self {
+    pub fn new(_state: &S, pending_initial_traces: Vec<(PathBuf, BytesInput)>) -> Self {
         Self {
             phantom: PhantomData,
             crashed: false,
+            pending_initial_traces,
+        }
+    }
+
+    fn trace_initial_corpus_inputs(&mut self) {
+        if self.pending_initial_traces.is_empty() {
+            return;
+        }
+
+        if wait_until_backend_ready().is_err() {
+            eprintln!(
+                "Timed out waiting for the backend before tracing the initial corpus. Exiting."
+            );
+            std::process::exit(1);
+        }
+
+        for (source_path, input) in std::mem::take(&mut self.pending_initial_traces) {
+            let status = trace_input_once(&input);
+            let trace_path = match trace_corpus_write_completed_trace(&source_path, status) {
+                Ok(trace_path) => trace_path,
+                Err(err) => {
+                    eprintln!(
+                        "Failed to write initial corpus trace for {}: {:?}",
+                        source_path.display(),
+                        err
+                    );
+                    source_path.clone()
+                }
+            };
+
+            if matches!(status, ASSERT_RECOVERABLE | ASSERT_FATAL | ASSERT_TIMEOUT) {
+                eprintln!(
+                    "Initial corpus trace for {} ended with status {}; trace: {}. Exiting.",
+                    source_path.display(),
+                    status,
+                    trace_path.display()
+                );
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -426,6 +445,8 @@ where
 
             panic!("Fuzzer cannot continue, reached a hard fault or timeout");
         }
+
+        self.trace_initial_corpus_inputs();
 
         // We need to keep track of the exec count.
         *state.executions_mut() += 1;
@@ -521,11 +542,19 @@ pub fn fuzzer_thread_main() {
     let mut corpus = InMemoryCorpus::new();
     let crash_corpus = OnDiskCorpus::<BytesInput>::new(crashes_path.clone()).unwrap();
 
-    for entry in std::fs::read_dir(&corpus_path).unwrap() {
-        let path = entry.unwrap().path();
+    let mut initial_corpus_paths = std::fs::read_dir(&corpus_path)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    initial_corpus_paths.sort();
+
+    let mut pending_initial_traces = Vec::new();
+    for path in initial_corpus_paths {
         if path.is_file() && path.extension().map_or(true, |ext| ext != "trace") {
             let bytes = std::fs::read(&path).unwrap();
-            corpus.add(BytesInput::new(bytes).into()).unwrap();
+            corpus.add(BytesInput::new(bytes.clone()).into()).unwrap();
+            pending_initial_traces.push((path, BytesInput::new(bytes)));
         }
     }
 
@@ -543,7 +572,9 @@ pub fn fuzzer_thread_main() {
         .unwrap()
     };
 
-    // The Monitor trait define how the fuzzer stats are displayed to the user
+    // The Monitor trait defines how the fuzzer stats are displayed to the user.
+    // Keep the human-readable monitor, and also expose structured snapshots for
+    // external tooling without requiring it to parse stdout.
     #[cfg(not(feature = "tui"))]
     let mon = SimpleMonitor::new(|s| println!("{s}"));
     #[cfg(feature = "tui")]
@@ -552,9 +583,21 @@ pub fn fuzzer_thread_main() {
         .enhanced_graphics(false)
         .build();
 
+    let mut last_json_stats_write = None;
+    let json_mon = OnDiskJsonMonitor::new("fastdyn_work/stats.jsonl", move |_| {
+        let now = Instant::now();
+        match last_json_stats_write {
+            Some(last_write) if now.duration_since(last_write) < Duration::from_secs(10) => false,
+            _ => {
+                last_json_stats_write = Some(now);
+                true
+            }
+        }
+    });
+
     // The event manager handle the various events generated during the fuzzing loop
     // such as the notification of the addition of a new item to the corpus
-    let mut mgr = SimpleEventManager::new(mon);
+    let mut mgr = SimpleEventManager::new((mon, json_mon));
 
     // A queue policy to get testcasess from the corpus
     let scheduler = QueueScheduler::new();
@@ -573,7 +616,7 @@ pub fn fuzzer_thread_main() {
         .build();
 
     // Create the executor for an in-process function with just one observer
-    let executor = FastDynExecutor::new(&state);
+    let executor = FastDynExecutor::new(&state, pending_initial_traces);
     let mut executor = WithObservers::new(executor, tuple_list!(observer));
 
     // If corpus is empty, generate random inputs
@@ -612,19 +655,13 @@ pub fn fuzzer_thread_main() {
             eprintln!("Fuzzing error: {:?}", err);
             break;
         }
-
-        if let Err(err) =
-            add_agentic_inputs_to_fuzzer(&mut fuzzer, &mut executor, &mut state, &mut mgr)
-        {
-            eprintln!("Agentic corpus import error: {:?}", err);
-            break;
-        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn fuzz_libAFL_init() -> u32 {
     STOP_FLAG.store(false, Ordering::SeqCst);
+    BACKEND_READY_FOR_INPUT.store(false, Ordering::Release);
 
     let handle = std::thread::spawn(move || {
         fuzzer_thread_main();

@@ -14,7 +14,8 @@ except ImportError:
 fastdyn_log = fastdyn_log_conf.getFastdynLogger()
 
 # -------------------------------------------------------------------------------
-# This script takes a binary, and outputs a list of its writable ranges of memory.
+# This script takes a binary and outputs both all writable ranges and the
+# user-selected subset used by the fuzzing snapshot.
 # -------------------------------------------------------------------------------
 
 
@@ -180,27 +181,52 @@ def prompt_for_segments(segments):
             fastdyn_log.info(f"[binary_wrange.py] Invalid selection: {e}")
 
 
-def write_selected_segments(out_file, segments, selected_indexes):
+def write_segments(out_file, segments, indexes):
     with open(out_file, "w") as f:
-        for index in selected_indexes:
+        for index in indexes:
             segment = segments[index]
             f.write(f"0x{segment.address:08X}\t0x{segment.memory_size:x}\n")
 
 
-# Write a tab delimited list of address + size values for selected writable ranges.
-def run(out_file, bin_path):
-    if os.path.exists(out_file):
+# Write tab-delimited address + size files for all writable ranges and the
+# selected snapshot subset. The selected file retains its historical name.
+def run(selected_out_file, bin_path, all_out_file=None):
+    if all_out_file is None:
+        all_out_file = os.path.join(
+            os.path.dirname(selected_out_file), "bin-all-writable-ranges"
+        )
+
+    selected_exists = os.path.exists(selected_out_file)
+    all_exists = os.path.exists(all_out_file)
+    if selected_exists and all_exists:
         fastdyn_log.info(
-            f"[binary_wrange.py] Skipping existing output file: {out_file}"
+            "[binary_wrange.py] Skipping existing writable-range files: "
+            f"{selected_out_file}, {all_out_file}"
         )
         return
 
     try:
         segments = collect_writable_segments(bin_path)
-        selected_indexes = prompt_for_segments(segments)
-        write_selected_segments(out_file, segments, selected_indexes)
+
+        if not all_exists:
+            write_segments(all_out_file, segments, range(len(segments)))
+        else:
+            fastdyn_log.info(
+                f"[binary_wrange.py] Skipping existing output file: {all_out_file}"
+            )
+
+        if not selected_exists:
+            selected_indexes = prompt_for_segments(segments)
+            write_segments(selected_out_file, segments, selected_indexes)
+        else:
+            fastdyn_log.info(
+                f"[binary_wrange.py] Skipping existing output file: {selected_out_file}"
+            )
     except Exception as e:
-        fastdyn_log.info(f"[binary_wrange.py] Couldn't write {out_file}: {e}")
+        fastdyn_log.info(
+            "[binary_wrange.py] Couldn't write writable-range files "
+            f"({selected_out_file}, {all_out_file}): {e}"
+        )
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ int isdigit(int c);
 
 #include <virtuals.h>  // For lookup_callback function
 #include <virtuals/virt_fuzz.h> // Coverage handling whether built with fuzzer or not
+#include <cov_trace.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>

@@ -1,6 +1,9 @@
 #ifndef COV_TRACE_H
 #define COV_TRACE_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include <config.h>
 
 #define FASTDYN_TRACE_INITIAL_CAP (65536)   /* Initial PCs per run. */
@@ -25,9 +28,16 @@ void fuzz_trace_record_pc(uint32_t pc);
  */
 void fuzz_trace_commit_run(void);
 
-/* Enable and disable recording into g_trace_current (idempotent). */
-void fuzz_trace_enable(void);
+/*
+ * Enable recording into g_trace_current (idempotent).
+ * max_entries of -1 means unlimited; non-negative values cap the current
+ * trace at that many recorded PCs.
+ */
+void fuzz_trace_enable(int max_entries);
 void fuzz_trace_disable(void);
+
+/* Write the current in-progress trace as one hexadecimal PC per line. */
+bool fuzz_trace_dump_current(const char *path);
 
 /* Clear only the current in-progress trace window. */
 void fuzz_trace_begin_window(void);

@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -17,6 +18,7 @@
 
 bool                g_trace_enabled    = false;
 static bool         g_trace_has_prev = false;
+static int          g_trace_max_entries = -1;
 
 fastdyn_trace_run_t g_trace_completed   = { .count = 0, .capacity = 0, .entries = NULL };
 fastdyn_trace_run_t g_trace_current     = { .count = 0, .capacity = 0, .entries = NULL };
@@ -42,12 +44,41 @@ static void fuzz_trace_reserve(fastdyn_trace_run_t *run, uint32_t needed) {
     run->capacity = capacity;
 }
 
-void fuzz_trace_enable(void) {
+void fuzz_trace_enable(int max_entries) {
     g_trace_enabled = true;
+    g_trace_max_entries = max_entries;
 }
 
 void fuzz_trace_disable(void) {
     g_trace_enabled = false;
+}
+
+bool fuzz_trace_dump_current(const char *path) {
+    if (path == NULL || path[0] == '\0') {
+        return false;
+    }
+
+    FILE *fp = fopen(path, "w");
+    if (fp == NULL) {
+        perror("[trace] Failed to open trace dump");
+        return false;
+    }
+
+    for (uint32_t i = 0; i < g_trace_current.count; i++) {
+        if (fprintf(fp, "0x%08x\n", g_trace_current.entries[i]) < 0) {
+            perror("[trace] Failed to write trace dump");
+            fclose(fp);
+            return false;
+        }
+    }
+
+    if (fclose(fp) != 0) {
+        perror("[trace] Failed to close trace dump");
+        return false;
+    }
+
+    printf("[trace] Wrote %u PCs to %s\n", g_trace_current.count, path);
+    return true;
 }
 
 void fuzz_trace_begin_window(void) {
@@ -62,6 +93,15 @@ void fuzz_trace_reset(void) {
 }
 
 void fuzz_trace_record_pc(uint32_t pc) {
+    if (!g_trace_enabled) {
+        return;
+    }
+
+    if (g_trace_max_entries >= 0 &&
+        g_trace_current.count >= (uint32_t)g_trace_max_entries) {
+        return;
+    }
+
     fuzz_trace_reserve(&g_trace_current, g_trace_current.count + 1);
     g_trace_current.entries[g_trace_current.count++] = pc;
 }

@@ -57,8 +57,20 @@ timer_irq_period_ns = 1000000
 semihosting = true
 semihosting_config = "enable=on,target=native"
 coverage = false
+fuzzing = false
+fuzzing_schema = "path/to/fuzzing-schema.json"
+edge_coverage = false
 print_command = false
 ```
+
+When `edge_coverage = true`, FastDyn also writes cumulative edge coverage to
+`edges.txt` alongside `bbl.txt` in the active work directory.
+
+Set `fuzzing = true` only for a fuzzing campaign. It starts the input backend
+compiled into the plugin; `coverage = true, fuzzing = false` collects coverage
+without publishing or waiting for fuzz inputs.
+
+`fuzzing_schema` is the JSON field schema used by the generic fuzzer.
 
 For high-fidelity ArduPilot/FMU runs, keep `timer_irq_period_ns = 1000000`.
 That gives the firmware a 1 ms board tick. With `icount.sleep = false`, QEMU is

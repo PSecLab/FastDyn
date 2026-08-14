@@ -33,4 +33,7 @@ void fuzz_set_register(uint32_t value, int reg);
 int fuzz_write_memory(unsigned long long addr, uint8_t *mem_buf, int len);
 int fuzz_read_memory(unsigned long long addr, uint8_t *mem_buf, int len);
 
+// Restores the fuzzing snapshot policy (base registers and its selected ranges).
+bool fuzz_restore_snapshot(void);
+
 #endif

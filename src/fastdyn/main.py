@@ -153,7 +153,6 @@ def run(config, map_file, work_dir, svd, persist_work_dir, fmu, no_build_fmu, no
                 _auto_build_fmu(config, fmu, no_build_fmu)
 
             with runtime_config.launch_from_config(config, work_dir, skip=no_run_processes) as process_manager:
-                #It will parse the config and create a handle using fastdyn.py apis that has all the info about the machines and cpus listed in the toml
                 with timing.phase("fastdyn.parse_config"):
                     fastdyn_handle = toml_parser.parser(
                         work_dir,
@@ -168,14 +167,14 @@ def run(config, map_file, work_dir, svd, persist_work_dir, fmu, no_build_fmu, no
                         lambda _handle, _exit_code: fastdyn_handle.shutdown()
                     )
 
-                #run all the machines requested by the user
                 try:
                     for idx, machine in enumerate(fastdyn_handle.machines):
                         with timing.phase(f"fastdyn.machine{idx}.run"):
-                            fastdyn_handle.run(machine_name=f"machine{idx}",
-                                               target="qemu",
-                                               out_path=work_dir
-                                               )
+                            fastdyn_handle.run(
+                                machine_name=f"machine{idx}",
+                                target="qemu",
+                                out_path=work_dir,
+                            )
                 finally:
                     if process_manager is not None:
                         process_manager.stop_terminator_watcher()
@@ -740,65 +739,6 @@ def timing_summary(timing_file, top):
         status = record.get("status", "ok")
         suffix = "" if status == "ok" else f" ({status})"
         click.echo(f"{duration:9.3f}s  {process:<16}  {phase}{suffix}")
-
-
-@cli.command(
-    'harness',
-    help='Runs the agentic harness generator for a firmware binary.'
-)
-@click.option(
-    '-b', '--binary',
-    required=True,
-    type=click.Path(resolve_path=True, exists=True),
-    help='Path to the firmware binary to analyze.',
-    metavar='PATH'
-)
-@click.option(
-    '-m', '--model',
-    type=str,
-    default=None,
-    help='Optional LLM model name to pass to the harness.',
-)
-@click.option(
-    '-o', '--work-dir',
-    default="./fastdyn_work",
-    show_default=True,
-    metavar='PATH',
-    type=click.Path(resolve_path=True, writable=True),
-    help='Path to the work directory.'
-)
-def harness(binary, model, work_dir):
-    """Run the interactive agentic harness generation workflow."""
-    fastdyn_root = Path(__file__).resolve().parents[2]
-    agentic_root = fastdyn_root / "virtuals" / "fuzzer" / "agentic"
-    harness_script = agentic_root / "harness.py"
-
-    if not harness_script.is_file():
-        raise click.ClickException(f"Agentic harness script not found: {harness_script}")
-
-    work_dir_path = Path(work_dir).resolve()
-    work_dir_path.mkdir(parents=True, exist_ok=True)
-
-    command = [
-        sys.executable,
-        str(harness_script),
-        binary,
-        "--work-dir",
-        str(work_dir_path),
-    ]
-    if model:
-        command.extend(["--model", model])
-    
-    base_url = os.environ.get("OPENAI_BASE_URL")
-    if base_url:
-        command.extend(["--base-url", base_url])
-
-    log.info("Running agentic harness: %s", " ".join(command))
-    result = subprocess.run(command, cwd=str(fastdyn_root))
-    if result.returncode != 0:
-        raise click.ClickException(
-            f"Agentic harness exited with status {result.returncode}"
-        )
 
 
 @cli.command(

@@ -58,6 +58,7 @@ class Fastdyn:
                     gdb_cmd,
                     binary,
                     python_endpoints=python_endpoints,
+                    exit_timeout_ms=machine.qemu_target_opts.exit_timeout_ms,
                 )
 
 
@@ -104,6 +105,9 @@ class QemuTargetOpts:
         self.qemu_path: str = "qemu-system-arm"
         self.finline: Optional[str] = None
         self.coverage: bool = False
+        self.fuzzing: bool = False
+        self.fuzzing_schema: Optional[str] = None
+        self.edge_coverage: bool = False
         self.enable_gdb: bool = False
         self.gdb_port: int = 1234
         self.stop_on_start: bool = False
@@ -112,6 +116,7 @@ class QemuTargetOpts:
         self.semihosting_config: str = "enable=on,target=native"
         self.monitor_port: Optional[int] = 5555
         self.qmp_socket: Optional[str] = "/tmp/qmp.sock"
+        self.exit_timeout_ms: int = 5000
         self.icount: Optional[str] = None
         self.timer_irq_period_ns: Optional[int] = None
         self.print_command: bool = False
@@ -122,13 +127,7 @@ class QemuTargetOpts:
         self.probe_ignores: Optional[str] = None
         self.probe_out_dir: Optional[str] = None
         self.print_command = False
-        self.agentic_fuzz: bool = False
-        self.agentic_fuzz_python: Optional[str] = None
-        self.agentic_fuzz_script: Optional[str] = None
-        self.agentic_fuzz_in_dir: Optional[str] = None
-        self.agentic_fuzz_out_dir: Optional[str] = None
-        self.agentic_fuzz_model: Optional[str] = None
-        self.agentic_fuzz_taint: bool = True
+        self.savestate_extra_ranges: list[tuple[int, int]] = []
 
 class Machine:
     def __init__(self, machine_name, platform_name):
