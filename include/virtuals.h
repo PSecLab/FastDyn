@@ -219,6 +219,49 @@ void start_budgeting(unsigned int cpu_index, void *udata);
  */
 void debug_log(unsigned int cpu_index, void *udata);
 
+/**
+ * @brief Capture a monotonic wall-clock timestamp with no I/O.
+ *
+ * Pairs with @ref benchmark_end. Records CLOCK_MONOTONIC into a plugin-static
+ * variable; performs no printf/write to keep the timed region free of
+ * measurement noise. Intended for microbenchmarking hot-path plugin features
+ * (modifiers, virtuals, coverage) bracketed by two sentinel PCs in the guest.
+ *
+ * Example usage in virtuals.txt:
+ *
+ * - `0x080001ba benchmark_start`
+ */
+void benchmark_start(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Print elapsed wall-clock nanoseconds since @ref benchmark_start.
+ *
+ * Grabs a second CLOCK_MONOTONIC sample, computes the delta, and prints
+ * `[BENCH][<tag>] elapsed_ns=<ns> elapsed_us=<us>` where `<tag>` is the
+ * @p udata string (empty if omitted). All I/O happens after the second
+ * sample, so it never contaminates the measured region.
+ *
+ * Example usage in virtuals.txt:
+ *
+ * - `0x080001c8 benchmark_end slice_modifier`
+ */
+void benchmark_end(unsigned int cpu_index, void *udata);
+
+/**
+ * @brief Minimal-work callback for microbenchmarking virtuals.
+ *
+ * Increments a plugin-static `volatile uint64_t` counter — one guaranteed
+ * memory store per dispatch, no elision. Intended as the "cheapest useful
+ * virtual" reference point (counterpart to a minimal modifier like
+ * `patch="r0 0"`). The counter is reset by @ref benchmark_start and not
+ * otherwise observed.
+ *
+ * Example usage in virtuals.txt:
+ *
+ * - `0x080001ac bench_tick`
+ */
+void bench_tick(unsigned int cpu_index, void *udata);
+
 // Helper functions
 unsigned char get_random_byte(void);
 uint32_t get_random_word(void);

@@ -11,6 +11,8 @@
 
 #include <qemu/qemu-plugin.h>
 #include <sys/time.h>
+#include <time.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -80,7 +82,11 @@ cb_entry_t cb_registry[VIRTUALS_MAX_COUNT] = {
     { "dyninst_lib", dyninst_lib},
     { "debug_log", debug_log},
     { "raise_periodic_irq", raise_periodic_irq},
-	{NULL, NULL} //This should always be last entry.
+    {"benchmark_start", benchmark_start},
+	{"benchmark_end", benchmark_end},
+	{"bench_tick", bench_tick},
+
+    {NULL, NULL} //This should always be last entry.
 };
 
 
@@ -309,6 +315,53 @@ void debug_log(unsigned int cpu_index, void *udata) {
     const char *msg = (const char *)udata;
 
     printf("[%u][%.6f] : %s\n", cpu_index, fractional_seconds, msg);
+}
+
+static struct timespec g_bench_start_ts;
+static bool g_bench_started = false;
+static volatile uint64_t g_bench_tick_count = 0;
+
+void benchmark_start(unsigned int cpu_index, void *udata) {
+    (void)cpu_index;
+    (void)udata;
+    /* No I/O here: printfs would land inside the measured region and pollute
+     * the sample. Just capture the monotonic timestamp. */
+    g_bench_tick_count = 0;
+    clock_gettime(CLOCK_MONOTONIC, &g_bench_start_ts);
+    g_bench_started = true;
+}
+
+void benchmark_end(unsigned int cpu_index, void *udata) {
+    (void)cpu_index;
+    struct timespec end_ts;
+    clock_gettime(CLOCK_MONOTONIC, &end_ts);
+
+    if (!g_bench_started) {
+        fprintf(stderr, "[BENCH] benchmark_end called before benchmark_start\n");
+        return;
+    }
+
+    int64_t delta_ns = (int64_t)(end_ts.tv_sec - g_bench_start_ts.tv_sec) * 1000000000LL
+                     + (int64_t)(end_ts.tv_nsec - g_bench_start_ts.tv_nsec);
+
+    const char *tag = (udata && *(const char *)udata) ? (const char *)udata : "";
+    printf("[BENCH][%s] elapsed_ns=%lld elapsed_us=%.3f elapsed_s=%.9f\n",
+           tag, (long long)delta_ns,
+           (double)delta_ns / 1000.0,
+           (double)delta_ns / 1e9);
+    fflush(stdout);
+
+    g_bench_started = false;
+    /* Bench is done — exit QEMU immediately so drivers don't need to wait on
+     * the trailing `while(1)` with a fixed `timeout`. Each run finishes as
+     * soon as the [BENCH] line is emitted. */
+    exit(0);
+}
+
+void bench_tick(unsigned int cpu_index, void *udata) {
+    (void)cpu_index;
+    (void)udata;
+    g_bench_tick_count++;
 }
 
 void printreg(unsigned int cpu_index, void *udata) {
