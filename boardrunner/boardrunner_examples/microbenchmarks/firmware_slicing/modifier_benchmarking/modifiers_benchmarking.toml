@@ -97,7 +97,7 @@ args        = ["slice_modifier"]
 # Fires once at slice_probe entry - N_OUTER * N_INNER hits per run.
 [[CPU.cpu0.modifiers]]
 at    = "0x080001ac"                 # slice_probe entry
-patch = "r0 0"
+patch = "r15 r14"
 
 # ------------------------------ Devices --------------------------------------
 # Firmware touches no MMIO; keep handlers off so unmodeled ranges cost nothing.
